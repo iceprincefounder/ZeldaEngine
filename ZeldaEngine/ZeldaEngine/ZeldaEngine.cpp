@@ -284,7 +284,7 @@ struct FSwapChainSupportDetails
 };
 
 
-class FVulkanRendererApp
+class FZeldaEngineApp
 {
 	struct FGlobalInput {
 		glm::vec3 CameraPos;
@@ -651,13 +651,13 @@ public:
 	}
 
 	static void FramebufferResizeCallback(GLFWwindow* window, int width, int height) {
-		auto app = reinterpret_cast<FVulkanRendererApp*>(glfwGetWindowUserPointer(window));
+		auto app = reinterpret_cast<FZeldaEngineApp*>(glfwGetWindowUserPointer(window));
 		app->bFramebufferResized = true;
 	}
 
 	static void KeyboardCallback(GLFWwindow* window, int key, int scancode, int action, int mods)
 	{
-		FVulkanRendererApp* app = reinterpret_cast<FVulkanRendererApp*>(glfwGetWindowUserPointer(window));
+		FZeldaEngineApp* app = reinterpret_cast<FZeldaEngineApp*>(glfwGetWindowUserPointer(window));
 		FGlobalInput* input = &app->GlobalInput;
 		FGlobalConstants* constants = &app->GlobalConstants;
 
@@ -721,7 +721,7 @@ public:
 
 	static void MouseButtonCallback(GLFWwindow* window, int button, int action, int mods)
 	{
-		FVulkanRendererApp* app = reinterpret_cast<FVulkanRendererApp*>(glfwGetWindowUserPointer(window));
+		FZeldaEngineApp* app = reinterpret_cast<FZeldaEngineApp*>(glfwGetWindowUserPointer(window));
 		FGlobalInput* input = &app->GlobalInput;
 
 		if (action == GLFW_PRESS && button == GLFW_MOUSE_BUTTON_RIGHT)
@@ -740,7 +740,7 @@ public:
 
 	static void MousePositionCallback(GLFWwindow* window, double xpos, double ypos)
 	{
-		FVulkanRendererApp* app = reinterpret_cast<FVulkanRendererApp*>(glfwGetWindowUserPointer(window));
+		FZeldaEngineApp* app = reinterpret_cast<FZeldaEngineApp*>(glfwGetWindowUserPointer(window));
 		FGlobalInput* input = &app->GlobalInput;
 
 		if (!input->bUpdateCamera)
@@ -794,7 +794,7 @@ public:
 
 	static void MouseScrollCallback(GLFWwindow* window, double xoffset, double yoffset)
 	{
-		FVulkanRendererApp* app = reinterpret_cast<FVulkanRendererApp*>(glfwGetWindowUserPointer(window));
+		FZeldaEngineApp* app = reinterpret_cast<FZeldaEngineApp*>(glfwGetWindowUserPointer(window));
 		FGlobalInput* input = &app->GlobalInput;
 
 		if (input->bFocusCamera)
@@ -1828,7 +1828,7 @@ protected:
 			
 			object.IndirectCommands.clear();
 			
-			for (uint8_t i = 0; i < object.MeshData.MeshletSet.Meshlets.size() /*object.MeshData.MeshletSet.Meshlets.size()*/; ++i)
+			for (uint8_t i = 0; i < object.MeshData.MeshletSet.Meshlets.size(); ++i)
 			{
 				const FMeshlet meshletSet = object.MeshData.MeshletSet.Meshlets[i];
 				// Member of FMeshlet:
@@ -1842,6 +1842,7 @@ protected:
 				//float ConeAxis[3];
 				//float ConeCutoff, Pad;
 				VkDrawIndexedIndirectCommand indirectCmd{};
+                // @Note: indexCount = TriangleCount * 3, this is easy to get confused
 				indirectCmd.indexCount = (uint32_t)(meshletSet.TriangleCount * 3) ; /*indexCount*/
 				indirectCmd.instanceCount = 1; /*instanceCount*/
 				indirectCmd.firstIndex = meshletSet.TriangleOffset; /*firstIndex*/
@@ -4717,7 +4718,7 @@ private:
 /** 主函数*/
 int main()
 {
-	FVulkanRendererApp EngineApp;
+	FZeldaEngineApp EngineApp;
 
 	try {
 		EngineApp.MainTask();
