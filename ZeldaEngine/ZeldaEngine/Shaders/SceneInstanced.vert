@@ -8,6 +8,8 @@ layout( push_constant ) uniform constants
 	float metallic;
 	uint specConstants;
 	uint specConstantsCount;
+	uint index;
+	uint indexCount;
 } global;
 
 layout(set = 0, binding = 0) uniform uniformbuffer

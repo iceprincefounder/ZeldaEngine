@@ -48,7 +48,7 @@ struct Meshlet {
     float coneCutoff, pad;
 };
 
-struct FActor {
+struct MeshletSet {
     void save(std::ofstream& output) const
     {
         size_t size;
@@ -218,15 +218,15 @@ static bool buildMeshletsFromAsset(const std::string& inputURL, const std::strin
     std::vector<uint32_t> cachedMeshletVertices;
     std::vector<uint8_t> cachedMeshletTriangles;
     BuildMeshlets(cachedVertices, cachedIndices, maxMeshletVertexCount, maxMeshletTriangleCount, cachedMeshlets, cachedMeshletVertices, cachedMeshletTriangles);
-    FActor actor;
-    actor.meshlets = cachedMeshlets;
-    actor.meshletVertices = cachedMeshletVertices;
-    actor.meshletTriangles = cachedMeshletTriangles;
-    actor.vertices = cachedVertices;
-    actor.indices = cachedIndices;
+    MeshletSet meshletSet;
+    meshletSet.meshlets = cachedMeshlets;
+    meshletSet.meshletVertices = cachedMeshletVertices;
+    meshletSet.meshletTriangles = cachedMeshletTriangles;
+    meshletSet.vertices = cachedVertices;
+    meshletSet.indices = cachedIndices;
 
     std::ofstream fout(outputURL, std::ios::out | std::ios::binary);
-    actor.save(fout);
+    meshletSet.save(fout);
     fout.close();
 
     return true;

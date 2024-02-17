@@ -8,6 +8,8 @@ layout( push_constant ) uniform constants
 	float metallic;
 	uint specConstants;
 	uint specConstantsCount;
+	uint index;
+	uint indexCount;
 } global;
 
 layout(set = 0, binding = 0) uniform uniformbuffer
@@ -29,6 +31,17 @@ layout(location = 2) out vec3 outNormal;
 layout(location = 3) out vec3 outColor;
 layout(location = 4) out vec2 outTexCoord;
 
+// https://www.ronja-tutorials.com/post/041-hsv-colorspace/
+vec3 Hue2RGB(float hue) {
+    hue = fract(hue); //only use fractional part of hue, making it loop
+    float r = abs(hue * 6 - 3) - 1; //red
+    float g = 2 - abs(hue * 6 - 2); //green
+    float b = 2 - abs(hue * 6 - 4); //blue
+    vec3 rgb = vec3(r,g,b); //combine components
+    rgb = clamp(rgb,0.0,1.0); //clamp between 0 and 1
+    return rgb;
+}
+
 void main()
 {
 	// Render object with MVP
@@ -37,6 +50,6 @@ void main()
 	outPosition = position;
 	outPositionWS = (ubo.model * vec4(position, 1.0)).rgb;
 	outNormal = (ubo.model * vec4(normalize(inNormal), 1.0)).rgb;
-	outColor = inColor;
+	outColor = Hue2RGB(global.index / global.indexCount);
 	outTexCoord = inTexCoord;
 }
