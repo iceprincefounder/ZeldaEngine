@@ -1,4 +1,4 @@
-// Copyright @xukai. All Rights Reserved.
+// Copyright ©XUKAI. All Rights Reserved.
 
 #define GLFW_INCLUDE_VULKAN
 #define GLM_FORCE_RADIANS
@@ -40,7 +40,6 @@
 #define VERTEX_BUFFER_BIND_ID 0
 #define INSTANCE_BUFFER_BIND_ID 1
 #define INSTANCE_COUNT 4096
-#define SCENE_SHOW_STAGE false
 #define SCENE_SHOW_SKYDOME true
 #define ENABLE_WIREFRAME false
 #define ENABLE_INDIRECT_DRAW true
@@ -480,7 +479,6 @@ class FVulkanRendererApp
 		std::vector<VkPipeline> Pipelines;
 	} BackgroundPass;
 
-
 	/** 构建 SkydomePass 需要的 Vulkan 资源*/
 	struct FSkydomePass {
 		FMesh SkydomeMesh;
@@ -586,7 +584,7 @@ public:
 
 		uint32_t viewportWidth = VIEWPORT_WIDTH;
 		uint32_t viewportHeight = VIEWPORT_HEIGHT;
-		Window = glfwCreateWindow(viewportWidth, viewportHeight, "Zelda Engine © XUKAI. ", nullptr /* glfwGetPrimaryMonitor() 全屏模式*/, nullptr);
+		Window = glfwCreateWindow(viewportWidth, viewportHeight, "Zelda Engine ©XUKAI", nullptr /* glfwGetPrimaryMonitor() 全屏模式*/, nullptr);
 		glfwSetWindowUserPointer(Window, this);
 		glfwSetFramebufferSizeCallback(Window, FramebufferResizeCallback);
 		GLFWimage iconImages[2];
@@ -1013,8 +1011,9 @@ protected:
 		VkInstanceCreateInfo createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
 		createInfo.pApplicationInfo = &appInfo;
-		//createInfo.flags = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
-		
+#ifdef __APPLE__
+		createInfo.flags = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+#endif
 		// 获取需要的glfw拓展名
 		uint32_t glfwExtensionCount = 0;
 		const char** glfwExtensions;
@@ -1026,12 +1025,13 @@ protected:
 		{
 			extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 		}
-		// Fix issue on Mac(m2) "vkCreateInstance: Found no drivers!"
-		//extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+#ifdef __APPLE__
+        // Fix issue on Mac(m2) "vkCreateInstance: Found no drivers!"
+		extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
 		// Issue on Mac(m2), it's not a error, but a warning, ignore it by this time~
 		// vkCreateDevice():  VK_KHR_portability_subset must be enabled because physical device VkPhysicalDevice 0x600003764f40[] supports it. The Vulkan spec states: If the VK_KHR_portability_subset extension is included in pProperties of vkEnumerateDeviceExtensionProperties, ppEnabledExtensionNames must include "VK_KHR_portability_subset"
-		//extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
-
+		extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+#endif
 		createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
 		createInfo.ppEnabledExtensionNames = extensions.data();
 
@@ -2320,7 +2320,7 @@ protected:
 					for (auto j = 0; j < RenderIndirectObject.IndirectCommands.size(); j++)
 					{
 						GlobalConstants.Index = j;
-						GlobalConstants.IndexCount = RenderIndirectObject.IndirectCommands.size();
+						GlobalConstants.IndexCount = (uint32_t)RenderIndirectObject.IndirectCommands.size();
 						vkCmdPushConstants(commandBuffer, IndirectScenePass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
 						vkCmdDrawIndexedIndirect(
 							commandBuffer, /*commandBuffer*/

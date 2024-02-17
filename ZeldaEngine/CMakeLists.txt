@@ -80,16 +80,16 @@ function(BuildEngine ENGINE_NAME)
 	add_custom_command(
     OUTPUT SHADER_COMPILE
 	COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADERS_PATH}
-    COMMAND glslc ARGS -g ${SHADERS_DIR}/Scene.frag -o ${SHADERS_PATH}/Scene_FS.spv
-    COMMAND glslc ARGS -g ${SHADERS_DIR}/Scene.vert -o ${SHADERS_PATH}/Scene_VS.spv
-    COMMAND glslc ARGS -g ${SHADERS_DIR}/SceneInstanced.vert -o ${SHADERS_PATH}/SceneInstanced_VS.spv
-    COMMAND glslc ARGS -g ${SHADERS_DIR}/Shadowmap.frag -o ${SHADERS_PATH}/Shadowmap_FS.spv
-    COMMAND glslc ARGS -g ${SHADERS_DIR}/Shadowmap.vert -o ${SHADERS_PATH}/Shadowmap_VS.spv
-    COMMAND glslc ARGS -g ${SHADERS_DIR}/ShadowmapInstanced.vert -o ${SHADERS_PATH}/ShadowmapInstanced_VS.spv
-    COMMAND glslc ARGS -g ${SHADERS_DIR}/Background.frag -o ${SHADERS_PATH}/Background_FS.spv
-    COMMAND glslc ARGS -g ${SHADERS_DIR}/Background.vert -o ${SHADERS_PATH}/Background_VS.spv
-    COMMAND glslc ARGS -g ${SHADERS_DIR}/Skydome.frag -o ${SHADERS_PATH}/Skydome_FS.spv
-    COMMAND glslc ARGS -g ${SHADERS_DIR}/Skydome.vert -o ${SHADERS_PATH}/Skydome_VS.spv
+    COMMAND glslc ARGS -g ${SHADERS_DIR}/SceneFS.frag -o ${SHADERS_PATH}/Scene_FS.spv
+    COMMAND glslc ARGS -g ${SHADERS_DIR}/SceneVS.vert -o ${SHADERS_PATH}/Scene_VS.spv
+    COMMAND glslc ARGS -g ${SHADERS_DIR}/SceneInstancedVS.vert -o ${SHADERS_PATH}/SceneInstanced_VS.spv
+    COMMAND glslc ARGS -g ${SHADERS_DIR}/ShadowmapFS.frag -o ${SHADERS_PATH}/Shadowmap_FS.spv
+    COMMAND glslc ARGS -g ${SHADERS_DIR}/ShadowmapVS.vert -o ${SHADERS_PATH}/Shadowmap_VS.spv
+    COMMAND glslc ARGS -g ${SHADERS_DIR}/ShadowmapInstancedVS.vert -o ${SHADERS_PATH}/ShadowmapInstanced_VS.spv
+    COMMAND glslc ARGS -g ${SHADERS_DIR}/BackgroundFS.frag -o ${SHADERS_PATH}/Background_FS.spv
+    COMMAND glslc ARGS -g ${SHADERS_DIR}/BackgroundVS.vert -o ${SHADERS_PATH}/Background_VS.spv
+    COMMAND glslc ARGS -g ${SHADERS_DIR}/SkydomeFS.frag -o ${SHADERS_PATH}/Skydome_FS.spv
+    COMMAND glslc ARGS -g ${SHADERS_DIR}/SkydomeVS.vert -o ${SHADERS_PATH}/Skydome_VS.spv
 	WORKING_DIRECTORY ${SHADERS_DIR}
     DEPENDS ${SHADERS_DIR} ${SHADER_SOURCES}
     COMMENT "Compiling Shaders Success!"
@@ -103,10 +103,10 @@ function(BuildEngine ENGINE_NAME)
 
 	set(COMPILE_SHADER_TARGET ${ENGINE_NAME}Shaders)
 	set(SHADER_SOURCES 
-        ${SHADERS_DIR}/Scene.frag ${SHADERS_DIR}/Scene.vert ${SHADERS_DIR}/SceneInstanced.vert
-        ${SHADERS_DIR}/Shadowmap.frag ${SHADERS_DIR}/Shadowmap.vert ${SHADERS_DIR}/ShadowmapInstanced.vert
-        ${SHADERS_DIR}/Background.frag ${SHADERS_DIR}/Background.vert 
-        ${SHADERS_DIR}/Skydome.frag ${SHADERS_DIR}/Skydome.vert
+        ${SHADERS_DIR}/SceneFS.frag ${SHADERS_DIR}/SceneVS.vert ${SHADERS_DIR}/SceneInstancedVS.vert
+        ${SHADERS_DIR}/ShadowmapFS.frag ${SHADERS_DIR}/ShadowmapVS.vert ${SHADERS_DIR}/ShadowmapInstancedVS.vert
+        ${SHADERS_DIR}/BackgroundFS.frag ${SHADERS_DIR}/BackgroundVS.vert
+        ${SHADERS_DIR}/SkydomeFS.frag ${SHADERS_DIR}/SkydomeVS.vert
         )
 	add_custom_target(${COMPILE_SHADER_TARGET} ALL DEPENDS SHADER_COMPILE SOURCES ${SHADER_SOURCES})
 	add_dependencies (${ENGINE_NAME} ${COMPILE_SHADER_TARGET})

@@ -102,7 +102,7 @@ elseif(APPLE)
 	if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 		# Fix MacOS argument unused during compilation: '-ObjC++' warning
 		#SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fobjc-arc -ObjC++")
-		SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fobjc-arc -ObjC++")
+		SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fobjc-arc")
 	else()
 		SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fobjc-arc -xobjective-c++")
 	endif()
