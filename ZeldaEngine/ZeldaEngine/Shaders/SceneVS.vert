@@ -50,6 +50,6 @@ void main()
 	outPosition = position;
 	outPositionWS = (ubo.model * vec4(position, 1.0)).rgb;
 	outNormal = (ubo.model * vec4(normalize(inNormal), 1.0)).rgb;
-	outColor = Hue2RGB(float(global.index) / float(global.indexCount));
+	outColor = Hue2RGB(float(global.index) * 1.71f);
 	outTexCoord = inTexCoord;
 }

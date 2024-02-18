@@ -313,7 +313,7 @@ class FZeldaEngineApp
 		void ResetToFocus()
 		{
 			CameraPos = glm::vec3(2.0, 2.0, 2.0);
-			CameraLookat = glm::vec3(0.0, 0.0, 0.0);
+			CameraLookat = glm::vec3(0.0, 0.0, 0.5);
 			CameraSpeed = 2.5;
 			CameraFOV = 45.0;
 			zNear = 0.1f;
@@ -1816,7 +1816,7 @@ protected:
 		if (ENABLE_INDIRECT_DRAW)
 		{
 			FRenderIndirectObject object;
-			std::string object_obj = "Resources/Contents/Meshes/sphere.meshlet";
+			std::string object_obj = "Resources/Contents/Meshes/dragon.meshlet";
 			std::vector<std::string> object_imgs = {
 				"Resources/Contents/Textures/default_grey.png",
 				"Resources/Contents/Textures/default_black.png",
@@ -1828,7 +1828,7 @@ protected:
 			
 			object.IndirectCommands.clear();
 			
-			for (uint8_t i = 0; i < object.MeshData.MeshletSet.Meshlets.size(); ++i)
+			for (uint32_t i = 0; i < object.MeshData.MeshletSet.Meshlets.size(); ++i)
 			{
 				const FMeshlet meshletSet = object.MeshData.MeshletSet.Meshlets[i];
 				// Member of FMeshlet:
@@ -2898,7 +2898,9 @@ protected:
 	void CreateMeshlet(std::vector<FVertex>& outVertices, std::vector<uint32_t>& outIndices,
 		std::vector<FMeshlet>& outMeshlets, std::vector<uint32_t>& outMeshletVertices, std::vector<uint8_t>& outMeshletTriangles, const std::string& filename)
 	{
-		LoadMeshletAsset(filename, outVertices, outIndices, outMeshlets, outMeshletVertices, outMeshletTriangles);
+		// Find override filename from Profabs paths, return original path if None.
+		std::string override_filename = FindFilenameOverrideFromProfabs(filename);
+		LoadMeshletAsset(override_filename, outVertices, outIndices, outMeshlets, outMeshletVertices, outMeshletTriangles);
 	}
 
 	/** 创建顶点缓存区VBO*/
@@ -4051,41 +4053,11 @@ protected:
 	};
 
 	template <typename T>
-	void CreateInstancedBuffer(T& outObject, const std::vector<FInstanceData>& inInstanceData)
-	{
-		VkDeviceSize bufferSize = inInstanceData.size() * sizeof(FInstanceData);
-		VkBuffer stagingBuffer;
-		VkDeviceMemory stagingBufferMemory;
-		CreateBuffer(
-			bufferSize,
-			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-			stagingBuffer,
-			stagingBufferMemory);
-
-		void* data;
-		vkMapMemory(Device, stagingBufferMemory, 0, bufferSize, 0, &data);
-		memcpy(data, inInstanceData.data(), (size_t)bufferSize);
-		vkUnmapMemory(Device, stagingBufferMemory);
-
-		CreateBuffer(
-			bufferSize,
-			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-			outObject.MeshData.InstancedBuffer,
-			outObject.MeshData.InstancedBufferMemory);
-		CopyBuffer(stagingBuffer, outObject.MeshData.InstancedBuffer, bufferSize);
-
-		vkDestroyBuffer(Device, stagingBuffer, nullptr);
-		vkFreeMemory(Device, stagingBufferMemory, nullptr);
-	};
-
-	template <typename T>
 	void CreateRenderIndirectObject(T& outObject, const std::string& objfile, const std::vector<std::string>& pngfiles)
 	{
 		CreateMeshlet(outObject.MeshData.Vertices, outObject.MeshData.Indices,
 			outObject.MeshData.MeshletSet.Meshlets, outObject.MeshData.MeshletSet.MeshletVertices, outObject.MeshData.MeshletSet.MeshletTriangles, objfile);
-		
+
 		outObject.MaterialData.TextureImages.resize(pngfiles.size());
 		outObject.MaterialData.TextureImageMemorys.resize(pngfiles.size());
 		outObject.MaterialData.TextureImageViews.resize(pngfiles.size());
@@ -4106,7 +4078,7 @@ protected:
 		outObject.MeshData.Vertices.resize(outObject.MeshData.MeshletSet.MeshletVertices.size());
 		for (uint32_t i = 0; i < outObject.MeshData.MeshletSet.MeshletVertices.size(); i++)
 		{
-            outObject.MeshData.Vertices[i] = tmpVertices[outObject.MeshData.MeshletSet.MeshletVertices[i]];
+			outObject.MeshData.Vertices[i] = tmpVertices[outObject.MeshData.MeshletSet.MeshletVertices[i]];
 		}
 		outObject.MeshData.Indices.resize(outObject.MeshData.MeshletSet.MeshletTriangles.size());
 		uint32_t triangleCount = 0;
@@ -4138,6 +4110,36 @@ protected:
 			BaseScenePass.DescriptorSetLayout,
 			outObject.MaterialData.TextureImageViews,
 			outObject.MaterialData.TextureSamplers);
+	};
+
+	template <typename T>
+	void CreateInstancedBuffer(T& outObject, const std::vector<FInstanceData>& inInstanceData)
+	{
+		VkDeviceSize bufferSize = inInstanceData.size() * sizeof(FInstanceData);
+		VkBuffer stagingBuffer;
+		VkDeviceMemory stagingBufferMemory;
+		CreateBuffer(
+			bufferSize,
+			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			stagingBuffer,
+			stagingBufferMemory);
+
+		void* data;
+		vkMapMemory(Device, stagingBufferMemory, 0, bufferSize, 0, &data);
+		memcpy(data, inInstanceData.data(), (size_t)bufferSize);
+		vkUnmapMemory(Device, stagingBufferMemory);
+
+		CreateBuffer(
+			bufferSize,
+			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+			outObject.MeshData.InstancedBuffer,
+			outObject.MeshData.InstancedBufferMemory);
+		CopyBuffer(stagingBuffer, outObject.MeshData.InstancedBuffer, bufferSize);
+
+		vkDestroyBuffer(Device, stagingBuffer, nullptr);
+		vkFreeMemory(Device, stagingBufferMemory, nullptr);
 	};
 
 	template <typename T>

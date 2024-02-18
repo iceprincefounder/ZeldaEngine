@@ -237,8 +237,8 @@ int main(int argc, const char * argv[]) {
     std::string outputPath;
     int maxVertCount = 64, maxTriCount = 124;
 
-    inputPath = "Resources/Contents/Meshes/sphere.obj";
-    outputPath = "Resources/Contents/Meshes/sphere.meshlet";
+    inputPath = "Resources/Profabs/dragon/models/dragon.obj";
+    outputPath = "Resources/Profabs/dragon/models/dragon.meshlet";
 
     buildMeshletsFromAsset(inputPath, outputPath, maxVertCount, maxTriCount);
 
