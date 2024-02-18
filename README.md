@@ -5,10 +5,19 @@ A tiny realtime Vulkan 3D engine with modern graphics, all implementations in on
 
 | branch | windows | macOS | linux |
 | :----: | :----: | :----: |:----:|
-| master |✔️|✔️|❌|
+| master |✅|✅|⛔️|
 
-## Features: GPU-driven & Mesh Shader
+## ✨Feature: GPU-driven & Mesh Shader
 <img width="1192" alt="dragon" src="https://github.com/iceprincefounder/ZeldaEngine/assets/16664056/26339a31-73de-4192-aa02-e4ec85d605fd">
+
+## ✨Feature: Instancing
+<img width="1192" alt="截屏2024-02-18 22 45 54" src="https://github.com/iceprincefounder/ZeldaEngine/assets/16664056/b7094bcd-b41a-42f1-ab3b-9f5f374b0291">
+
+## ✨Feature: Shadow and PCF soft shadow
+<img width="1192" alt="截屏2024-02-18 22 43 03" src="https://github.com/iceprincefounder/ZeldaEngine/assets/16664056/da72dabe-d28a-494b-954c-5a55bcc921f7">
+
+## ✨Feature: PBR based Rendering
+<img width="1192" alt="截屏2024-02-18 22 44 20" src="https://github.com/iceprincefounder/ZeldaEngine/assets/16664056/b3db9154-2661-44d3-8abb-2ea20fda8df9">
 
 # How to build
 ### 1. Get source code from Github
