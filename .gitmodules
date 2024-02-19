@@ -13,3 +13,6 @@
 [submodule "Third_Party/meshoptimizer"]
 	path = Third_Party/meshoptimizer
 	url = https://github.com/zeux/meshoptimizer.git
+[submodule ".\\Third_Party\\imgui"]
+	path = .\\Third_Party\\imgui
+	url = https://github.com/ocornut/imgui.git
