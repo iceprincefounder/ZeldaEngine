@@ -1,7 +1,7 @@
 ![zelda_engine_logo](https://github.com/iceprincefounder/ZeldaEngine/assets/16664056/120ab100-87a1-4801-b66f-966816b93a5f)
 
 # Why to do this
-*At my beginning of learning vulkan, I found it to hard to read and run the examples, there are to many headers and modules and functions to search and understand, so I decide to create a tiny engine with all implementations in one file, make it as simple as possible, as clean as possible. So here we are: ZeldaEngine.*
+*At my beginning of learning vulkan, I found it to hard to read and run the examples, there are to many headers and modules and functions to search and understand, so I decide to create a tiny engine with all implementations in one file, make it as simple as possible, as clean as possible. So here we are, named with my favorite game: ZeldaEngine.*
 
 # Zelda Engine ©XUKAI
 A tiny realtime Vulkan 3D engine with modern graphics, all implementations in the [📄ZeldaEngine.cpp](ZeldaEngine/ZeldaEngine/ZeldaEngine.cpp) file.
