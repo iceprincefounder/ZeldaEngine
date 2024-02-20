@@ -14,6 +14,14 @@
 #define TINYOBJLOADER_IMPLEMENTATION
 #include <tiny_obj_loader.h>
 
+#include <glslang/Public/ShaderLang.h>
+#include <glslang/Public/ResourceLimits.h>
+#include <SPIRV/GLSL.std.450.h>
+#include <SPIRV/GlslangToSpv.h>
+#include <StandAlone/DirStackFileIncluder.h>
+#include <glslang/Include/ShHandle.h>
+#include <glslang/OSDependent/osinclude.h>
+
 #include <iostream>
 #include <cassert>
 #include <cstring>
@@ -33,6 +41,7 @@
 #include <unordered_map>
 
 
+#define MAX_FRAMES_IN_FLIGHT 2
 #define VIEWPORT_WIDTH 1080;
 #define VIEWPORT_HEIGHT 720;
 #define PBR_SAMPLER_NUMBER 5
@@ -45,11 +54,246 @@
 #define ENABLE_INDIRECT_DRAW true
 #define ENABLE_CACHE_FILE false
 
-/** 同时渲染多帧的最大帧数*/
+/**
+* Helper class to generate SPIRV code from GLSL source
+* A very simple version of the glslValidator application
+*/
+class FShaderCompiler
+{
+private:
+	static glslang::EShTargetLanguage EnvTargetLanguage;
+	static glslang::EShTargetLanguageVersion EnvTargetLanguageVersion;
 
-const int MAX_FRAMES_IN_FLIGHT = 2;
+public:
+	static void ReadShaderFile(std::vector<uint8_t>& outShaderSource, VkShaderStageFlagBits& outShaderStage, const std::string& inFilename)
+	{
+		std::string::size_type const p(inFilename.find_last_of('.'));
+		std::string ext = inFilename.substr(p + 1);
+		if (ext == "vert")
+			outShaderStage = VK_SHADER_STAGE_VERTEX_BIT;
+		else if (ext == "frag")
+			outShaderStage = VK_SHADER_STAGE_FRAGMENT_BIT;
+		else if (ext == "comp")
+			outShaderStage = VK_SHADER_STAGE_COMPUTE_BIT;
+		else if (ext == "geom")
+			outShaderStage = VK_SHADER_STAGE_GEOMETRY_BIT;
+		else if (ext == "tesc")
+			outShaderStage = VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT;
+		else if (ext == "tese")
+			outShaderStage = VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
+		else if (ext == "rgen")
+			outShaderStage = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+		else if (ext == "rahit")
+			outShaderStage = VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+		else if (ext == "rchit")
+			outShaderStage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+		else if (ext == "rmiss")
+			outShaderStage = VK_SHADER_STAGE_MISS_BIT_KHR;
+		else if (ext == "rint")
+			outShaderStage = VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
+		else if (ext == "rcall")
+			outShaderStage = VK_SHADER_STAGE_CALLABLE_BIT_KHR;
+#ifndef __APPLE__
+		else if (ext == "mesh")
+			outShaderStage = VK_SHADER_STAGE_MESH_BIT_NV /*VK_SHADER_STAGE_MESH_BIT_EXT*/;
+		else if (ext == "task")
+			outShaderStage = VK_SHADER_STAGE_TASK_BIT_NV /*VK_SHADER_STAGE_TASK_BIT_EXT*/;
+#endif
+		else
+		{
+			assert(true);
+			throw std::runtime_error("File extension[" + ext + "]does not have a vulkan shader stage.");
+		}
 
-/** 每个Instance 的数据块*/
+		std::ifstream file;
+
+		file.open(inFilename, std::ios::in | std::ios::binary);
+
+		if (!file.is_open())
+		{
+			throw std::runtime_error("Failed to open file: " + inFilename);
+		}
+
+		uint64_t read_count = 0;
+		file.seekg(0, std::ios::end);
+		read_count = static_cast<uint64_t>(file.tellg());
+		file.seekg(0, std::ios::beg);
+
+		outShaderSource.resize(static_cast<size_t>(read_count));
+		file.read(reinterpret_cast<char*>(outShaderSource.data()), read_count);
+		file.close();
+	}
+
+	static void SaveShaderFile(const std::string& inFilename, const std::vector<unsigned int>& inSpirvSource)
+	{
+		std::ofstream out;
+		out.open(inFilename.c_str(), std::ios::binary | std::ios::out);
+		if (out.fail()){
+			assert(true);
+			throw std::runtime_error("ERROR: Failed to open file: " + inFilename);
+		}
+		for (int i = 0; i < (int)inSpirvSource.size(); ++i) {
+			unsigned int word = inSpirvSource[i];
+			out.write((const char*)&word, 4);
+		}
+		out.close();
+	}
+
+	/**
+	* @brief Set the glslang target environment to translate to when generating code
+	* @param target_language The language to translate to
+	* @param target_language_version The version of the language to translate to
+	*/
+	static void SetTargetEnvironment(glslang::EShTargetLanguage inTargetLanguage,
+		glslang::EShTargetLanguageVersion InTargetLanguageVersion) {
+		EnvTargetLanguage = inTargetLanguage;
+		EnvTargetLanguageVersion = InTargetLanguageVersion;
+	};
+
+	/**
+	* @brief Reset the glslang target environment to the default values
+	*/
+	static void ResetTargetEnvironment() {
+		EnvTargetLanguage = glslang::EShTargetLanguage::EShTargetNone;
+		EnvTargetLanguageVersion = static_cast<glslang::EShTargetLanguageVersion>(0);
+	};
+
+	/**
+	* @brief Compiles GLSL to SPIRV code, original function named "compile_to_spirv" in Vulkan-Samples
+	* @param stage The Vulkan shader stage flag
+	* @param glsl_source The GLSL source code to be compiled
+	* @param entry_point The entrypoint function name of the shader stage
+	* @param shader_variant_preamble The shader variant preamble
+	* @param shader_variant_processes The shader variant processes
+	* @param[out] spirv The generated SPIRV code
+	* @param[out] info_log Stores any log messages during the compilation process
+	*/
+	bool CompileToSpirv(VkShaderStageFlagBits stage,
+		const std::vector<uint8_t>& glsl_source,
+		const std::string& entry_point,
+		const std::string& shader_variant_preamble,
+		const std::vector<std::string>& shader_variant_processes,
+		std::vector<std::uint32_t>& spirv,
+		std::string& info_log)
+	{
+		auto FindShaderLanguage = [](VkShaderStageFlagBits stage) -> EShLanguage
+		{
+			switch (stage)
+			{
+			case VK_SHADER_STAGE_VERTEX_BIT:
+				return EShLangVertex;
+			case VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT:
+				return EShLangTessControl;
+			case VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT:
+				return EShLangTessEvaluation;
+			case VK_SHADER_STAGE_GEOMETRY_BIT:
+				return EShLangGeometry;
+			case VK_SHADER_STAGE_FRAGMENT_BIT:
+				return EShLangFragment;
+			case VK_SHADER_STAGE_COMPUTE_BIT:
+				return EShLangCompute;
+			case VK_SHADER_STAGE_RAYGEN_BIT_KHR:
+				return EShLangRayGen;
+			case VK_SHADER_STAGE_ANY_HIT_BIT_KHR:
+				return EShLangAnyHit;
+			case VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR:
+				return EShLangClosestHit;
+			case VK_SHADER_STAGE_MISS_BIT_KHR:
+				return EShLangMiss;
+			case VK_SHADER_STAGE_INTERSECTION_BIT_KHR:
+				return EShLangIntersect;
+			case VK_SHADER_STAGE_CALLABLE_BIT_KHR:
+				return EShLangCallable;
+#ifndef __APPLE__ // not support macOS
+			case VK_SHADER_STAGE_MESH_BIT_NV /*VK_SHADER_STAGE_MESH_BIT_EXT*/:
+				return EShLangMesh;
+			case VK_SHADER_STAGE_TASK_BIT_NV /*VK_SHADER_STAGE_TASK_BIT_EXT*/:
+				return EShLangTask;
+#endif // __APPLE__
+			default:
+				return EShLangVertex;
+			}
+		};
+
+		// Initialize glslang library.
+		glslang::InitializeProcess();
+
+		EShMessages messages = static_cast<EShMessages>(EShMsgDefault | EShMsgVulkanRules | EShMsgSpvRules);
+
+		EShLanguage language = FindShaderLanguage(stage);
+		std::string source = std::string(glsl_source.begin(), glsl_source.end());
+
+		const char* file_name_list[1] = { "" };
+		const char* shader_source = reinterpret_cast<const char*>(source.data());
+
+		glslang::TShader shader(language);
+		shader.setStringsWithLengthsAndNames(&shader_source, nullptr, file_name_list, 1);
+		shader.setEntryPoint(entry_point.c_str());
+		shader.setSourceEntryPoint(entry_point.c_str());
+		shader.setPreamble(shader_variant_preamble.c_str());
+		shader.addProcesses(shader_variant_processes);
+		if (EnvTargetLanguage != glslang::EShTargetLanguage::EShTargetNone)
+		{
+			shader.setEnvTarget(EnvTargetLanguage, EnvTargetLanguageVersion);
+		}
+		DirStackFileIncluder includeDir;
+		includeDir.pushExternalLocalDirectory("shaders");
+
+		if (!shader.parse(GetDefaultResources(), 100, false, messages, includeDir))
+		{
+			info_log = std::string(shader.getInfoLog()) + "\n" + std::string(shader.getInfoDebugLog());
+			return false;
+		}
+
+		// Add shader to new program object.
+		glslang::TProgram program;
+		program.addShader(&shader);
+
+		// Link program.
+		if (!program.link(messages))
+		{
+			info_log = std::string(program.getInfoLog()) + "\n" + std::string(program.getInfoDebugLog());
+			return false;
+		}
+
+		// Save any info log that was generated.
+		if (shader.getInfoLog())
+		{
+			info_log += std::string(shader.getInfoLog()) + "\n" + std::string(shader.getInfoDebugLog()) + "\n";
+		}
+
+		if (program.getInfoLog())
+		{
+			info_log += std::string(program.getInfoLog()) + "\n" + std::string(program.getInfoDebugLog());
+		}
+
+		glslang::TIntermediate* intermediate = program.getIntermediate(language);
+
+		// Translate to SPIRV.
+		if (!intermediate)
+		{
+			info_log += "Failed to get shared intermediate code.\n";
+			return false;
+		}
+
+		spv::SpvBuildLogger logger;
+
+		glslang::GlslangToSpv(*intermediate, spirv, &logger);
+
+		info_log += logger.getAllMessages() + "\n";
+
+		// Shutdown glslang library.
+		glslang::FinalizeProcess();
+
+		return true;
+	};
+};
+
+glslang::EShTargetLanguage FShaderCompiler::EnvTargetLanguage = glslang::EShTargetLanguage::EShTargetNone;
+glslang::EShTargetLanguageVersion FShaderCompiler::EnvTargetLanguageVersion = static_cast<glslang::EShTargetLanguageVersion>(0);
+
+
+/** The instance of mesh data block*/
 struct FInstanceData {
 	glm::vec3 InstancePosition;
 	glm::vec3 InstanceRotation;
@@ -57,6 +301,7 @@ struct FInstanceData {
 	glm::uint8 InstanceTexIndex;
 };
 
+/** The vertex of mesh data block*/
 struct FVertex {
 	glm::vec3 Position;
 	glm::vec3 Normal;
@@ -100,7 +345,7 @@ struct FVertex {
 	}
 
 	// 顶点描述，带Instance
-	static std::array<VkVertexInputBindingDescription, 2> GetInstancedBindingDescriptions() {
+	static std::array<VkVertexInputBindingDescription, 2> GetBindingInstancedDescriptions() {
 		VkVertexInputBindingDescription bindingDescription0{};
 		bindingDescription0.binding = VERTEX_BUFFER_BIND_ID;
 		bindingDescription0.stride = sizeof(FVertex);
@@ -114,7 +359,7 @@ struct FVertex {
 		return { bindingDescription0, bindingDescription1 };
 	}
 
-	static std::array<VkVertexInputAttributeDescription, 8> GetInstancedAttributeDescriptions() {
+	static std::array<VkVertexInputAttributeDescription, 8> GetAttributeInstancedDescriptions() {
 		std::array<VkVertexInputAttributeDescription, 8> attributeDescriptions{};
 
 		attributeDescriptions[0].binding = VERTEX_BUFFER_BIND_ID;
@@ -164,6 +409,7 @@ struct FVertex {
 		return Position == other.Position && Normal == other.Normal && Color == other.Color && TexCoord == other.TexCoord;
 	}
 };
+
 
 namespace std {
 	template<> struct hash<FVertex> {
@@ -228,7 +474,7 @@ struct FUniformBufferView {
 };
 
 
-const std::vector<const char*> ValidationLayers = { "VK_LAYER_KHRONOS_validation" }; // VK_LAYER_KHRONOS_validation这个是固定的，不能重命名
+const std::vector<const char*> ValidationLayers = { "VK_LAYER_KHRONOS_validation" };
 const std::vector<const char*> DeviceExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
 
 
@@ -569,8 +815,9 @@ public:
 	{
 		InitWindow();        // 使用传统的GLFW，初始化窗口
 		InitVulkan();        // 初始化Vulkan，创建资源
-		MainTick();            // 每帧循环调用，执行渲染指令
-		ClearWindow();        // 渲染窗口关闭时，删除创建的资源
+		MainTick();          // 每帧循环调用，执行渲染指令
+		DestroyVulkan();     // 删除Vulkan对象
+		DestroyWindow();       // 渲染窗口关闭时，删除创建的资源
 	}
 
 public:
@@ -607,24 +854,25 @@ public:
 	/** 初始化Vulkan的渲染管线*/
 	void InitVulkan()
 	{
-		CreateInstance();            // 连接此程序和Vulkan，一般由显卡驱动实现
+		CreateInstance();              // 连接此程序和Vulkan，一般由显卡驱动实现
 		CreateDebugMessenger();        // 创建调试打印信息
 		CreateWindowsSurface();        // 连接此程序的窗口和Vulkan，渲染Vulkan输出
 		SelectPhysicalDevice();        // 找到此电脑的物理显卡硬件
-		CreateLogicalDevice();        // 创建逻辑硬件，对应物理硬件
-		CreateSwapChain();            // 创建交换链，用于渲染数据和图像显示的中间交换
-		CreateSwapChainImageViews();// 创建图像显示，包含在SwapChain中
+		CreateLogicalDevice();         // 创建逻辑硬件，对应物理硬件
+		CreateSwapChain();             // 创建交换链，用于渲染数据和图像显示的中间交换
+		CreateSwapChainImageViews();   // 创建图像显示，包含在SwapChain中
 		CreateRenderPass();            // 创建渲染通道
-		CreateCommandPool();        // 创建指令池，存储所有的渲染指令
-		CreateFramebuffers();        // 创建帧缓存，包含在SwaoChain中
+		CreateCommandPool();           // 创建指令池，存储所有的渲染指令
+		CreateFramebuffers();          // 创建帧缓存，包含在SwaoChain中
+		CreateShaderSPIRVs();          // 创建和编译着色器文本为SPIRV中间字节码
 		CreateUniformBuffers();        // 创建UnifromBuffer统一缓存区
-		CreateShadowmapPass();        // 创建阴影贴图渲染通道
+		CreateShadowmapPass();         // 创建阴影贴图渲染通道
 		CreateBackgroundPass();        // 创建背景渲染通道
-		CreateSkydomePass();
-		CreateBaseScenePass();        // 创建基础物体渲染通道
-		CreateIndirectScenePass();
-		CreateCommandBuffer();        // 创建指令缓存，指令发送前变成指令缓存
-		CreateSyncObjects();        // 创建同步围栏，确保下一帧渲染前，上一帧全部渲染完成
+		CreateSkydomePass();           // 创建天空球渲染通道
+		CreateBaseScenePass();         // 创建基础物体渲染通道
+		CreateIndirectScenePass();     // 创建间接绘制渲染通道
+		CreateCommandBuffer();         // 创建指令缓存，指令发送前变成指令缓存
+		CreateSyncObjects();           // 创建同步围栏，确保下一帧渲染前，上一帧全部渲染完成
 	}
 
 	/** 主循环，执行每帧渲染*/
@@ -641,11 +889,8 @@ public:
 	}
 
 	/** 清除Vulkan的渲染管线*/
-	void ClearWindow()
+	void DestroyWindow()
 	{
-		CleanupSwapChain(); // 清理FrameBuffer相关的资源
-		DestroyVulkan(); // 删除Vulkan对象
-
 		glfwDestroyWindow(Window);
 		glfwTerminate();
 	}
@@ -1400,6 +1645,53 @@ protected:
 		}
 	}
 
+	void CreateShaderSPIRVs()
+	{
+		std::string file_path = __FILE__;
+		std::string dir_path = file_path.substr(0, file_path.rfind("\\"));
+		// @TODO: compile shaders with glslang
+		std::vector<uint8_t> Source; VkShaderStageFlagBits ShaderStage;
+		FShaderCompiler::ReadShaderFile(Source, ShaderStage, "Resources/meshshader.mesh");
+		std::vector<uint32_t> spirv;
+		std::string info_log;
+		FShaderCompiler ShaderCompiler;
+		ShaderCompiler.CompileToSpirv(ShaderStage, Source, "main", "", {}, spirv, info_log);
+		FShaderCompiler::SaveShaderFile("Resources/Meshshader.spv", spirv);
+	}
+
+	/** 创建统一缓存区（UBO）*/
+	void CreateUniformBuffers()
+	{
+		VkDeviceSize baseBufferSize = sizeof(FUniformBufferBase);
+		BaseUniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+		BaseUniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
+
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+			CreateBuffer(baseBufferSize,
+				VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+				BaseUniformBuffers[i],
+				BaseUniformBuffersMemory[i]);
+
+			// 这里会导致 memory stack overflow ，不应该在这里 vkMapMemory
+			//vkMapMemory(Device, BaseUniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersMapped[i]);
+		}
+
+		VkDeviceSize bufferSizeOfView = sizeof(FUniformBufferView);
+		ViewUniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+		ViewUniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
+
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+			CreateBuffer(
+				bufferSizeOfView,
+				VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+				ViewUniformBuffers[i],
+				ViewUniformBuffersMemory[i]);
+		}
+	}
+
+
 	/**
 	 * 创建阴影贴图资源 Shadow map
 	*/
@@ -1717,8 +2009,8 @@ protected:
 		vertInstancedShaderStageCI.stage = VK_SHADER_STAGE_VERTEX_BIT;
 		vertInstancedShaderStageCI.module = vertInstancedShaderModule;
 		vertInstancedShaderStageCI.pName = "main";
-		auto bindingInstancedDescriptions = FVertex::GetInstancedBindingDescriptions();
-		auto attributeInstancedDescriptions = FVertex::GetInstancedAttributeDescriptions();
+		auto bindingInstancedDescriptions = FVertex::GetBindingInstancedDescriptions();
+		auto attributeInstancedDescriptions = FVertex::GetAttributeInstancedDescriptions();
 		vertexInputCI.vertexBindingDescriptionCount = static_cast<uint32_t>(bindingInstancedDescriptions.size());
 		vertexInputCI.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeInstancedDescriptions.size());
 		vertexInputCI.pVertexBindingDescriptions = bindingInstancedDescriptions.data();
@@ -1735,8 +2027,7 @@ protected:
 		vkDestroyShaderModule(Device, vertShaderModule, nullptr);
 		vkDestroyShaderModule(Device, vertInstancedShaderModule, nullptr);
 	}
-
-
+	F
 	/** Cube map Faces Rules:
 	 *       Y3
 	 *       ||
@@ -1758,36 +2049,133 @@ protected:
 			"Resources/Contents/Textures/cubemap_Z5.png" });
 	}
 
-	/** 创建统一缓存区（UBO）*/
-	void CreateUniformBuffers()
+	void CreateBackgroundPass()
 	{
-		VkDeviceSize baseBufferSize = sizeof(FUniformBufferBase);
-		BaseUniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-		BaseUniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
+		// 创建环境反射纹理资源
+		CreateCubemapResources();
 
-		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-			CreateBuffer(baseBufferSize,
-				VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-				BaseUniformBuffers[i],
-				BaseUniformBuffersMemory[i]);
+		// 创建背景贴图
+		CreateImageContext(
+			BackgroundPass.Image,
+			BackgroundPass.Memory,
+			BackgroundPass.ImageView,
+			BackgroundPass.Sampler,
+			"Resources/Contents/Textures/background.png");
+		CreateDescriptorSetLayout(BackgroundPass.DescriptorSetLayout);
+		CreateDescriptorPool(BackgroundPass.DescriptorPool);
+		CreateDescriptorSets(
+			BackgroundPass.DescriptorSets,
+			BackgroundPass.DescriptorPool,
+			BackgroundPass.DescriptorSetLayout,
+			BackgroundPass.ImageView,
+			BackgroundPass.Sampler);
+		BackgroundPass.Pipelines.resize(1);
+		CreatePipelineLayout(BackgroundPass.PipelineLayout, BackgroundPass.DescriptorSetLayout);
+		CreateGraphicsPipelines(
+			BackgroundPass.Pipelines,
+			BackgroundPass.PipelineLayout,
+			1,
+			BackgroundPass.DescriptorSetLayout,
+			"Resources/BackgroundVS.spv",
+			"Resources/Shaders/Background_FS.spv",
+			false, false);
+	}
 
-			// 这里会导致 memory stack overflow ，不应该在这里 vkMapMemory
-			//vkMapMemory(Device, BaseUniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersMapped[i]);
+	void CreateSkydomePass()
+	{
+		CreateImageContext(
+			SkydomePass.Image,
+			SkydomePass.Memory,
+			SkydomePass.ImageView,
+			SkydomePass.Sampler,
+			"Resources/Contents/Textures/skydome.png");
+		CreateDescriptorSetLayout(SkydomePass.DescriptorSetLayout);
+		CreateDescriptorPool(SkydomePass.DescriptorPool);
+		CreateDescriptorSets(
+			SkydomePass.DescriptorSets,
+			SkydomePass.DescriptorPool,
+			SkydomePass.DescriptorSetLayout,
+			SkydomePass.ImageView,
+			SkydomePass.Sampler);
+		SkydomePass.Pipelines.resize(1);
+		CreatePipelineLayout(SkydomePass.PipelineLayout, SkydomePass.DescriptorSetLayout);
+		//createGraphicsPipeline(
+		//	SkydomePass.PipelineLayout,
+		//	SkydomePass.Pipelines[0],
+		//	SkydomePass.DescriptorSetLayout,
+		//	"Resources/Shaders/Skydome_VS.spv",
+		//	"Resources/Shaders/Skydome_FS.spv",
+		//	VK_TRUE, VK_CULL_MODE_BACK_BIT);
+		CreateGraphicsPipelines(
+			SkydomePass.Pipelines,
+			SkydomePass.PipelineLayout,
+			1,
+			SkydomePass.DescriptorSetLayout,
+			"Resources/Shaders/Skydome_VS.spv",
+			"Resources/Shaders/Skydome_FS.spv",
+			true/*bDepthTest*/, true/*bCullBack*/, false/*bInstanced*/);
+		std::string skydome_obj = "Resources/Contents/Meshes/skydome.obj";
+		CreateMesh(SkydomePass.SkydomeMesh.Vertices, SkydomePass.SkydomeMesh.Indices, skydome_obj);
+		CreateVertexBuffer(
+			SkydomePass.SkydomeMesh.VertexBuffer,
+			SkydomePass.SkydomeMesh.VertexBufferMemory,
+			SkydomePass.SkydomeMesh.Vertices);
+		CreateIndexBuffer(
+			SkydomePass.SkydomeMesh.IndexBuffer,
+			SkydomePass.SkydomeMesh.IndexBufferMemory,
+			SkydomePass.SkydomeMesh.Indices);
+	}
+
+	void CreateBaseScenePass()
+	{
+		// 创建场景渲染流水线和着色器
+		CreateDescriptorSetLayout(BaseScenePass.DescriptorSetLayout, PBR_SAMPLER_NUMBER);
+		uint32_t SpecConstantsCount = GlobalConstants.SpecConstantsCount;
+		BaseScenePass.Pipelines.resize(SpecConstantsCount);
+		BaseScenePass.PipelinesInstanced.resize(SpecConstantsCount);
+		CreatePipelineLayout(BaseScenePass.PipelineLayout, BaseScenePass.DescriptorSetLayout);
+		CreateGraphicsPipelines(
+			BaseScenePass.Pipelines,
+			BaseScenePass.PipelineLayout,
+			SpecConstantsCount,
+			BaseScenePass.DescriptorSetLayout,
+			"Resources/Shaders/Scene_VS.spv",
+			"Resources/Shaders/Scene_FS.spv",
+			true/*bDepthTest*/, true/*bCullBack*/, false/*bInstanced*/);
+		CreateGraphicsPipelines(
+			BaseScenePass.PipelinesInstanced,
+			BaseScenePass.PipelineLayout,
+			SpecConstantsCount,
+			BaseScenePass.DescriptorSetLayout,
+			"Resources/Shaders/SceneInstanced_VS.spv",
+			"Resources/Shaders/Scene_FS.spv",
+			true/*bDepthTest*/, true/*bCullBack*/, true/*bInstanced*/);
+
+		//CreateRenderObjectsFromProfabs(BaseScenePass.RenderObjects, "sphere_meshlets");
+
+		std::vector<FInstanceData> instanceData;
+		instanceData.resize(INSTANCE_COUNT);
+		for (uint32_t i = 0; i < INSTANCE_COUNT; i++) {
+			float radians = (((float)RandRange(0, 3600) / 10.0f));
+			float distance = (((float)RandRange(0, 99) / 100.0f)) + 1.5f;
+			if (i % 3 != 0)
+			{
+				distance = (((float)RandRange(0, 99) / 100.0f)) + 4.5f;
+			}
+			float X = sin(glm::radians(radians)) * distance;
+			float Y = cos(glm::radians(radians)) * distance;
+			float Z = RandRange(-50, 50) / 500.0f;
+			instanceData[i].InstancePosition = glm::vec3(X, Y, Z);
+			// Y(Pitch), Z(Yaw), X(Roll)
+			float Yaw = float(M_PI) * RandRange(0, 99) / 100.0f;
+			float Pitch = float(M_PI) * RandRange(0, 99) / 100.0f;
+			float Roll = float(M_PI) * RandRange(0, 99) / 100.0f;
+			instanceData[i].InstanceRotation = glm::vec3(Pitch, Yaw, Roll);
+			instanceData[i].InstancePScale = RandRange(0, 9999) / 250000.0f;
+			instanceData[i].InstanceTexIndex = RandRange(0, 255);
 		}
-
-		VkDeviceSize bufferSizeOfView = sizeof(FUniformBufferView);
-		ViewUniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-		ViewUniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
-
-		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-			CreateBuffer(
-				bufferSizeOfView,
-				VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-				ViewUniformBuffers[i],
-				ViewUniformBuffersMemory[i]);
-		}
+		//CreateRenderObjectsFromProfabs(BaseScenePass.RenderInstancedObjects, "antarctic_meteorite", instanceData);
+		//~ 结束 创建场景，包括VBO，UBO，贴图等
 	}
 
 	void CreateIndirectScenePass()
@@ -1861,130 +2249,6 @@ protected:
 			CreateRenderIndirectBuffer<FRenderIndirectObject>(object);
 			IndirectScenePass.RenderIndirectObject.push_back(object);
 		}
-	}
-
-	void CreateBaseScenePass()
-	{
-		// 创建场景渲染流水线和着色器
-		CreateDescriptorSetLayout(BaseScenePass.DescriptorSetLayout, PBR_SAMPLER_NUMBER);
-		uint32_t SpecConstantsCount = GlobalConstants.SpecConstantsCount;
-		BaseScenePass.Pipelines.resize(SpecConstantsCount);
-		BaseScenePass.PipelinesInstanced.resize(SpecConstantsCount);
-		CreatePipelineLayout(BaseScenePass.PipelineLayout, BaseScenePass.DescriptorSetLayout);
-		CreateGraphicsPipelines(
-			BaseScenePass.Pipelines,
-			BaseScenePass.PipelineLayout,
-			SpecConstantsCount,
-			BaseScenePass.DescriptorSetLayout,
-			"Resources/Shaders/Scene_VS.spv",
-			"Resources/Shaders/Scene_FS.spv",
-			true/*bDepthTest*/, true/*bCullBack*/, false/*bInstanced*/);
-		CreateGraphicsPipelines(
-			BaseScenePass.PipelinesInstanced,
-			BaseScenePass.PipelineLayout,
-			SpecConstantsCount,
-			BaseScenePass.DescriptorSetLayout,
-			"Resources/Shaders/SceneInstanced_VS.spv",
-			"Resources/Shaders/Scene_FS.spv",
-			true/*bDepthTest*/, true/*bCullBack*/, true/*bInstanced*/);
-
-		//CreateRenderObjectsFromProfabs(BaseScenePass.RenderObjects, "sphere_meshlets");
-
-		std::vector<FInstanceData> instanceData;
-		instanceData.resize(INSTANCE_COUNT);
-		for (uint32_t i = 0; i < INSTANCE_COUNT; i++) {
-			float radians = (((float)RandRange(0, 3600) / 10.0f));
-			float distance = (((float)RandRange(0, 99) / 100.0f)) + 1.5f;
-			if (i % 3 != 0)
-			{
-				distance = (((float)RandRange(0, 99) / 100.0f)) + 4.5f;
-			}
-			float X = sin(glm::radians(radians)) * distance;
-			float Y = cos(glm::radians(radians)) * distance;
-			float Z = RandRange(-50, 50) / 500.0f;
-			instanceData[i].InstancePosition = glm::vec3(X, Y, Z);
-			// Y(Pitch), Z(Yaw), X(Roll)
-			float Yaw =float(M_PI)* RandRange(0, 99) / 100.0f;
-			float Pitch = float(M_PI) * RandRange(0, 99) / 100.0f;
-			float Roll = float(M_PI) * RandRange(0, 99) / 100.0f;
-			instanceData[i].InstanceRotation = glm::vec3(Pitch, Yaw, Roll);
-			instanceData[i].InstancePScale = RandRange(0, 9999) / 250000.0f;
-			instanceData[i].InstanceTexIndex = RandRange(0, 255);
-		}
-		//CreateRenderObjectsFromProfabs(BaseScenePass.RenderInstancedObjects, "antarctic_meteorite", instanceData);
-		//~ 结束 创建场景，包括VBO，UBO，贴图等
-	}
-
-
-	void CreateBackgroundPass()
-	{
-		// 创建环境反射纹理资源
-		CreateCubemapResources();
-
-		// 创建背景贴图
-		CreateImageContext(
-			BackgroundPass.Image,
-			BackgroundPass.Memory,
-			BackgroundPass.ImageView,
-			BackgroundPass.Sampler,
-			"Resources/Contents/Textures/background.png");
-		CreateDescriptorSetLayout(BackgroundPass.DescriptorSetLayout);
-		CreateDescriptorPool(BackgroundPass.DescriptorPool);
-		CreateDescriptorSets(
-			BackgroundPass.DescriptorSets,
-			BackgroundPass.DescriptorPool,
-			BackgroundPass.DescriptorSetLayout,
-			BackgroundPass.ImageView,
-			BackgroundPass.Sampler);
-		BackgroundPass.Pipelines.resize(1);
-		CreatePipelineLayout(BackgroundPass.PipelineLayout, BackgroundPass.DescriptorSetLayout);
-		CreateGraphicsPipelines(
-			BackgroundPass.Pipelines,
-			BackgroundPass.PipelineLayout,
-			1,
-			BackgroundPass.DescriptorSetLayout,
-			"Resources/Shaders/Background_VS.spv",
-			"Resources/Shaders/Background_FS.spv",
-			false, false);
-	}
-
-	void CreateSkydomePass()
-	{
-		CreateImageContext(
-			SkydomePass.Image,
-			SkydomePass.Memory,
-			SkydomePass.ImageView,
-			SkydomePass.Sampler,
-			"Resources/Contents/Textures/skydome.png");
-		CreateDescriptorSetLayout(SkydomePass.DescriptorSetLayout);
-		CreateDescriptorPool(SkydomePass.DescriptorPool);
-		CreateDescriptorSets(
-			SkydomePass.DescriptorSets,
-			SkydomePass.DescriptorPool,
-			SkydomePass.DescriptorSetLayout,
-			SkydomePass.ImageView,
-			SkydomePass.Sampler);
-		SkydomePass.Pipelines.resize(1);
-		CreatePipelineLayout(SkydomePass.PipelineLayout, SkydomePass.DescriptorSetLayout);
-		CreateGraphicsPipelines(
-			SkydomePass.Pipelines,
-			SkydomePass.PipelineLayout,
-			1,
-			SkydomePass.DescriptorSetLayout,
-			"Resources/Shaders/Skydome_VS.spv",
-			"Resources/Shaders/Skydome_FS.spv",
-			true/*bDepthTest*/, true/*bCullBack*/, false/*bInstanced*/);
-
-		std::string skydome_obj = "Resources/Contents/Meshes/skydome.obj";
-		CreateMesh(SkydomePass.SkydomeMesh.Vertices, SkydomePass.SkydomeMesh.Indices, skydome_obj);
-		CreateVertexBuffer(
-			SkydomePass.SkydomeMesh.VertexBuffer,
-			SkydomePass.SkydomeMesh.VertexBufferMemory,
-			SkydomePass.SkydomeMesh.Vertices);
-		CreateIndexBuffer(
-			SkydomePass.SkydomeMesh.IndexBuffer,
-			SkydomePass.SkydomeMesh.IndexBufferMemory,
-			SkydomePass.SkydomeMesh.Indices);
 	}
 
 	/** 创建指令缓存，多个CPU Core可以并行的往CommandBuffer中发送指令，可以充分利用CPU的多核性能*/
@@ -2415,6 +2679,9 @@ protected:
 	/** 删除函数 InitVulkan 中创建的元素*/
 	void DestroyVulkan()
 	{
+		// 清理FrameBuffer相关的资源
+		CleanupSwapChain();
+
 		// CommandBuffer 不需要释放
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
 			vkDestroySemaphore(Device, RenderFinishedSemaphores[i], nullptr);
@@ -3075,7 +3342,6 @@ protected:
 		}
 	}
 	
-
 	/**创建图形渲染管线*/
 	void CreateGraphicsPipelines(
 		std::vector<VkPipeline>& outPipelines,
@@ -3108,6 +3374,12 @@ protected:
 
 		VkPipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageCI, fragShaderStageCI };
 
+		// 顶点缓存绑定的描述，定义了顶点都需要绑定什么数据，比如第一个位置绑定Position，第二个位置绑定Color，第三个位置绑定UV等
+		auto bindingDescription = FVertex::GetBindingDescription();
+		auto attributeDescriptions = FVertex::GetAttributeDescriptions();
+		auto bindingInstancedDescriptions = FVertex::GetBindingInstancedDescriptions();
+		auto attributeInstancedDescriptions = FVertex::GetAttributeInstancedDescriptions();
+
 		// 渲染管线VertexBuffer输入
 		VkPipelineVertexInputStateCreateInfo vertexInputCI{};
 		if (!bDepthTest && !bCullBack) // 如果不做深度检测并且不做背面剔除，那么认为是渲染背景，不需要绑定VBO
@@ -3118,21 +3390,19 @@ protected:
 		}
 		else if (bInstanced)
 		{
-			auto bindingDescriptions = FVertex::GetInstancedBindingDescriptions();
-			auto attributeDescriptions = FVertex::GetInstancedAttributeDescriptions();
-
+			// @Note: this is weird when I put the functions under into "elseif{}",
+			// </> auto bindingInstancedDescriptions = FVertex::GetBindingInstancedDescriptions();
+			// </> auto attributeInstancedDescriptions = FVertex::GetAttributeInstancedDescriptions();
+			// the NVIDIA graphics drivers would crash and report "unload nvoglv64.pdb",
+			// only happen when build Release!
 			vertexInputCI.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-			vertexInputCI.vertexBindingDescriptionCount = static_cast<uint32_t>(bindingDescriptions.size());
-			vertexInputCI.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
-			vertexInputCI.pVertexBindingDescriptions = bindingDescriptions.data();
-			vertexInputCI.pVertexAttributeDescriptions = attributeDescriptions.data();
+			vertexInputCI.vertexBindingDescriptionCount = static_cast<uint32_t>(bindingInstancedDescriptions.size());
+			vertexInputCI.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeInstancedDescriptions.size());
+			vertexInputCI.pVertexBindingDescriptions = bindingInstancedDescriptions.data();
+			vertexInputCI.pVertexAttributeDescriptions = attributeInstancedDescriptions.data();
 		}
 		else // 正常VBO渲染绑定
 		{
-			// 顶点缓存绑定的描述，定义了顶点都需要绑定什么数据，比如第一个位置绑定Position，第二个位置绑定Color，第三个位置绑定UV等
-			auto bindingDescription = FVertex::GetBindingDescription();
-			auto attributeDescriptions = FVertex::GetAttributeDescriptions();
-
 			vertexInputCI.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 			vertexInputCI.vertexBindingDescriptionCount = 1;
 			vertexInputCI.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());

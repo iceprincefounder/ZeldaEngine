@@ -13,6 +13,7 @@ include_directories(Third_Party/stb)
 include_directories(Third_Party/tinyobjloader)
 include_directories(Third_Party/meshoptimizer)
 include_directories(Third_Party/imgui)
+include_directories(Third_Party/glslang)
 
 # Use FindVulkan module added with CMAKE 3.7
 if(NOT CMAKE_VERSION VERSION_LESS 3.7.0)
@@ -121,10 +122,19 @@ set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 
+# glslang
+option(ENABLE_SPVREMAPPER OFF)
+option(ENABLE_GLSLANG_BINARIES OFF)
+option(ENABLE_HLSL ON)
+option(ENABLE_OPT OFF) # ENABLE_OPT need SPIRV-Headers and SPIRV-Tools
+option(BUILD_TESTING OFF)
+option(BUILD_EXTERNAL OFF)
+
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
 add_subdirectory(Third_Party/glfw)
 add_subdirectory(Third_Party/glm)
 add_subdirectory(Third_Party/tinyobjloader)
 add_subdirectory(Third_Party/meshoptimizer)
+add_subdirectory(Third_Party/glslang)
 add_subdirectory(ZeldaEngine)

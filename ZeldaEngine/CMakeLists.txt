@@ -119,7 +119,10 @@ function(BuildEngine ENGINE_NAME)
     if(APPLE)
         set_target_properties(${ENGINE_NAME} PROPERTIES XCODE_GENERATE_SCHEME TRUE XCODE_SCHEME_WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
     endif(APPLE)
-	target_link_libraries(${ENGINE_NAME} glfw glm)
+    # @Note: fix glslang libraries link issue
+    # https://stackoverflow.com/questions/38234986/how-to-use-glslang
+    target_link_libraries(${ENGINE_NAME} glfw glm glslang SPIRV glslang-default-resource-limits)
+
 endfunction(BuildEngine)
 
 # Function for building engine tools
