@@ -2,7 +2,7 @@
 
 #define GLFW_INCLUDE_VULKAN
 #define GLM_FORCE_RADIANS
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE // 深度缓存区，OpenGL默认是（-1.0， 1.0）Vulakn为（0.0， 1.0）
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE // Depth buffer range, OpenGL default -1.0 to 1.0, but Vulakn default as 0.0 to 1.0
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -49,8 +49,8 @@
 #define VERTEX_BUFFER_BIND_ID 0
 #define INSTANCE_BUFFER_BIND_ID 1
 #define INSTANCE_COUNT 4096
-#define SCENE_SHOW_SKYDOME true
-#define ENABLE_WIREFRAME false
+#define ENABLE_SHOW_SKYDOME true
+#define ENABLE_SHOW_WIREFRAME false
 #define ENABLE_INDIRECT_DRAW true
 #define ENABLE_CACHE_FILE false
 
@@ -65,6 +65,12 @@ private:
 	static glslang::EShTargetLanguageVersion EnvTargetLanguageVersion;
 
 public:
+	/**
+	* @brief Read shader source file into buffer
+	* @param[out] outShaderSource Output shader source data buffer
+	* @param[out] outShaderStage Output shader stage detect by file suffix
+	* @param inFilename Shader file path
+	*/
 	static void ReadShaderFile(std::vector<uint8_t>& outShaderSource, VkShaderStageFlagBits& outShaderStage, const std::string& inFilename)
 	{
 		std::string::size_type const p(inFilename.find_last_of('.'));
@@ -124,6 +130,11 @@ public:
 		file.close();
 	}
 
+	/**
+	* @brief Write shader buffer into new SPV file
+	* @param inFilename SPV file path
+	* @param inSpirvSource Spirv source buffer
+	*/
 	static void SaveShaderFile(const std::string& inFilename, const std::vector<unsigned int>& inSpirvSource)
 	{
 		std::ofstream out;
@@ -301,6 +312,7 @@ struct FInstanceData {
 	glm::uint8 InstanceTexIndex;
 };
 
+
 /** The vertex of mesh data block*/
 struct FVertex {
 	glm::vec3 Position;
@@ -419,7 +431,7 @@ namespace std {
 	};
 }
 
-
+/** Meshlet data block*/
 struct FMeshlet {
 	uint32_t VertexOffset;
 	uint32_t VertexCount;
@@ -433,6 +445,7 @@ struct FMeshlet {
 };
 
 
+/** Meshlet group set data block, all meshlets make up a model mesh data.*/
 struct FMeshletSet {
 	std::vector<FMeshlet> Meshlets;
 	std::vector<uint32_t> MeshletVertices;
@@ -440,7 +453,7 @@ struct FMeshletSet {
 };
 
 
-/** 物体的MVP矩阵信息*/
+/** Model MVP matrix data struct.*/
 struct FUniformBufferBase {
 	glm::mat4 Model;
 	glm::mat4 View;
@@ -448,6 +461,7 @@ struct FUniformBufferBase {
 };
 
 
+/** Common light data struct.*/
 struct FLight
 {
 	glm::vec4 Position;
@@ -457,7 +471,7 @@ struct FLight
 };
 
 
-/** 场景灯光信息*/
+/** Scene viewport data struct.*/
 struct FUniformBufferView {
 	glm::mat4 ShadowmapSpace;
 	glm::mat4 LocalToWorld;
@@ -508,7 +522,7 @@ static void DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMesse
 }
 
 
-/** 所有的硬件信息*/
+/** All hardware device data struct*/
 struct FQueueFamilyIndices
 {
 	std::optional<uint32_t> GraphicsFamily;
@@ -521,7 +535,7 @@ struct FQueueFamilyIndices
 };
 
 
-/** 支持的硬件细节信息*/
+/** All support hardware device details data struct*/
 struct FSwapChainSupportDetails
 {
 	VkSurfaceCapabilitiesKHR Capabilities;
@@ -530,6 +544,10 @@ struct FSwapChainSupportDetails
 };
 
 
+/**
+ * ZeldaEngine: A tiny realtime vulkan based 3D engine with modern graphics
+ * All implementations in this class.
+ */
 class FZeldaEngineApp
 {
 	struct FGlobalInput {
@@ -1381,7 +1399,7 @@ protected:
 		VkPhysicalDeviceFeatures deviceFeatures{};
 		deviceFeatures.multiDrawIndirect = VK_TRUE;
 		deviceFeatures.samplerAnisotropy = VK_TRUE;
-		deviceFeatures.fillModeNonSolid = ENABLE_WIREFRAME ? VK_TRUE : VK_FALSE;
+		deviceFeatures.fillModeNonSolid = ENABLE_SHOW_WIREFRAME ? VK_TRUE : VK_FALSE;
 
 		VkDeviceCreateInfo createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -1875,7 +1893,7 @@ protected:
 		rasterizationStateCI.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
 		rasterizationStateCI.depthClampEnable = VK_FALSE;
 		rasterizationStateCI.rasterizerDiscardEnable = VK_FALSE;
-		rasterizationStateCI.polygonMode = ENABLE_WIREFRAME ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL;
+		rasterizationStateCI.polygonMode = ENABLE_SHOW_WIREFRAME ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL;
 		rasterizationStateCI.lineWidth = 1.0f;
 		rasterizationStateCI.cullMode = VK_CULL_MODE_BACK_BIT /*VK_CULL_MODE_BACK_BIT*/;
 		rasterizationStateCI.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
@@ -2484,7 +2502,7 @@ protected:
 			vkCmdDraw(commandBuffer, 6, 1, 0, 0);
 
 			// 【主场景】渲染天空球
-			if (SCENE_SHOW_SKYDOME)
+			if (ENABLE_SHOW_SKYDOME)
 			{
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, SkydomePass.Pipelines[0]);
 				vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, SkydomePass.PipelineLayout, 0, 1, &SkydomePass.DescriptorSets[CurrentFrame], 0, nullptr);
@@ -3424,7 +3442,7 @@ protected:
 		rasterizerCI.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
 		rasterizerCI.depthClampEnable = VK_FALSE;
 		rasterizerCI.rasterizerDiscardEnable = VK_FALSE;
-		rasterizerCI.polygonMode = ENABLE_WIREFRAME ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL;
+		rasterizerCI.polygonMode = ENABLE_SHOW_WIREFRAME ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL;
 		rasterizerCI.lineWidth = 1.0f;
 		// 关闭背面剔除，使得材质TwoSide渲染
 		rasterizerCI.cullMode = bCullBack ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
