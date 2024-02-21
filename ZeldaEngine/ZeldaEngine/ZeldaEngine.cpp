@@ -2045,7 +2045,7 @@ protected:
 		vkDestroyShaderModule(Device, vertShaderModule, nullptr);
 		vkDestroyShaderModule(Device, vertInstancedShaderModule, nullptr);
 	}
-	F
+
 	/** Cube map Faces Rules:
 	 *       Y3
 	 *       ||
@@ -4998,8 +4998,11 @@ private:
 	/** 打印调试信息时的回调函数，可以用来处理调试信息*/
 	static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, VkDebugUtilsMessageTypeFlagsEXT messageType, const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData)
 	{
-		std::cerr << "[LOG]: " << pCallbackData->pMessage << std::endl;
-
+		std::string output = std::string("[LOG]: ") + std::string(pCallbackData->pMessage);
+		std::cerr << output.c_str() << std::endl;
+#ifdef NDEBUG
+		OutputDebugString(output.c_str());
+#endif
 		return VK_FALSE;
 	}
 };
