@@ -312,11 +312,13 @@ enum class EGraphicsFlags : uint16_t
 	ScreenRect = 1 << 2,
 	TwoSided = 1 << 3,
 	DisableDepthTest = 1 << 4,
-	OpaqueScene = 1 << 5,
+	Shadow = 1 << 5,
 	Skydome = 1 << 6,
 	Background = 1 << 7,
-	DeferredScene = 1 << 8,
-	DeferredLighting = 1 << 9,
+	OpaqueScene = 1 << 8,
+	DeferredScene = 1 << 9,
+	DeferredLighting = 1 << 10,
+	None = 1 << 15,
 };
 
 inline EGraphicsFlags operator|(EGraphicsFlags a, EGraphicsFlags b)
@@ -2576,44 +2578,32 @@ protected:
 		CreateDescriptorSetLayout(BaseSceneDeferredPass.LightingDescriptorSetLayout, EGraphicsFlags::DeferredLighting);
 
 		/** Create DescriptorPool for Lighting*/
-		std::vector<VkDescriptorPoolSize> poolSizes;
-		poolSizes.resize(9);
-		poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-		poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-		poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-		poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-		poolSizes[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-		poolSizes[2].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-		for (size_t i = 0; i < 6; i++)
-		{
-			poolSizes[i + 3].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-			poolSizes[i + 3].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-		}
 
-		VkDescriptorPoolCreateInfo poolCI{};
-		poolCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-		poolCI.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
-		poolCI.pPoolSizes = poolSizes.data();
-		poolCI.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+		std::vector<VkImageView> GBufferImageViews;
+		GBufferImageViews.resize(6);
+		std::vector<VkSampler> GBufferSamplers;
+		GBufferSamplers.resize(6);
+		GBufferImageViews[0] = GBuffer.DepthStencilImageView;
+		GBufferImageViews[1] = GBuffer.SceneColorImageView;
+		GBufferImageViews[2] = GBuffer.GBufferAImageView;
+		GBufferImageViews[3] = GBuffer.GBufferBImageView;
+		GBufferImageViews[4] = GBuffer.GBufferCImageView;
+		GBufferImageViews[5] = GBuffer.GBufferDImageView;
+		GBufferSamplers[0] = GBuffer.DepthStencilSampler;
+		GBufferSamplers[1] = GBuffer.SceneColorSampler;
+		GBufferSamplers[2] = GBuffer.GBufferASampler;
+		GBufferSamplers[3] = GBuffer.GBufferBSampler;
+		GBufferSamplers[4] = GBuffer.GBufferCSampler;
+		GBufferSamplers[5] = GBuffer.GBufferDSampler;
 
-		if (vkCreateDescriptorPool(Device, &poolCI, nullptr, &BaseSceneDeferredPass.LightingDescriptorPool) != VK_SUCCESS) {
-			throw std::runtime_error("failed to Create descriptor pool!");
-		}
-
-		/** 创建DescriptorSets*/
-		std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, BaseSceneDeferredPass.LightingDescriptorSetLayout);
-		VkDescriptorSetAllocateInfo allocInfo{};
-		allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-		allocInfo.descriptorPool = BaseSceneDeferredPass.LightingDescriptorPool;
-		allocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-		allocInfo.pSetLayouts = layouts.data();
-
-		BaseSceneDeferredPass.LightingDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
-		if (vkAllocateDescriptorSets(Device, &allocInfo, BaseSceneDeferredPass.LightingDescriptorSets.data()) != VK_SUCCESS) {
-			throw std::runtime_error("failed to allocate descriptor sets!");
-		}
-
-		UpdateBaseSceneDeferredPassDescriptorSet();
+		CreateDescriptorSet(
+			BaseSceneDeferredPass.LightingDescriptorSets,
+			BaseSceneDeferredPass.LightingDescriptorPool,
+			BaseSceneDeferredPass.LightingDescriptorSetLayout,
+			GBufferImageViews,
+			GBufferSamplers,
+			EGraphicsFlags::DeferredLighting);
+		UpdateBaseSceneDeferredPassDescriptorSet(BaseSceneDeferredPass.LightingDescriptorSets, GBufferImageViews, GBufferSamplers);
 
 		CreatePipelineLayout(BaseSceneDeferredPass.LightingPipelineLayout, BaseSceneDeferredPass.LightingDescriptorSetLayout);
 		BaseSceneDeferredPass.LightingPipelines.resize(GlobalConstants.SpecConstantsCount);
@@ -2624,6 +2614,12 @@ protected:
 			GlobalConstants.SpecConstantsCount, EGraphicsFlags::ScreenRect | EGraphicsFlags::DisableDepthTest | EGraphicsFlags::DeferredLighting,
 			"Resources/Shaders/Background_VS.spv",
 			"Resources/Shaders/SceneBaseLighting_FS.spv");
+
+		//for (size_t i = 0; i < ImageViews.size(); i++)
+		//{
+		//	vkDestroyImageView(Device, ImageViews[i], nullptr);
+		//	vkDestroySampler(Device, Samplers[i], nullptr);
+		//}
 	}
 
 	void CreateEngineScene()
@@ -2633,13 +2629,13 @@ protected:
 		Scene.DeferredSceneDescriptorSetLayout = &BaseSceneDeferredPass.SceneDescriptorSetLayout;
 		Scene.DeferredLightingDescriptorSetLayout = &BaseSceneDeferredPass.LightingDescriptorSetLayout;
 
-		CreateImageCubeContext(CubemapImage, CubemapImageMemory, CubemapImageView, CubemapSampler, CubemapMaxMips, {
-		"Resources/Contents/Textures/T/cubemap_X0.png",
-		"Resources/Contents/Textures/T/cubemap_X1.png",
-		"Resources/Contents/Textures/T/cubemap_Y2.png",
-		"Resources/Contents/Textures/T/cubemap_Y3.png",
-		"Resources/Contents/Textures/T/cubemap_Z4.png",
-		"Resources/Contents/Textures/T/cubemap_Z5.png" });
+		//CreateImageCubeContext(CubemapImage, CubemapImageMemory, CubemapImageView, CubemapSampler, CubemapMaxMips, {
+		//"Resources/Contents/Textures/T/cubemap_X0.png",
+		//"Resources/Contents/Textures/T/cubemap_X1.png",
+		//"Resources/Contents/Textures/T/cubemap_Y2.png",
+		//"Resources/Contents/Textures/T/cubemap_Y3.png",
+		//"Resources/Contents/Textures/T/cubemap_Z4.png",
+		//"Resources/Contents/Textures/T/cubemap_Z5.png" });
 
 		if (ENABLE_INDIRECT_DRAW)
 		{
@@ -4486,55 +4482,100 @@ protected:
 	}
 
 	/** 函数用来创建默认的只有一份贴图的DescriptorSets*/
-	void CreateDescriptorSet(std::vector<VkDescriptorSet>& outDescriptorSets, VkDescriptorPool& outDescriptorPool, const VkDescriptorSetLayout& inDescriptorSetLayout, const VkImageView& inImageView, const VkSampler& inSampler)
+	void CreateDescriptorSet(std::vector<VkDescriptorSet>& outDescriptorSets, VkDescriptorPool& outDescriptorPool, 
+		const VkDescriptorSetLayout& inDescriptorSetLayout, const VkImageView& inImageView, const VkSampler& inSampler, 
+		const EGraphicsFlags inGraphicsFlags = EGraphicsFlags::None)
 	{
-		CreateDescriptorSet(outDescriptorSets, outDescriptorPool, inDescriptorSetLayout, std::vector<VkImageView>{inImageView}, std::vector<VkSampler>{inSampler});
+		CreateDescriptorSet(outDescriptorSets, outDescriptorPool, inDescriptorSetLayout, std::vector<VkImageView>{inImageView}, std::vector<VkSampler>{inSampler}, inGraphicsFlags);
 	}
 
 	/** 通用函数用来创建DescriptorSets*/
 	void CreateDescriptorSet(std::vector<VkDescriptorSet>& outDescriptorSets, VkDescriptorPool& outDescriptorPool,
-		const VkDescriptorSetLayout& inDescriptorSetLayout, const std::vector<VkImageView>& inImageViews, const std::vector<VkSampler>& inSamplers)
+		const VkDescriptorSetLayout& inDescriptorSetLayout, const std::vector<VkImageView>& inImageViews, const std::vector<VkSampler>& inSamplers,
+		const EGraphicsFlags inGraphicsFlags = EGraphicsFlags::None)
 	{
-		uint32_t SamplerNumber = static_cast<uint32_t>(inSamplers.size());
-		std::vector<VkDescriptorPoolSize> poolSizes;
-		poolSizes.resize(SamplerNumber + 4);
-		poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-		poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-		poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-		poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-		poolSizes[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-		poolSizes[2].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-		poolSizes[3].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-		poolSizes[3].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-		for (size_t i = 0; i < SamplerNumber; i++)
+		if (inGraphicsFlags == EGraphicsFlags::DeferredLighting)
 		{
-			poolSizes[i + 4].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-			poolSizes[i + 4].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+			std::vector<VkDescriptorPoolSize> poolSizes;
+			poolSizes.resize(9);
+			poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+			poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+			poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+			poolSizes[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			poolSizes[2].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+			for (size_t i = 0; i < 6; i++)
+			{
+				poolSizes[i + 3].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+				poolSizes[i + 3].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+			}
+
+			VkDescriptorPoolCreateInfo poolCI{};
+			poolCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+			poolCI.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+			poolCI.pPoolSizes = poolSizes.data();
+			poolCI.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+
+			if (vkCreateDescriptorPool(Device, &poolCI, nullptr, &outDescriptorPool) != VK_SUCCESS) {
+				throw std::runtime_error("failed to Create descriptor pool!");
+			}
+
+			/** 创建DescriptorSets*/
+			std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, inDescriptorSetLayout);
+			VkDescriptorSetAllocateInfo allocInfo{};
+			allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+			allocInfo.descriptorPool = BaseSceneDeferredPass.LightingDescriptorPool;
+			allocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+			allocInfo.pSetLayouts = layouts.data();
+
+			BaseSceneDeferredPass.LightingDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+			if (vkAllocateDescriptorSets(Device, &allocInfo, outDescriptorSets.data()) != VK_SUCCESS) {
+				throw std::runtime_error("failed to allocate descriptor sets!");
+			}
 		}
+		else
+		{
+			uint32_t SamplerNumber = static_cast<uint32_t>(inSamplers.size());
+			std::vector<VkDescriptorPoolSize> poolSizes;
+			poolSizes.resize(SamplerNumber + 4);
+			poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+			poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+			poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+			poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+			poolSizes[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			poolSizes[2].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+			poolSizes[3].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			poolSizes[3].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+			for (size_t i = 0; i < SamplerNumber; i++)
+			{
+				poolSizes[i + 4].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+				poolSizes[i + 4].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+			}
 
-		VkDescriptorPoolCreateInfo poolCI{};
-		poolCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-		poolCI.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
-		poolCI.pPoolSizes = poolSizes.data();
-		poolCI.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+			VkDescriptorPoolCreateInfo poolCI{};
+			poolCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+			poolCI.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+			poolCI.pPoolSizes = poolSizes.data();
+			poolCI.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
 
-		if (vkCreateDescriptorPool(Device, &poolCI, nullptr, &outDescriptorPool) != VK_SUCCESS) {
-			throw std::runtime_error("failed to Create descriptor pool!");
+			if (vkCreateDescriptorPool(Device, &poolCI, nullptr, &outDescriptorPool) != VK_SUCCESS) {
+				throw std::runtime_error("failed to Create descriptor pool!");
+			}
+
+			std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, inDescriptorSetLayout);
+			VkDescriptorSetAllocateInfo allocInfo{};
+			allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+			allocInfo.descriptorPool = outDescriptorPool;
+			allocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+			allocInfo.pSetLayouts = layouts.data();
+
+			outDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+			if (vkAllocateDescriptorSets(Device, &allocInfo, outDescriptorSets.data()) != VK_SUCCESS) {
+				throw std::runtime_error("failed to allocate descriptor sets!");
+			}
+
+			UpdateSceneDescriptorSet(outDescriptorSets, inImageViews, inSamplers);
 		}
-
-		std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, inDescriptorSetLayout);
-		VkDescriptorSetAllocateInfo allocInfo{};
-		allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-		allocInfo.descriptorPool = outDescriptorPool;
-		allocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-		allocInfo.pSetLayouts = layouts.data();
-
-		outDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
-		if (vkAllocateDescriptorSets(Device, &allocInfo, outDescriptorSets.data()) != VK_SUCCESS) {
-			throw std::runtime_error("failed to allocate descriptor sets!");
-		}
-
-		UpdateSceneDescriptorSet(outDescriptorSets, inImageViews, inSamplers);
 	}
 
 	void UpdateSceneDescriptorSet(std::vector<VkDescriptorSet>& outDescriptorSets, const VkImageView& inImageView, const VkSampler& inSampler)
@@ -4629,7 +4670,7 @@ protected:
 		}
 	}
 
-	void UpdateBaseSceneDeferredPassDescriptorSet()
+	void UpdateBaseSceneDeferredPassDescriptorSet(std::vector<VkDescriptorSet>& outDescriptorSets, const std::vector<VkImageView>& inImageViews, const std::vector<VkSampler>& inSamplers)
 	{
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
 		{
@@ -4644,7 +4685,7 @@ protected:
 			viewBufferInfo.range = sizeof(FUniformBufferView);
 
 			descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-			descriptorWrites[0].dstSet = BaseSceneDeferredPass.LightingDescriptorSets[i];
+			descriptorWrites[0].dstSet = outDescriptorSets[i];
 			descriptorWrites[0].dstBinding = 0;
 			descriptorWrites[0].dstArrayElement = 0;
 			descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -4657,7 +4698,7 @@ protected:
 			cubemapImageInfo.sampler = CubemapSampler;
 
 			descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-			descriptorWrites[1].dstSet = BaseSceneDeferredPass.LightingDescriptorSets[i];
+			descriptorWrites[1].dstSet = outDescriptorSets[i];
 			descriptorWrites[1].dstBinding = 1;
 			descriptorWrites[1].dstArrayElement = 0;
 			descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -4670,43 +4711,27 @@ protected:
 			shadowmapImageInfo.sampler = ShadowmapPass.Sampler;
 
 			descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-			descriptorWrites[2].dstSet = BaseSceneDeferredPass.LightingDescriptorSets[i];
+			descriptorWrites[2].dstSet = outDescriptorSets[i];
 			descriptorWrites[2].dstBinding = 2;
 			descriptorWrites[2].dstArrayElement = 0;
 			descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 			descriptorWrites[2].descriptorCount = 1;
 			descriptorWrites[2].pImageInfo = &shadowmapImageInfo;
 
-			std::vector<VkImageView> ImageViews;
-			ImageViews.resize(6);
-			std::vector<VkSampler> Samplers;
-			Samplers.resize(6);
-			ImageViews[0] = GBuffer.DepthStencilImageView;
-			ImageViews[1] = GBuffer.SceneColorImageView;
-			ImageViews[2] = GBuffer.GBufferAImageView;
-			ImageViews[3] = GBuffer.GBufferBImageView;
-			ImageViews[4] = GBuffer.GBufferCImageView;
-			ImageViews[5] = GBuffer.GBufferDImageView;
-			Samplers[0] = GBuffer.DepthStencilSampler;
-			Samplers[1] = GBuffer.SceneColorSampler;
-			Samplers[2] = GBuffer.GBufferASampler;
-			Samplers[3] = GBuffer.GBufferBSampler;
-			Samplers[4] = GBuffer.GBufferCSampler;
-			Samplers[5] = GBuffer.GBufferDSampler;
 			// 绑定 Textures
 			// descriptorWrites会引用每一个创建的VkDescriptorImageInfo，所以需要用一个数组把它们存储起来
 			std::vector<VkDescriptorImageInfo> imageInfos;
-			imageInfos.resize(ImageViews.size());
-			for (size_t j = 0; j < ImageViews.size(); j++)
+			imageInfos.resize(inImageViews.size());
+			for (size_t j = 0; j < inImageViews.size(); j++)
 			{
 				VkDescriptorImageInfo imageInfo{};
 				imageInfo.imageLayout = (j == 0) ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-				imageInfo.imageView = ImageViews[j];
-				imageInfo.sampler = Samplers[j];
+				imageInfo.imageView = inImageViews[j];
+				imageInfo.sampler = inSamplers[j];
 				imageInfos[j] = imageInfo;
 
 				descriptorWrites[j + 3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-				descriptorWrites[j + 3].dstSet = BaseSceneDeferredPass.LightingDescriptorSets[i];
+				descriptorWrites[j + 3].dstSet = outDescriptorSets[i];
 				descriptorWrites[j + 3].dstBinding = static_cast<uint32_t>(j + 3);
 				descriptorWrites[j + 3].dstArrayElement = 0;
 				descriptorWrites[j + 3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
