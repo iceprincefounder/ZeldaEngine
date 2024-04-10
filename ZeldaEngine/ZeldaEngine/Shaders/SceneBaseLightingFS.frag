@@ -23,11 +23,9 @@ layout(push_constant) uniform constants
 	float time;
 	float roughness;
 	float metallic;
-	uint specConstants;
-	uint specConstantsCount;
 } global;
 
-layout(set = 0, binding = 1) uniform uniformbuffer
+layout(set = 0, binding = 0) uniform uniformbuffer
 {
 	mat4 shadowmapSpace;
 	mat4 localToWorld;
@@ -40,20 +38,18 @@ layout(set = 0, binding = 1) uniform uniformbuffer
 	float zNear;
 	float zFar;
 } view;
-layout(set = 0, binding = 2)  uniform samplerCube cubemap;  // sky cubemap
-layout(set = 0, binding = 3)  uniform sampler2D shadowmap;  // sky cubemap
-layout(set = 0, binding = 4)  uniform sampler2D sampler1; // basecolor
-layout(set = 0, binding = 5)  uniform sampler2D sampler2; // metalic
-layout(set = 0, binding = 6)  uniform sampler2D sampler3; // roughness
-layout(set = 0, binding = 7)  uniform sampler2D sampler4; // normalmap
-layout(set = 0, binding = 8)  uniform sampler2D sampler5; // ambient occlution
-layout(set = 0, binding = 9)  uniform sampler2D sampler6; // emissive
-layout(set = 0, binding = 10) uniform sampler2D sampler7; // mask
+layout(set = 0, binding = 1) uniform samplerCube CubeMapSampler;
+layout(set = 0, binding = 2) uniform sampler2D ShadowMapSampler;
+layout(set = 0, binding = 3) uniform sampler2D DepthStencilSampler;
+layout(set = 0, binding = 4) uniform sampler2D SceneColorSampler;
+layout(set = 0, binding = 5) uniform sampler2D GBufferASampler;
+layout(set = 0, binding = 6) uniform sampler2D GBufferBSampler;
+layout(set = 0, binding = 7) uniform sampler2D GBufferCSampler;
+layout(set = 0, binding = 8) uniform sampler2D GBufferDSampler;
 
-layout(location = 0) in vec3 fragPosition;
-layout(location = 1) in vec3 fragNormal;
-layout(location = 2) in vec3 fragColor;
-layout(location = 3) in vec2 fragTexCoord;
+
+layout(location = 0) in vec3 fragColor;
+layout(location = 1) in vec2 fragTexCoord;
 
 layout(location = 0) out vec4 outColor;
 
@@ -65,6 +61,7 @@ uint SKY_MAXMIPS = view.lightsCount[3];
 
 const float PI = 3.14159265359;
 vec3 F0 = vec3(0.04);
+
 
 float saturate(float t)
 {
@@ -94,38 +91,6 @@ float remap(float value, float inputMin, float inputMax, float outputMin, float 
 {
 	value = clamp(value, inputMin, inputMax);
 	return (value - inputMin) / (inputMax - inputMin) * (outputMax - outputMin) + outputMin;
-}
-
-
-vec3 ComputeNormal()
-{
-	vec3 pos_dx = dFdx(fragPosition);
-	vec3 pos_dy = dFdy(fragPosition);
-	vec3 st1 = dFdx(vec3(fragTexCoord, 0.0));
-	vec3 st2 = dFdy(vec3(fragTexCoord, 0.0));
-	vec3 T = (st2.t * pos_dx - st1.t * pos_dy) / (st1.s * st2.t - st2.s * st1.t);
-	vec3 N = normalize(fragNormal);
-	T = normalize(T - N * dot(N, T));
-	vec3 B = normalize(cross(N, T));
-	mat3 TBN = mat3(T, B, N);
-
-	return normalize(TBN[2].xyz);
-}
-
-
-vec3 ComputeNormal(vec3 n)
-{
-	vec3 pos_dx = dFdx(fragPosition);
-	vec3 pos_dy = dFdy(fragPosition);
-	vec3 st1 = dFdx(vec3(fragTexCoord, 0.0));
-	vec3 st2 = dFdy(vec3(fragTexCoord, 0.0));
-	vec3 T = (st2.t * pos_dx - st1.t * pos_dy) / (st1.s * st2.t - st2.s * st1.t);
-	vec3 N = normalize(fragNormal);
-	T = normalize(T - N * dot(N, T));
-	vec3 B = normalize(cross(N, T));
-	mat3 TBN = mat3(T, B, N);
-
-	return normalize(TBN * normalize(2.0 * n - 1.0));
 }
 
 
@@ -197,7 +162,6 @@ vec3 ApplyPointLight(uint index, vec3 pos, vec3 n)
 	attenuation = (1.0 - attenuation);
 	return ndotl * density * color * attenuation;
 }
-
 
 // [0] Frensel Schlick
 vec3 F_Schlick(vec3 f0, float f90, float u)
@@ -319,6 +283,12 @@ struct FDirectLighting
 	vec3 Transmission;
 };
 
+vec3 Diffuse_Lambert(vec3 DiffuseColor)
+{
+	return DiffuseColor * (1 / PI);
+}
+
+
 FDirectLighting DefaultLitBxDF(vec3 DiffuseColor, vec3 SpecularColor, float Roughness, float LoH, float NoV, float NoL, float NoH)
 {
 	FDirectLighting Lighting;
@@ -368,7 +338,7 @@ float ShadowDepthProject(vec4 ShadowCoord, vec2 Offset)
 	float ShadowFactor = 1.0;
 	if (ShadowCoord.z > -1.0 && ShadowCoord.z < 1.0)
 	{
-		float Dist = texture(shadowmap, ShadowCoord.st + Offset).r;
+		float Dist = texture(ShadowMapSampler, ShadowCoord.st + Offset).r;
 		if (ShadowCoord.w > 0.0 && Dist < ShadowCoord.z)
 		{
 			ShadowFactor = 0.1;
@@ -381,7 +351,7 @@ float ShadowDepthProject(vec4 ShadowCoord, vec2 Offset)
 // Percentage Closer Filtering (PCF)
 float ComputePCF(vec4 sc /*shadow croodinate*/, int r /*filtering range*/)
 {
-	ivec2 TexDim = textureSize(shadowmap, 0);
+	ivec2 TexDim = textureSize(ShadowMapSampler, 0);
 	float Scale = 1.5;
 	float dx = Scale * 1.0 / float(TexDim.x);
 	float dy = Scale * 1.0 / float(TexDim.y);
@@ -401,34 +371,107 @@ float ComputePCF(vec4 sc /*shadow croodinate*/, int r /*filtering range*/)
 }
 
 
+vec3 GBufferVis(vec3 FinalColor)
+{
+	vec2 UV = fragTexCoord * 3.0f;
+	vec4 ShadowMap = texture(ShadowMapSampler, UV);
+	vec4 DepthStencil = texture(DepthStencilSampler, UV);
+	vec4 SceneColor = texture(SceneColorSampler, UV);
+	vec4 GBufferA = texture(GBufferASampler, UV);
+	vec4 GBufferB = texture(GBufferBSampler, UV);
+	vec4 GBufferC = texture(GBufferCSampler, UV);
+	vec4 GBufferD = texture(GBufferDSampler, UV);
+
+	vec3 BaseColor = GBufferC.rgb;
+	float Metallic = saturate(GBufferB.r);
+	float Specular = saturate(GBufferB.g);
+	float Roughness = saturate(GBufferB.b);
+	vec3 Normal = GBufferA.rgb * 2.0 - 1.0;
+	vec3 AmbientOcclution = vec3(GBufferC.a);
+	vec3 EmissiveColor = SceneColor.rgb;
+	float Mask = SceneColor.a;
+
+	Roughness = max(0.01, Roughness);
+	float AO = saturate(AmbientOcclution.r);
+	vec3 N = normalize(Normal);
+	vec3 P = GBufferD.xyz;
+	vec3 V = normalize(view.cameraInfo.xyz - P);
+	float NdotV = saturate(dot(N, V));
+
+	const float Step = 1.0f / 3.0f;
+
+	vec3 Result = FinalColor;
+	if (fragTexCoord.x < Step && fragTexCoord.y < Step)
+	{
+		Result = pow(BaseColor, vec3(0.4545));
+	}
+	else if (fragTexCoord.x < Step * 2.0f && fragTexCoord.y < Step)
+	{
+		Result = vec3(Metallic);
+	}
+	else if (fragTexCoord.x < 1.0f && fragTexCoord.y < Step)
+	{
+		Result = vec3(Roughness);
+	}
+	else if (fragTexCoord.x < Step && fragTexCoord.y < Step * 2.0f)
+	{
+		Result = vec3(N);
+	}
+	else if (fragTexCoord.x < 1.0f && fragTexCoord.y < Step * 2.0f && fragTexCoord.x > Step * 2.0f)
+	{
+		Result = vec3(AO);
+	}
+	else if (fragTexCoord.x < Step && fragTexCoord.y < 1.0f)
+	{
+		Result = vec3(0.0f);
+	}
+	else if (fragTexCoord.x < Step * 2.0f && fragTexCoord.x > Step && fragTexCoord.y < 1.0f && fragTexCoord.y > Step * 2.0f)
+	{
+		float ratio = 1.00 / 1.52;
+		vec3 I = V;
+		vec3 R = refract(I, normalize(N), ratio);
+		vec3 Reflection_L = textureLod(CubeMapSampler, R, 0).rgb * 10.0;
+		Result = vec3(Reflection_L);
+	}
+	else if (fragTexCoord.x < 1.0f && fragTexCoord.x > Step * 2.0f && fragTexCoord.y < 1.0f && fragTexCoord.y > Step * 2.0f)
+	{
+		vec4 ShadowCoord = ComputeShadowCoord(P);
+		float ShadowFactor = ComputePCF(ShadowCoord / ShadowCoord.w, 2);
+		Result = vec3(ShadowFactor);
+	}
+	return Result;
+}
+
 void main()
 {
 	vec3 VertexColor = fragColor;
 
-	vec3 BaseColor = texture(sampler1, fragTexCoord).rgb;
-	float Metallic = saturate(texture(sampler2, fragTexCoord).r);
-	float Roughness = saturate(texture(sampler3, fragTexCoord).r);
-	vec3 Normal = ComputeNormal(texture(sampler4, fragTexCoord).rgb);
-	vec3 AmbientOcclution = texture(sampler5, fragTexCoord).rgb;
+	vec4 ShadowMap = texture(ShadowMapSampler, fragTexCoord);
+	vec4 DepthStencil = texture(DepthStencilSampler, fragTexCoord);
+	vec4 SceneColor = texture(SceneColorSampler, fragTexCoord);
+	vec4 GBufferA = texture(GBufferASampler, fragTexCoord);
+	vec4 GBufferB = texture(GBufferBSampler, fragTexCoord);
+	vec4 GBufferC = texture(GBufferCSampler, fragTexCoord);
+	vec4 GBufferD = texture(GBufferDSampler, fragTexCoord);
+
+	vec3 BaseColor = GBufferC.rgb;
+	float Metallic = saturate(GBufferB.r);
+	float Specular = saturate(GBufferB.g);
+	float Roughness = saturate(GBufferB.b);
+	vec3 Normal = GBufferA.rgb * 2.0 - 1.0;
+	vec3 AmbientOcclution = vec3(GBufferC.a);
+	vec3 EmissiveColor = SceneColor.rgb;
+	float Mask = SceneColor.a;
 
 	Roughness = max(0.01, Roughness);
-	float AO = AmbientOcclution.r;
-	vec3 N = Normal;
-	vec3 P = fragPosition;
+	float AO = saturate(AmbientOcclution.r);
+	vec3 N = normalize(Normal);
+	vec3 P = GBufferD.xyz;
 	vec3 V = normalize(view.cameraInfo.xyz - P);
 	float NdotV = saturate(dot(N, V));
 
-	float ShadowFactor = 1.0;
-	if (SPEC_CONSTANTS == 8)
-	{
-		vec4 ShadowCoord = ComputeShadowCoord(P);
-		ShadowFactor = ShadowDepthProject(ShadowCoord / ShadowCoord.w, vec2(0.0));
-	}
-	if (SPEC_CONSTANTS == 0 || SPEC_CONSTANTS == 9)
-	{
-		vec4 ShadowCoord = ComputeShadowCoord(P);
-		ShadowFactor = ComputePCF(ShadowCoord / ShadowCoord.w, 2);
-	}
+	vec4 ShadowCoord = ComputeShadowCoord(P);
+	float ShadowFactor = ComputePCF(ShadowCoord / ShadowCoord.w, 2);
 
 	// (1) Direct Lighting : DisneyDiffuse + SpecularGGX
 	vec3 DirectLighting = vec3(0.0);
@@ -471,11 +514,12 @@ void main()
 	vec3 I = V;
 	vec3 R = refract(I, normalize(N), ratio);
 	float MIPS = ComputeReflectionMipFromRoughness(Roughness, SKY_MAXMIPS);
-	vec3 Reflection_L = textureLod(cubemap, R, MIPS).rgb * 10.0;
+	vec3 Reflection_L = textureLod(CubeMapSampler, R, MIPS).rgb * 10.0;
 	float Reflection_V = GetSpecularOcclusion(NdotV, Roughness * Roughness, AO);
 	vec3 ReflectionColor = Reflection_L * Reflection_V * ReflectionBRDF;
 
 	vec3 FinalColor = DirectLighting + IndirectLighting + ReflectionColor;
+	FinalColor *= Mask;
 
 	// Gamma correct
 	FinalColor = pow(FinalColor, vec3(0.4545));
@@ -483,9 +527,9 @@ void main()
 	switch (SPEC_CONSTANTS)
 	{
 		case 0:
-			outColor = vec4(FinalColor * ShadowFactor, 1.0); break;
+			outColor = vec4(FinalColor, 1.0); break;
 		case 1:
-			outColor = vec4(vec3(BaseColor), 1.0); break;
+			outColor = vec4(vec3(pow(BaseColor, vec3(0.4545))), 1.0); break;
 		case 2:
 			outColor = vec4(vec3(Metallic), 1.0); break;
 		case 3:
@@ -493,14 +537,15 @@ void main()
 		case 4:
 			outColor = vec4(vec3(Normal), 1.0); break;
 		case 5:
-			outColor = vec4(vec3(AmbientOcclution), 1.0); break;
+			outColor = vec4(vec3(AO), 1.0); break;
 		case 6:
 			outColor = vec4(vec3(VertexColor), 1.0); break;
 		case 7:
-			outColor = vec4(vec3(ReflectionColor), 1.0); break;
+			outColor = vec4(ReflectionColor, 1.0); break;
 		case 8:
-		case 9:
 			outColor = vec4(vec3(ShadowFactor), 1.0); break;
+		case 9:
+			outColor = vec4(GBufferVis(FinalColor), 1.0); break;
 		default:
 			outColor = vec4(FinalColor * ShadowFactor, 1.0); break;
 	};

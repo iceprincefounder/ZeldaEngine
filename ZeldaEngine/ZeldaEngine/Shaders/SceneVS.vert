@@ -26,10 +26,9 @@ layout(location = 2) in vec3 inColor;
 layout(location = 3) in vec2 inTexCoord;
 
 layout(location = 0) out vec3 outPosition;
-layout(location = 1) out vec3 outPositionWS;
-layout(location = 2) out vec3 outNormal;
-layout(location = 3) out vec3 outColor;
-layout(location = 4) out vec2 outTexCoord;
+layout(location = 1) out vec3 outNormal;
+layout(location = 2) out vec3 outColor;
+layout(location = 3) out vec2 outTexCoord;
 
 // https://www.ronja-tutorials.com/post/041-hsv-colorspace/
 vec3 Hue2RGB(float hue) {
@@ -47,8 +46,7 @@ void main()
 	// Render object with MVP
 	vec3 position = inPosition;
 	gl_Position = ubo.proj * ubo.view * ubo.model * vec4(position, 1.0);
-	outPosition = position;
-	outPositionWS = (ubo.model * vec4(position, 1.0)).rgb;
+	outPosition = (ubo.model * vec4(position, 1.0)).rgb;
 	outNormal = (ubo.model * vec4(normalize(inNormal), 1.0)).rgb;
 	outColor = Hue2RGB(float(global.index) * 1.71f);
 	outTexCoord = inTexCoord;

@@ -44,15 +44,16 @@
 #define MAX_FRAMES_IN_FLIGHT 2
 #define VIEWPORT_WIDTH 1080;
 #define VIEWPORT_HEIGHT 720;
-#define PBR_SAMPLER_NUMBER 5
+#define PBR_SAMPLER_NUMBER 7 // BC + M + R + N + AO + Emissive + Mask
+#define POINT_LIGHTS_NUM 16
 #define SHADOWMAP_DIM 1024
 #define VERTEX_BUFFER_BIND_ID 0
 #define INSTANCE_BUFFER_BIND_ID 1
-#define INSTANCE_COUNT 4096
+#define INSTANCE_COUNT 8192
 #define ENABLE_SHOW_SKYDOME true
 #define ENABLE_SHOW_WIREFRAME false
-#define ENABLE_INDIRECT_DRAW true
-#define ENABLE_CACHE_FILE false
+#define ENABLE_INDIRECT_DRAW false
+#define ENABLE_DEFEERED_RENDERING true
 
 /**
 * Helper class to generate SPIRV code from GLSL source
@@ -304,6 +305,36 @@ glslang::EShTargetLanguage FShaderCompiler::EnvTargetLanguage = glslang::EShTarg
 glslang::EShTargetLanguageVersion FShaderCompiler::EnvTargetLanguageVersion = static_cast<glslang::EShTargetLanguageVersion>(0);
 
 
+enum class EGraphicsFlags : uint16_t
+{
+	VertexIndexed = 1 << 0, // binary 0001
+	Instanced = 1 << 1,
+	ScreenRect = 1 << 2,
+	TwoSided = 1 << 3,
+	DisableDepthTest = 1 << 4,
+	OpaqueScene = 1 << 5,
+	Skydome = 1 << 6,
+	Background = 1 << 7,
+	DeferredScene = 1 << 8,
+	DeferredLighting = 1 << 9,
+};
+
+inline EGraphicsFlags operator|(EGraphicsFlags a, EGraphicsFlags b)
+{
+	return static_cast<EGraphicsFlags>(static_cast<uint16_t>(a) | static_cast<uint16_t>(b));
+}
+
+inline EGraphicsFlags operator&(EGraphicsFlags a, EGraphicsFlags b)
+{
+	return static_cast<EGraphicsFlags>(static_cast<uint16_t>(a) & static_cast<uint16_t>(b));
+}
+
+inline bool operator==(EGraphicsFlags a, EGraphicsFlags b)
+{
+	return ((static_cast<uint16_t>(a) & static_cast<uint16_t>(b))) == static_cast<uint16_t>(b);
+}
+
+
 /** The instance of mesh data block*/
 struct FInstanceData {
 	glm::vec3 InstancePosition;
@@ -312,7 +343,6 @@ struct FInstanceData {
 	glm::uint8 InstanceTexIndex;
 };
 
-
 /** The vertex of mesh data block*/
 struct FVertex {
 	glm::vec3 Position;
@@ -320,7 +350,7 @@ struct FVertex {
 	glm::vec3 Color;
 	glm::vec2 TexCoord;
 
-	// 顶点描述
+	// Vertex description
 	static VkVertexInputBindingDescription GetBindingDescription() {
 		VkVertexInputBindingDescription bindingDescription{};
 		bindingDescription.binding = VERTEX_BUFFER_BIND_ID;
@@ -356,7 +386,7 @@ struct FVertex {
 		return attributeDescriptions;
 	}
 
-	// 顶点描述，带Instance
+	// Vertex description with instance buffer
 	static std::array<VkVertexInputBindingDescription, 2> GetBindingInstancedDescriptions() {
 		VkVertexInputBindingDescription bindingDescription0{};
 		bindingDescription0.binding = VERTEX_BUFFER_BIND_ID;
@@ -431,6 +461,22 @@ namespace std {
 	};
 }
 
+
+struct FMesh {
+	std::vector<FVertex> Vertices;                       // 顶点
+	std::vector<uint32_t> Indices;                       // 点序
+	VkBuffer VertexBuffer;                               // 顶点缓存
+	VkDeviceMemory VertexBufferMemory;                   // 顶点缓存内存
+	VkBuffer IndexBuffer;                                // 点序缓存
+	VkDeviceMemory IndexBufferMemory;                    // 点序缓存内存
+
+	// only init with instanced mesh
+	VkBuffer InstancedBuffer;                            // Instanced buffer
+	VkDeviceMemory InstancedBufferMemory;                // Instanced buffer memory
+};
+
+typedef FMesh FInstancedMesh;
+
 /** Meshlet data block*/
 struct FMeshlet {
 	uint32_t VertexOffset;
@@ -444,7 +490,6 @@ struct FMeshlet {
 	float ConeCutoff, Pad;
 };
 
-
 /** Meshlet group set data block, all meshlets make up a model mesh data.*/
 struct FMeshletSet {
 	std::vector<FMeshlet> Meshlets;
@@ -452,6 +497,62 @@ struct FMeshletSet {
 	std::vector<uint8_t> MeshletTriangles;
 };
 
+struct FIndirectMesh : public FMesh
+{
+	FMeshletSet MeshletSet;
+};
+
+typedef FIndirectMesh FIndirectInstancedMesh;
+
+struct FMaterial {
+	std::vector<VkImage> TextureImages;
+	std::vector<VkDeviceMemory> TextureImageMemorys;
+	std::vector<VkImageView> TextureImageViews;
+	std::vector<VkSampler> TextureSamplers;
+
+	VkDescriptorPool DescriptorPool;
+	std::vector<VkDescriptorSet> DescriptorSets;
+
+	// DescriptorSetLayout is define by each render pass
+	VkDescriptorSetLayout* DescriptorSetLayout; 
+};
+
+struct FRenderBase
+{
+	FMaterial MateData;
+	uint32_t InstanceCount;
+};
+
+/** RenderObject for a single draw call.*/
+struct FRenderObject : public FRenderBase
+{
+	FMesh MeshData;
+};
+
+struct FRenderInstancedObject : public FRenderBase
+{
+	FInstancedMesh MeshData;
+};
+
+struct FRenderIndirectObjectBase : public FRenderBase
+{
+	VkBuffer IndirectCommandsBuffer;
+	VkDeviceMemory IndirectCommandsBufferMemory;
+	std::vector<VkDrawIndexedIndirectCommand> IndirectCommands;
+};
+
+struct FRenderIndirectObject : public FRenderIndirectObjectBase
+{
+	FIndirectMesh MeshData;
+};
+
+struct FRenderIndirectInstancedObject : public FRenderIndirectObjectBase
+{
+	FIndirectInstancedMesh MeshData;
+};
+
+typedef FRenderObject FRenderDeferredObject;
+typedef FRenderInstancedObject FRenderDeferredInstancedObject;
 
 /** Model MVP matrix data struct.*/
 struct FUniformBufferBase {
@@ -468,25 +569,27 @@ struct FLight
 	glm::vec4 Color; // rgb for Color, a for intensity
 	glm::vec4 Direction;
 	glm::vec4 LightInfo;
+
+	FLight& FLight::operator=(const FLight& rhs)
+	{
+		Position = rhs.Position;
+		Color = rhs.Color;
+		Direction = rhs.Direction;
+		LightInfo = rhs.LightInfo;
+		return *this;
+	}
 };
 
 
-/** Scene viewport data struct.*/
-struct FUniformBufferView {
-	glm::mat4 ShadowmapSpace;
-	glm::mat4 LocalToWorld;
-	glm::vec4 CameraInfo;
-	FLight DirectionalLights[4];
-	FLight PointLights[4];
-	FLight SpotLights[4];
-	// LightsCount:
-	// [0] for number of DirectionalLights, [1] for number of PointLights,
-	// [2] for number of SpotLights, [3] for number of cube map max miplevels.
-	glm::ivec4 LightsCount;
-	glm::float32 zNear;
-	glm::float32 zFar;
-};
+/**
+* The map keep all rendering data and engine settings inside.
+*/
+struct FMap
+{
+	std::vector<FRenderObject> RenderObjects;
+	std::vector<FRenderInstancedObject> RenderInstancedObjects;
 
+};
 
 const std::vector<const char*> ValidationLayers = { "VK_LAYER_KHRONOS_validation" };
 const std::vector<const char*> DeviceExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
@@ -545,7 +648,7 @@ struct FSwapChainSupportDetails
 
 
 /**
- * ZeldaEngine: A tiny realtime vulkan based 3D engine with modern graphics
+ * ZeldaEngine: A tiny real time vulkan based 3D engine with modern graphics
  * All implementations in this class.
  */
 class FZeldaEngineApp
@@ -587,8 +690,8 @@ class FZeldaEngineApp
 			glm::quat rotation(transform);
 			glm::vec3 Direction = glm::normalize(CameraLookat - CameraPos);
 			CameraYaw = 30.0; //glm::degrees(glm::atan(Direction.x, Direction.y));
-			CameraPitch = 30.0; //glm::degrees(glm::asin(Direction.z));
-			CameraArm = 4.0;
+			CameraPitch = 60.0; //glm::degrees(glm::asin(Direction.z));
+			CameraArm = 10.0;
 			bUpdateCamera = false;
 			bFocusCamera = true;
 
@@ -622,7 +725,7 @@ class FZeldaEngineApp
 		}
 	} GlobalInput;
 
-	/** 全局常量*/
+	/** Global constants*/
 	struct FGlobalConstants {
 		float Time;
 		float MetallicFactor;
@@ -643,73 +746,98 @@ class FZeldaEngineApp
 		}
 	} GlobalConstants;
 
-	struct FMesh {
-		std::vector<FVertex> Vertices;                       // 顶点
-		std::vector<uint32_t> Indices;                       // 点序
-		VkBuffer VertexBuffer;                               // 顶点缓存
-		VkDeviceMemory VertexBufferMemory;                   // 顶点缓存内存
-		VkBuffer IndexBuffer;                                // 点序缓存
-		VkDeviceMemory IndexBufferMemory;                    // 点序缓存内存
+	/** Scene viewport data struct.*/
+	struct FUniformBufferView {
+		glm::mat4 ShadowmapSpace;
+		glm::mat4 LocalToWorld;
+		glm::vec4 CameraInfo;
+		FLight DirectionalLights[16];
+		FLight PointLights[512];
+		FLight SpotLights[16];
+		// LightsCount: [0] for number of DirectionalLights, [1] for number of PointLights, [2] for number of SpotLights, [3] for number of cube map max miplevels.
+		glm::ivec4 LightsCount;
+		glm::float32 zNear;
+		glm::float32 zFar;
 
-		// only init with instanced mesh
-		VkBuffer InstancedBuffer;                            // Instanced buffer
-		VkDeviceMemory InstancedBufferMemory;                // Instanced buffer memory
-	};
+		FUniformBufferView& FUniformBufferView::operator=(const FUniformBufferView& rhs)
+		{
+			ShadowmapSpace = rhs.ShadowmapSpace;
+			LocalToWorld = rhs.LocalToWorld;
+			CameraInfo = rhs.CameraInfo;
+			DirectionalLights[16] = rhs.DirectionalLights[16];
+			PointLights[512] = rhs.PointLights[512];
+			SpotLights[16] = rhs.SpotLights[16];
+			LightsCount = rhs.LightsCount;
+			zNear = rhs.zNear;
+			zFar = rhs.zFar;
+			return *this;
+		}
+	} View;
 
-	typedef FMesh FInstancedMesh;
+	struct FScene {
+		std::vector<FRenderObject> RenderObjects;
+		std::vector<FRenderInstancedObject> RenderInstancedObjects;
+		std::vector<FRenderIndirectObject> RenderIndirectObjects;
+		std::vector<FRenderIndirectInstancedObject> RenderIndirectInstancedObjects;
+		std::vector<FRenderDeferredObject> RenderDeferredObjects;
+		std::vector<FRenderDeferredInstancedObject> RenderDeferredInstancedObjects;
 
-	struct FIndirectMesh : public FMesh
-	{
-		FMeshletSet MeshletSet;
-	};
+		VkDescriptorSetLayout* DescriptorSetLayout;
+		VkDescriptorSetLayout* IndirectDescriptorSetLayout;
+		VkDescriptorSetLayout* DeferredSceneDescriptorSetLayout;
+		VkDescriptorSetLayout* DeferredLightingDescriptorSetLayout;
+	} Scene;
 
-	typedef FIndirectMesh FIndirectInstancedMesh;
+	/** GBuffer for Deferred shading*/
+	struct FGBuffer {
+		// Depth Stencil RGBAFloat
+		VkFormat DepthStencilFormat;
+		VkImage DepthStencilImage;
+		VkDeviceMemory DepthStencilMemory;
+		VkImageView DepthStencilImageView;
+		VkSampler DepthStencilSampler;
+		// SceneColorDeferred RGBAHalf
+		VkFormat SceneColorFormat;
+		VkImage SceneColorImage;
+		VkDeviceMemory SceneColorMemory;
+		VkImageView SceneColorImageView;
+		VkSampler SceneColorSampler;
+		// Normal+CastShadow R10G10B10A2
+		VkFormat GBufferAFormat;
+		VkImage GBufferAImage;
+		VkDeviceMemory GBufferAMemory;
+		VkImageView GBufferAImageView;
+		VkSampler GBufferASampler;
+		// M+S+R+(ShadingModelID+SelectiveOutputMask) RGBA8888
+		VkFormat GBufferBFormat;
+		VkImage GBufferBImage;
+		VkDeviceMemory GBufferBMemory;
+		VkImageView GBufferBImageView;
+		VkSampler GBufferBSampler;
+		// BaseColor+AO
+		VkFormat GBufferCFormat;
+		VkImage GBufferCImage;
+		VkDeviceMemory GBufferCMemory;
+		VkImageView GBufferCImageView;
+		VkSampler GBufferCSampler;
+		// Position+ID
+		VkFormat GBufferDFormat;
+		VkImage GBufferDImage;
+		VkDeviceMemory GBufferDMemory;
+		VkImageView GBufferDImageView;
+		VkSampler GBufferDSampler;
+		// MotionVector+Velocity(Currently not implemented)
+		//VkImage GBufferVelocityImage;
+		//VkDeviceMemory GBufferVelocityMemory;
+		//VkImageView GBufferVelocityImageView;
+	} GBuffer;
 
-	struct FMaterial {
-		std::vector<VkImage> TextureImages;                  // 贴图
-		std::vector<VkDeviceMemory> TextureImageMemorys;     // 贴图内存
-		std::vector<VkImageView> TextureImageViews;          // 贴图视口
-		std::vector<VkSampler> TextureSamplers;              // 贴图采样器
-
-		VkDescriptorPool DescriptorPool;                     // 描述符池
-		std::vector<VkDescriptorSet> DescriptorSets;         // 描述符集合
-	};
-
-	struct FRenderObjectBase
-	{
-		FMaterial MaterialData;
-	};
-
-	/** 构建 RenderObject 需要的 Vulkan 资源*/
-	struct FRenderObject : public FRenderObjectBase
-	{
-		FMesh MeshData;
-	};
-
-	struct FRenderInstancedObject : public FRenderObjectBase
-	{
-		FInstancedMesh MeshData;
-	};
-
-	struct FRenderIndirectObjectBase : public FRenderObjectBase
-	{
-		VkBuffer IndirectCommandsBuffer;                            // 包含 the indirect drawing commands
-		VkDeviceMemory IndirectCommandsBufferMemory;
-		std::vector<VkDrawIndexedIndirectCommand> IndirectCommands; // 存储 indirect draw commands，包含 index offsets 和 Instance count per object
-	};
-
-	struct FRenderIndirectObject : public FRenderIndirectObjectBase
-	{
-		FIndirectMesh MeshData;
-	};
-
-	struct FRenderIndirectInstancedObject : public FRenderIndirectObjectBase
-	{
-		FIndirectInstancedMesh MeshData;
-	};
-
-	/** 构建 ShadowmapPass 需要的 Vulkan 资源*/
+	/** ShadowmapPass vulkan resources*/
 	struct FShadowmapPass {
+		std::vector<FRenderObject*> RenderObjects;
+		std::vector<FRenderInstancedObject*> RenderInstancedObjects;
+		std::vector<FRenderIndirectObject*> RenderIndirectObjects;
+		std::vector<FRenderIndirectInstancedObject*> RenderIndirectInstancedObjects;
 		float zNear, zFar;
 		int32_t Width, Height;
 		VkFormat Format;
@@ -729,7 +857,7 @@ class FZeldaEngineApp
 		std::vector<VkDeviceMemory> UniformBuffersMemory;
 	} ShadowmapPass;
 
-	/** 构建 BackgroundPass 需要的 Vulkan 资源*/
+	/** BackgroundPass vulkan resources*/
 	struct FBackgroundPass {
 		VkImage Image;
 		VkDeviceMemory Memory;
@@ -743,7 +871,7 @@ class FZeldaEngineApp
 		std::vector<VkPipeline> Pipelines;
 	} BackgroundPass;
 
-	/** 构建 SkydomePass 需要的 Vulkan 资源*/
+	/** SkydomePass vulkan resources*/
 	struct FSkydomePass {
 		FMesh SkydomeMesh;
 		VkImage Image;
@@ -758,98 +886,150 @@ class FZeldaEngineApp
 		std::vector<VkPipeline> Pipelines;
 	} SkydomePass;
 
-	struct FIndirectPass {
-		std::vector<FRenderIndirectObject> RenderIndirectObject;                    // 待渲染的物体
-		std::vector<FRenderIndirectInstancedObject> RenderIndirectInstancedObject;    // 待渲染的物体
-		VkDescriptorSetLayout DescriptorSetLayout;                                    // 描述符集合布局
-		VkPipelineLayout PipelineLayout;                                            // 渲染管线布局
-		std::vector<VkPipeline> Pipelines;                                            // 渲染管线
-		std::vector<VkPipeline> PipelinesInstanced;                                    // 渲染管线
-	} IndirectScenePass;
-
 	/** 构建 BaseScenePass 需要的 Vulkan 资源*/
 	struct FBaseScenePass {
-		std::vector<FRenderObject> RenderObjects;                    // 待渲染的物体
-		std::vector<FRenderInstancedObject> RenderInstancedObjects;    // 待渲染的物体
-		VkDescriptorSetLayout DescriptorSetLayout;                    // 描述符集合布局
-		VkPipelineLayout PipelineLayout;                            // 渲染管线布局
-		std::vector<VkPipeline> Pipelines;                            // 渲染管线
-		std::vector<VkPipeline> PipelinesInstanced;                    // 渲染管线
+		std::vector<FRenderObject*> RenderObjects;
+		std::vector<FRenderInstancedObject*> RenderInstancedObjects;
+		VkDescriptorSetLayout DescriptorSetLayout;
+		VkPipelineLayout PipelineLayout;
+		std::vector<VkPipeline> Pipelines;
+		std::vector<VkPipeline> PipelinesInstanced;
 	} BaseScenePass;
 
-	GLFWwindow* Window;                                        // Window 渲染桌面
+	struct FBaseSceneIndirectPass {
+		std::vector<FRenderIndirectObject*> RenderIndirectObjects;
+		std::vector<FRenderIndirectInstancedObject*> RenderIndirectInstancedObjects;
+		VkDescriptorSetLayout DescriptorSetLayout;
+		VkPipelineLayout PipelineLayout;
+		std::vector<VkPipeline> Pipelines;
+		std::vector<VkPipeline> PipelinesInstanced;
+	} BaseSceneIndirectPass;
 
-	VkInstance Instance;                                    // 链接程序的Vulkan实例
+	struct FBaseSceneDeferredRenderingPass {
+		std::vector<FRenderDeferredObject*> RenderDeferredObjects;
+		std::vector<FRenderDeferredInstancedObject*> RenderDeferredInstancedObjects;
+		VkDescriptorSetLayout SceneDescriptorSetLayout;
+		VkPipelineLayout ScenePipelineLayout;
+		std::vector<VkPipeline> ScenePipelines;
+		std::vector<VkPipeline> ScenePipelinesInstanced;
+		VkFramebuffer SceneFrameBuffer;
+		VkRenderPass SceneRenderPass;
+		VkDescriptorSetLayout LightingDescriptorSetLayout;
+		VkDescriptorPool LightingDescriptorPool;
+		std::vector<VkDescriptorSet> LightingDescriptorSets;
+		VkPipelineLayout LightingPipelineLayout;
+		std::vector<VkPipeline> LightingPipelines;
+	} BaseSceneDeferredPass;
+
+	/* GLFW Window */
+	GLFWwindow* Window;
+	/* Vulkan Instance link to Window*/
+	VkInstance Instance;
 	VkDebugUtilsMessengerEXT DebugMessenger;
-	VkSurfaceKHR Surface;                                    // 链接桌面和Vulkan的实例
+	/* Surface link to Vulkan Instance*/
+	VkSurfaceKHR Surface;
 
-	VkPhysicalDevice PhysicalDevice = VK_NULL_HANDLE;        // 物理显卡硬件
-	VkDevice Device;                                        // 逻辑硬件，对接物理硬件
+	/* Physical Device of GPU hardware*/
+	VkPhysicalDevice PhysicalDevice = VK_NULL_HANDLE;
+	/* Logic hardware, refer to physical device*/
+	VkDevice Device;
 
-	VkQueue GraphicsQueue;                                    // 显卡的队列
-	VkQueue PresentQueue;                                    // 显示器的队列
+	/* 显卡的队列*/
+	VkQueue GraphicsQueue;
+	/* 显示器的队列*/
+	VkQueue PresentQueue;
 
-	VkSwapchainKHR SwapChain;                                // 缓存渲染图像队列，同步到显示器
-	std::vector<VkImage> SwapChainImages;                    // 渲染图像队列
-	VkFormat SwapChainImageFormat;                            // 渲染图像格式
-	VkExtent2D SwapChainExtent;                                // 渲染图像范围
-	std::vector<VkImageView> SwapChainImageViews;            // 渲染图像队列对应的视图队列
-	std::vector<VkFramebuffer> SwapChainFramebuffers;        // 渲染图像队列对应的帧缓存队列
-	VkRenderPass RenderPass;                                // 渲染层，保存Framebuffer和采样信息
+	/* 缓存渲染图像队列，同步到显示器*/
+	VkSwapchainKHR SwapChain;
+	/* 渲染图像队列*/
+	std::vector<VkImage> SwapChainImages;
+	/* 渲染图像格式*/
+	VkFormat SwapChainImageFormat;
+	/* 渲染图像范围*/
+	VkExtent2D SwapChainExtent;
+	/* 渲染图像队列对应的视图队列*/
+	std::vector<VkImageView> SwapChainImageViews;
+	/* 渲染图像队列对应的帧缓存队列*/
+	std::vector<VkFramebuffer> SwapChainFramebuffers;
+	/* 渲染层，保存Framebuffer和采样信息*/
+	VkRenderPass MainRenderPass;
 
-	VkImage DepthImage;                                        // 深度纹理资源
-	VkDeviceMemory DepthImageMemory;                        // 深度纹理内存
-	VkImageView DepthImageView;                                // 深度纹理图像视口
+	/* 深度纹理资源*/
+	VkImage DepthImage;
+	/* 深度纹理内存 */
+	VkDeviceMemory DepthImageMemory;
+	/* 深度纹理图像视口 */
+	VkImageView DepthImageView;
 
-	uint32_t CubemapMaxMips;                                // 环境反射纹理最大Mips数
-	VkImage CubemapImage;                                    // 环境反射纹理资源
-	VkDeviceMemory CubemapImageMemory;                        // 环境反射纹理内存
-	VkImageView CubemapImageView;                            // 环境反射纹理图像视口
-	VkSampler CubemapSampler;                                // 环境反射纹理采样器
+	/* 环境反射纹理最大Mips数 */
+	uint32_t CubemapMaxMips;
+	/* 环境反射纹理资源 */
+	VkImage CubemapImage;
+	/* 环境反射纹理内存 */
+	VkDeviceMemory CubemapImageMemory;
+	/* 环境反射纹理图像视口 */
+	VkImageView CubemapImageView;
+	/* 环境反射纹理采样器 */
+	VkSampler CubemapSampler;
 
-	std::vector<VkBuffer> BaseUniformBuffers;                // 统一缓存区
-	std::vector<VkDeviceMemory> BaseUniformBuffersMemory;    // 统一缓存区内存地址
+	/* 统一缓存区 */
+	std::vector<VkBuffer> BaseUniformBuffers;
+	/* 统一缓存区内存地址 */
+	std::vector<VkDeviceMemory> BaseUniformBuffersMemory;
 
-	std::vector<VkBuffer> ViewUniformBuffers;                // 统一缓存区
-	std::vector<VkDeviceMemory> ViewUniformBuffersMemory;    // 统一缓存区内存地址
+	/* 统一缓存区 */
+	std::vector<VkBuffer> ViewUniformBuffers;
+	/* 统一缓存区内存地址 */
+	std::vector<VkDeviceMemory> ViewUniformBuffersMemory;
 
-	VkCommandPool CommandPool;                                // 指令池
-	VkCommandBuffer CommandBuffer;                            // 指令缓存
+	/* 指令池 */
+	VkCommandPool CommandPool;
+	/* 指令缓存 */
+	VkCommandBuffer CommandBuffer;
 
-	VkSemaphore ImageAvailableSemaphore;                    // 图像是否完成的信号
-	VkSemaphore RenderFinishedSemaphore;                    // 渲染是否结束的信号
-	VkFence InFlightFence;                                    // 围栏，下一帧渲染前等待上一帧全部渲染完成
+	/* 图像是否完成的信号 */
+	VkSemaphore ImageAvailableSemaphore;
+	/* 渲染是否结束的信号 */
+	VkSemaphore RenderFinishedSemaphore;
+	/* 围栏，下一帧渲染前等待上一帧全部渲染完成 */
+	VkFence InFlightFence;
 
-	std::vector<VkCommandBuffer> CommandBuffers;            // 指令缓存
-	std::vector<VkSemaphore> ImageAvailableSemaphores;        // 图像是否完成的信号
-	std::vector<VkSemaphore> RenderFinishedSemaphores;        // 渲染是否结束的信号
-	std::vector<VkFence> InFlightFences;                    // 围栏，下一帧渲染前等待上一帧全部渲染完成
-	uint32_t CurrentFrame = 0;                                // 当前渲染帧序号
+	/* 指令缓存 */
+	std::vector<VkCommandBuffer> CommandBuffers;
+	/* 图像是否完成的信号 */
+	std::vector<VkSemaphore> ImageAvailableSemaphores;
+	/* 渲染是否结束的信号 */
+	std::vector<VkSemaphore> RenderFinishedSemaphores;
+	/* 围栏，下一帧渲染前等待上一帧全部渲染完成 */
+	std::vector<VkFence> InFlightFences;
+	/* 当前渲染帧序号 */
+	uint32_t CurrentFrame = 0;
 
+	/* Restore frame buffer resized state */
 	bool bFramebufferResized = false;
 public:
-	/** 主函数调用接口*/
-	void MainTask()
+	/** Main Function */
+	void Run()
 	{
-		InitWindow();        // 使用传统的GLFW，初始化窗口
-		InitVulkan();        // 初始化Vulkan，创建资源
-		MainTick();          // 每帧循环调用，执行渲染指令
-		DestroyVulkan();     // 删除Vulkan对象
-		DestroyWindow();       // 渲染窗口关闭时，删除创建的资源
+		InitWindow(); // Init GLFW window
+		InitVulkan(); // Init Vulkan rendering pipeline
+		MainTick(); // Main tick loop
+		DestroyVulkan(); // Destroy Vulkan rendering pipeline
+		DestroyWindow(); // Destroy GLFW window
 	}
 
 public:
-	/** 初始化GUI渲染窗口*/
+	/** Init GUI window */
 	void InitWindow()
 	{
 		glfwInit();
 
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-		glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE); // 打开窗口的Resize功能
+		glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
 		uint32_t viewportWidth = VIEWPORT_WIDTH;
 		uint32_t viewportHeight = VIEWPORT_HEIGHT;
-		Window = glfwCreateWindow(viewportWidth, viewportHeight, "Zelda Engine ©XUKAI", nullptr /* glfwGetPrimaryMonitor() 全屏模式*/, nullptr);
+		Window = glfwCreateWindow(viewportWidth, viewportHeight, "Zelda Engine ©XUKAI", nullptr /* glfwGetPrimaryMonitor() full screen mode*/, nullptr);
 		glfwSetWindowUserPointer(Window, this);
 		glfwSetFramebufferSizeCallback(Window, FramebufferResizeCallback);
 		GLFWimage iconImages[2];
@@ -869,31 +1049,35 @@ public:
 		glfwSetScrollCallback(Window, MouseScrollCallback);
 	}
 
-	/** 初始化Vulkan的渲染管线*/
+	/** Init Vulkan render pipeline */
 	void InitVulkan()
 	{
-		CreateInstance();              // 连接此程序和Vulkan，一般由显卡驱动实现
-		CreateDebugMessenger();        // 创建调试打印信息
-		CreateWindowsSurface();        // 连接此程序的窗口和Vulkan，渲染Vulkan输出
-		SelectPhysicalDevice();        // 找到此电脑的物理显卡硬件
-		CreateLogicalDevice();         // 创建逻辑硬件，对应物理硬件
-		CreateSwapChain();             // 创建交换链，用于渲染数据和图像显示的中间交换
-		CreateSwapChainImageViews();   // 创建图像显示，包含在SwapChain中
-		CreateRenderPass();            // 创建渲染通道
-		CreateCommandPool();           // 创建指令池，存储所有的渲染指令
-		CreateFramebuffers();          // 创建帧缓存，包含在SwaoChain中
-		CreateShaderSPIRVs();          // 创建和编译着色器文本为SPIRV中间字节码
-		CreateUniformBuffers();        // 创建UnifromBuffer统一缓存区
-		CreateShadowmapPass();         // 创建阴影贴图渲染通道
-		CreateBackgroundPass();        // 创建背景渲染通道
-		CreateSkydomePass();           // 创建天空球渲染通道
-		CreateBaseScenePass();         // 创建基础物体渲染通道
-		CreateIndirectScenePass();     // 创建间接绘制渲染通道
-		CreateCommandBuffer();         // 创建指令缓存，指令发送前变成指令缓存
-		CreateSyncObjects();           // 创建同步围栏，确保下一帧渲染前，上一帧全部渲染完成
+		CreateInstance(); // Create Vulkan instance, driven by GPU driver
+		CreateDebugMessenger(); // Create debug output massager
+		CreateWindowsSurface(); // Link GLFW window to vulkan rendering instance
+		CreateLogicalDevice(); // Create logic device from physical device we found
+		CreateSwapChain(); // // Create SwapChain for render image and display present image
+		CreateSwapChainImageViews(); // Create SwapChain image view
+		CreateRenderPass(); // Create main SwapChain render pass
+		CreateFramebuffers(); // Create main SwapChain frame buffers
+		CreateCommandPool(); // Create command pool to keep all commands inside
+		// CreateShaderSPIRVs(); // Create and compile shader into SPIRV hardware-agnostic intermediate bytecode
+		CreateUniformBuffers(); // Create uniform buffers
+		CreateShadowmapPass(); // Create shadow depths render pass
+		CreateSkydomePass(); // Create sky dome sphere render pass
+		CreateBaseScenePass(); // Create base scene forward render pass
+		CreateBaseSceneIndirectPass(); // Create base scene indirect render pass
+#if ENABLE_DEFEERED_RENDERING
+		CreateBaseSceneDeferredPass(); // Create base scene deferred render pass
+#endif
+		CreateBackgroundPass(); // Create background rect render pass
+		CreateCommandBuffer(); // Create command buffer from command before submit
+		CreateSyncObjects(); // Create sync fence to ensure next frame render after the last frame finished
+
+		CreateEngineScene(); // Create main rendering scene
 	}
 
-	/** 主循环，执行每帧渲染*/
+	/** Main tick to submit render command */
 	void MainTick()
 	{
 		while (!glfwWindowShouldClose(Window))
@@ -906,7 +1090,7 @@ public:
 		vkDeviceWaitIdle(Device);
 	}
 
-	/** 清除Vulkan的渲染管线*/
+	/** Destroy GLFW window */
 	void DestroyWindow()
 	{
 		glfwDestroyWindow(Window);
@@ -976,9 +1160,13 @@ public:
 		{
 			constants->SpecConstants = 7;
 		}
-		if (action == GLFW_PRESS && key == GLFW_KEY_P)
+		if (action == GLFW_PRESS && key == GLFW_KEY_8)
 		{
-			constants->SpecConstants = (constants->SpecConstants == 8) ? 9 : 8;
+			constants->SpecConstants = 8;
+		}
+		if (action == GLFW_PRESS && key == GLFW_KEY_9)
+		{
+			constants->SpecConstants = 9;
 		}
 	}
 
@@ -1189,7 +1377,7 @@ public:
 		GlobalInput.DeltaTime = DeltaTime;
 	}
 
-	/** 在创建好一切必要资源后，执行绘制操作*/
+	/** Draw a frame */
 	void DrawFrame()
 	{
 		// 等待上一帧绘制完成
@@ -1289,7 +1477,7 @@ protected:
 			extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 		}
 #ifdef __APPLE__
-        // Fix issue on Mac(m2) "vkCreateInstance: Found no drivers!"
+		// Fix issue on Mac(m2) "vkCreateInstance: Found no drivers!"
 		extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
 		// Issue on Mac(m2), it's not a error, but a warning, ignore it by this time~
 		// vkCreateDevice():  VK_KHR_portability_subset must be enabled because physical device VkPhysicalDevice 0x600003764f40[] supports it. The Vulkan spec states: If the VK_KHR_portability_subset extension is included in pProperties of vkEnumerateDeviceExtensionProperties, ppEnabledExtensionNames must include "VK_KHR_portability_subset"
@@ -1380,6 +1568,9 @@ protected:
 	/** 创建逻辑硬件对接物理硬件，相同物理硬件可以对应多个逻辑硬件*/
 	void CreateLogicalDevice()
 	{
+		// 找到此电脑的物理显卡硬件
+		SelectPhysicalDevice();
+
 		FQueueFamilyIndices queue_family_indices = FindQueueFamilies(PhysicalDevice);
 
 		std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
@@ -1554,33 +1745,42 @@ protected:
 	*/
 	void CreateRenderPass()
 	{
-		VkAttachmentDescription colorAttachment{};
-		colorAttachment.format = SwapChainImageFormat;
-		colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-		colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-		colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-		colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-		colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-		colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+		VkAttachmentDescription ColorAttachment{};
+		ColorAttachment.format = SwapChainImageFormat;
+		ColorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+		ColorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+		ColorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		ColorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		ColorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		ColorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		ColorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
-		VkAttachmentDescription depthAttachment{};
-		depthAttachment.format = FindDepthFormat();
-		depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-		depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-		depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-		depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-		depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-		depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+		VkAttachmentDescription DepthAttachment{};
+		DepthAttachment.format = FindDepthFormat();
+		DepthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+#if !ENABLE_DEFEERED_RENDERING
+		DepthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+		DepthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+#else
+		DepthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+		DepthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+#endif
+		DepthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		DepthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+#if !ENABLE_DEFEERED_RENDERING
+		DepthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+#else
+		DepthAttachment.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+#endif
+		DepthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
-		VkAttachmentReference colorAttachmentRef{};
-		colorAttachmentRef.attachment = 0;
-		colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		VkAttachmentReference ColorAttachmentRef{};
+		ColorAttachmentRef.attachment = 0;
+		ColorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
-		VkAttachmentReference depthAttachmentRef{};
-		depthAttachmentRef.attachment = 1;
-		depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+		VkAttachmentReference DepthAttachmentRef{};
+		DepthAttachmentRef.attachment = 1;
+		DepthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
 		// 渲染子通道 SubPass
 		// SubPass是RenderPass的下属任务，和RenderPass共享Framebuffer等渲染资源
@@ -1588,9 +1788,10 @@ protected:
 		VkSubpassDescription subpass{};
 		subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
 		subpass.colorAttachmentCount = 1;
-		subpass.pColorAttachments = &colorAttachmentRef;
-		subpass.pDepthStencilAttachment = &depthAttachmentRef;
+		subpass.pColorAttachments = &ColorAttachmentRef;
+		subpass.pDepthStencilAttachment = &DepthAttachmentRef;
 
+		// 这里将渲染三角形的操作，简化成一个SubPass提交
 		VkSubpassDependency dependency{};
 		dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
 		dependency.dstSubpass = 0;
@@ -1599,8 +1800,7 @@ protected:
 		dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
 		dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
-		// 这里将渲染三角形的操作，简化成一个SubPass提交
-		std::array<VkAttachmentDescription, 2> attachments = { colorAttachment, depthAttachment };
+		std::array<VkAttachmentDescription, 2> attachments = { ColorAttachment, DepthAttachment };
 		VkRenderPassCreateInfo renderPassCI{};
 		renderPassCI.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
 		renderPassCI.attachmentCount = static_cast<uint32_t>(attachments.size());
@@ -1609,9 +1809,41 @@ protected:
 		renderPassCI.pSubpasses = &subpass;
 		renderPassCI.dependencyCount = 1;
 		renderPassCI.pDependencies = &dependency;
-
-		if (vkCreateRenderPass(Device, &renderPassCI, nullptr, &RenderPass) != VK_SUCCESS) {
+		if (vkCreateRenderPass(Device, &renderPassCI, nullptr, &MainRenderPass) != VK_SUCCESS) {
 			throw std::runtime_error("failed to Create render pass!");
+		}
+	}
+
+	/** 创建帧缓存，即每帧图像对应的渲染数据*/
+	void CreateFramebuffers()
+	{
+		// 创建深度纹理资源
+		VkFormat depthFormat = FindDepthFormat();
+		CreateImage(DepthImage, DepthImageMemory, SwapChainExtent.width, SwapChainExtent.height, depthFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		CreateImageView(DepthImageView, DepthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
+
+		SwapChainFramebuffers.resize(SwapChainImageViews.size());
+
+		for (size_t i = 0; i < SwapChainImageViews.size(); i++)
+		{
+			std::array<VkImageView, 2> attachments =
+			{
+				SwapChainImageViews[i],
+				DepthImageView
+			};
+			VkFramebufferCreateInfo frameBufferCI{};
+			frameBufferCI.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+			frameBufferCI.renderPass = MainRenderPass;
+			frameBufferCI.attachmentCount = static_cast<uint32_t>(attachments.size());
+			frameBufferCI.pAttachments = attachments.data();
+			frameBufferCI.width = SwapChainExtent.width;
+			frameBufferCI.height = SwapChainExtent.height;
+			frameBufferCI.layers = 1;
+
+			if (vkCreateFramebuffer(Device, &frameBufferCI, nullptr, &SwapChainFramebuffers[i]) != VK_SUCCESS)
+			{
+				throw std::runtime_error("failed to Create framebuffer!");
+			}
 		}
 	}
 
@@ -1628,38 +1860,6 @@ protected:
 		if (vkCreateCommandPool(Device, &poolCI, nullptr, &CommandPool) != VK_SUCCESS)
 		{
 			throw std::runtime_error("failed to Create command pool!");
-		}
-	}
-
-	/** 创建帧缓存，即每帧图像对应的渲染数据*/
-	void CreateFramebuffers()
-	{
-		// 创建深度纹理资源
-		VkFormat depthFormat = FindDepthFormat();
-		CreateImage(DepthImage, DepthImageMemory, SwapChainExtent.width, SwapChainExtent.height, depthFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-		CreateImageView(DepthImageView, DepthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
-
-		SwapChainFramebuffers.resize(SwapChainImageViews.size());
-
-		for (size_t i = 0; i < SwapChainImageViews.size(); i++) {
-			std::array<VkImageView, 2> attachments = {
-				SwapChainImageViews[i],
-				DepthImageView
-			};
-
-			VkFramebufferCreateInfo frameBufferCI{};
-			frameBufferCI.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-			frameBufferCI.renderPass = RenderPass;
-			frameBufferCI.attachmentCount = static_cast<uint32_t>(attachments.size());
-			frameBufferCI.pAttachments = attachments.data();
-			frameBufferCI.width = SwapChainExtent.width;
-			frameBufferCI.height = SwapChainExtent.height;
-			frameBufferCI.layers = 1;
-
-			if (vkCreateFramebuffer(Device, &frameBufferCI, nullptr, &SwapChainFramebuffers[i]) != VK_SUCCESS)
-			{
-				throw std::runtime_error("failed to Create framebuffer!");
-			}
 		}
 	}
 
@@ -1707,6 +1907,32 @@ protected:
 				ViewUniformBuffers[i],
 				ViewUniformBuffersMemory[i]);
 		}
+
+		FLight Moonlight;
+		Moonlight.Position = glm::vec4(20.0f, 0.0f, 20.0f, 0.0);
+		Moonlight.Color = glm::vec4(0.0, 0.1, 0.6, 15.0);
+		Moonlight.Direction = glm::vec4(glm::normalize(glm::vec3(Moonlight.Position.x, Moonlight.Position.y, Moonlight.Position.z)), 0.0);
+		Moonlight.LightInfo = glm::vec4(0.0, 0.0, 0.0, 0.0);
+		View.DirectionalLights[0] = Moonlight;
+		uint32_t PointLightNum = POINT_LIGHTS_NUM;
+		for (uint32_t i = 0; i < PointLightNum; i++)
+		{
+			FLight PointLight;
+			float radians = (((float)RandRange(0, 3600) / 10.0f));
+			float distance = (((float)RandRange(0, 500) / 100.0f)) + 1.0f;
+			float X = sin(glm::radians(radians)) * distance;
+			float Y = cos(glm::radians(radians)) * distance;
+			float Z = 1.0;
+			PointLight.Position = glm::vec4(glm::vec3(X, Y, Z), 0.0);
+			float R = (((float)RandRange(50, 75) / 100.0f));
+			float G = (((float)RandRange(25, 50) / 100.0f));
+			float B = 0.0;
+			PointLight.Color = glm::vec4(R, G, B, 10.0);
+			PointLight.Direction = glm::vec4(0.0, 0.0, 1.0, 1.5);
+			PointLight.LightInfo = glm::vec4(0.0, 0.0, 0.0, 0.0);
+			View.PointLights[i] = PointLight;
+		}
+		View.LightsCount = glm::ivec4(1, PointLightNum, 0, CubemapMaxMips);
 	}
 
 
@@ -1992,7 +2218,7 @@ protected:
 		pipelineCI.pColorBlendState = &colorBlendStateCI;
 		pipelineCI.pDynamicState = &dynamicStateCI;
 		pipelineCI.layout = ShadowmapPass.PipelineLayout;
-		pipelineCI.renderPass = RenderPass;
+		pipelineCI.renderPass = MainRenderPass;
 		pipelineCI.subpass = 0;
 		pipelineCI.basePipelineHandle = VK_NULL_HANDLE;
 
@@ -2046,32 +2272,8 @@ protected:
 		vkDestroyShaderModule(Device, vertInstancedShaderModule, nullptr);
 	}
 
-	/** Cube map Faces Rules:
-	 *       Y3
-	 *       ||
-	 * X1 == Z4 == X0 == Z5
-	 *       ||
-	 *       Y4
-	 * | https://matheowis.github.io/HDRI-to-CubeMap/    |
-	 * | X0(p-x) | X1(n-x) | Y2(p-z) | Y3(n-z) | Z4(n-y) | Z5(p-y)|
-	 * |    90   |   -90   |    0    |   180   |    0    |   180  |
-	 */
-	void CreateCubemapResources()
-	{
-		CreateImageHDRContext(CubemapImage, CubemapImageMemory, CubemapImageView, CubemapSampler, CubemapMaxMips, {
-			"Resources/Contents/Textures/cubemap_X0.png",
-			"Resources/Contents/Textures/cubemap_X1.png",
-			"Resources/Contents/Textures/cubemap_Y2.png",
-			"Resources/Contents/Textures/cubemap_Y3.png",
-			"Resources/Contents/Textures/cubemap_Z4.png",
-			"Resources/Contents/Textures/cubemap_Z5.png" });
-	}
-
 	void CreateBackgroundPass()
 	{
-		// 创建环境反射纹理资源
-		CreateCubemapResources();
-
 		// 创建背景贴图
 		CreateImageContext(
 			BackgroundPass.Image,
@@ -2079,9 +2281,8 @@ protected:
 			BackgroundPass.ImageView,
 			BackgroundPass.Sampler,
 			"Resources/Contents/Textures/background.png");
-		CreateDescriptorSetLayout(BackgroundPass.DescriptorSetLayout);
-		CreateDescriptorPool(BackgroundPass.DescriptorPool);
-		CreateDescriptorSets(
+		CreateDescriptorSetLayout(BackgroundPass.DescriptorSetLayout, EGraphicsFlags::Background);
+		CreateDescriptorSet(
 			BackgroundPass.DescriptorSets,
 			BackgroundPass.DescriptorPool,
 			BackgroundPass.DescriptorSetLayout,
@@ -2092,24 +2293,40 @@ protected:
 		CreateGraphicsPipelines(
 			BackgroundPass.Pipelines,
 			BackgroundPass.PipelineLayout,
-			1,
-			BackgroundPass.DescriptorSetLayout,
-			"Resources/BackgroundVS.spv",
-			"Resources/Shaders/Background_FS.spv",
-			false, false);
+			MainRenderPass,
+			1, EGraphicsFlags::Background | EGraphicsFlags::ScreenRect,
+			"Resources/Shaders/Background_VS.spv",
+			"Resources/Shaders/Background_FS.spv");
 	}
 
 	void CreateSkydomePass()
 	{
+		/** Cube map Faces Rules:
+		 *       Y3
+		 *       ||
+		 * X1 == Z4 == X0 == Z5
+		 *       ||
+		 *       Y4
+		 * | https://matheowis.github.io/HDRI-to-CubeMap/    |
+		 * | X0(p-x) | X1(n-x) | Y2(p-z) | Y3(n-z) | Z4(n-y) | Z5(p-y)|
+		 * |    90   |   -90   |    0    |   180   |    0    |   180  |
+		 */
+		CreateImageCubeContext(CubemapImage, CubemapImageMemory, CubemapImageView, CubemapSampler, CubemapMaxMips, {
+			"Resources/Contents/Textures/cubemap_X0.png",
+			"Resources/Contents/Textures/cubemap_X1.png",
+			"Resources/Contents/Textures/cubemap_Y2.png",
+			"Resources/Contents/Textures/cubemap_Y3.png",
+			"Resources/Contents/Textures/cubemap_Z4.png",
+			"Resources/Contents/Textures/cubemap_Z5.png" });
+
 		CreateImageContext(
 			SkydomePass.Image,
 			SkydomePass.Memory,
 			SkydomePass.ImageView,
 			SkydomePass.Sampler,
 			"Resources/Contents/Textures/skydome.png");
-		CreateDescriptorSetLayout(SkydomePass.DescriptorSetLayout);
-		CreateDescriptorPool(SkydomePass.DescriptorPool);
-		CreateDescriptorSets(
+		CreateDescriptorSetLayout(SkydomePass.DescriptorSetLayout, EGraphicsFlags::Skydome);
+		CreateDescriptorSet(
 			SkydomePass.DescriptorSets,
 			SkydomePass.DescriptorPool,
 			SkydomePass.DescriptorSetLayout,
@@ -2117,21 +2334,13 @@ protected:
 			SkydomePass.Sampler);
 		SkydomePass.Pipelines.resize(1);
 		CreatePipelineLayout(SkydomePass.PipelineLayout, SkydomePass.DescriptorSetLayout);
-		//createGraphicsPipeline(
-		//	SkydomePass.PipelineLayout,
-		//	SkydomePass.Pipelines[0],
-		//	SkydomePass.DescriptorSetLayout,
-		//	"Resources/Shaders/Skydome_VS.spv",
-		//	"Resources/Shaders/Skydome_FS.spv",
-		//	VK_TRUE, VK_CULL_MODE_BACK_BIT);
 		CreateGraphicsPipelines(
 			SkydomePass.Pipelines,
 			SkydomePass.PipelineLayout,
-			1,
-			SkydomePass.DescriptorSetLayout,
+			MainRenderPass,
+			1, EGraphicsFlags::VertexIndexed,
 			"Resources/Shaders/Skydome_VS.spv",
-			"Resources/Shaders/Skydome_FS.spv",
-			true/*bDepthTest*/, true/*bCullBack*/, false/*bInstanced*/);
+			"Resources/Shaders/Skydome_FS.spv");
 		std::string skydome_obj = "Resources/Contents/Meshes/skydome.obj";
 		CreateMesh(SkydomePass.SkydomeMesh.Vertices, SkydomePass.SkydomeMesh.Indices, skydome_obj);
 		CreateVertexBuffer(
@@ -2147,93 +2356,308 @@ protected:
 	void CreateBaseScenePass()
 	{
 		// 创建场景渲染流水线和着色器
-		CreateDescriptorSetLayout(BaseScenePass.DescriptorSetLayout, PBR_SAMPLER_NUMBER);
 		uint32_t SpecConstantsCount = GlobalConstants.SpecConstantsCount;
+		CreateDescriptorSetLayout(BaseScenePass.DescriptorSetLayout, EGraphicsFlags::OpaqueScene);
 		BaseScenePass.Pipelines.resize(SpecConstantsCount);
 		BaseScenePass.PipelinesInstanced.resize(SpecConstantsCount);
 		CreatePipelineLayout(BaseScenePass.PipelineLayout, BaseScenePass.DescriptorSetLayout);
 		CreateGraphicsPipelines(
 			BaseScenePass.Pipelines,
 			BaseScenePass.PipelineLayout,
-			SpecConstantsCount,
-			BaseScenePass.DescriptorSetLayout,
+			MainRenderPass,
+			SpecConstantsCount, EGraphicsFlags::VertexIndexed,
 			"Resources/Shaders/Scene_VS.spv",
-			"Resources/Shaders/Scene_FS.spv",
-			true/*bDepthTest*/, true/*bCullBack*/, false/*bInstanced*/);
+			"Resources/Shaders/Scene_FS.spv");
 		CreateGraphicsPipelines(
 			BaseScenePass.PipelinesInstanced,
 			BaseScenePass.PipelineLayout,
-			SpecConstantsCount,
-			BaseScenePass.DescriptorSetLayout,
+			MainRenderPass,
+			SpecConstantsCount, EGraphicsFlags::Instanced,
 			"Resources/Shaders/SceneInstanced_VS.spv",
-			"Resources/Shaders/Scene_FS.spv",
-			true/*bDepthTest*/, true/*bCullBack*/, true/*bInstanced*/);
-
-		//CreateRenderObjectsFromProfabs(BaseScenePass.RenderObjects, "sphere_meshlets");
-
-		std::vector<FInstanceData> instanceData;
-		instanceData.resize(INSTANCE_COUNT);
-		for (uint32_t i = 0; i < INSTANCE_COUNT; i++) {
-			float radians = (((float)RandRange(0, 3600) / 10.0f));
-			float distance = (((float)RandRange(0, 99) / 100.0f)) + 1.5f;
-			if (i % 3 != 0)
-			{
-				distance = (((float)RandRange(0, 99) / 100.0f)) + 4.5f;
-			}
-			float X = sin(glm::radians(radians)) * distance;
-			float Y = cos(glm::radians(radians)) * distance;
-			float Z = RandRange(-50, 50) / 500.0f;
-			instanceData[i].InstancePosition = glm::vec3(X, Y, Z);
-			// Y(Pitch), Z(Yaw), X(Roll)
-			float Yaw = float(M_PI) * RandRange(0, 99) / 100.0f;
-			float Pitch = float(M_PI) * RandRange(0, 99) / 100.0f;
-			float Roll = float(M_PI) * RandRange(0, 99) / 100.0f;
-			instanceData[i].InstanceRotation = glm::vec3(Pitch, Yaw, Roll);
-			instanceData[i].InstancePScale = RandRange(0, 9999) / 250000.0f;
-			instanceData[i].InstanceTexIndex = RandRange(0, 255);
-		}
-		//CreateRenderObjectsFromProfabs(BaseScenePass.RenderInstancedObjects, "antarctic_meteorite", instanceData);
+			"Resources/Shaders/Scene_FS.spv");
 		//~ 结束 创建场景，包括VBO，UBO，贴图等
 	}
 
-	void CreateIndirectScenePass()
+	void CreateBaseSceneIndirectPass()
 	{
 		// 创建场景渲染流水线和着色器
-		CreateDescriptorSetLayout(IndirectScenePass.DescriptorSetLayout, PBR_SAMPLER_NUMBER);
+		CreateDescriptorSetLayout(BaseSceneIndirectPass.DescriptorSetLayout, EGraphicsFlags::OpaqueScene);
 		uint32_t SpecConstantsCount = GlobalConstants.SpecConstantsCount;
-		IndirectScenePass.Pipelines.resize(SpecConstantsCount);
-		IndirectScenePass.PipelinesInstanced.resize(SpecConstantsCount);
-		CreatePipelineLayout(IndirectScenePass.PipelineLayout, IndirectScenePass.DescriptorSetLayout);
+		BaseSceneIndirectPass.Pipelines.resize(SpecConstantsCount);
+		BaseSceneIndirectPass.PipelinesInstanced.resize(SpecConstantsCount);
+		CreatePipelineLayout(BaseSceneIndirectPass.PipelineLayout, BaseSceneIndirectPass.DescriptorSetLayout);
 		CreateGraphicsPipelines(
-			IndirectScenePass.Pipelines,
-			IndirectScenePass.PipelineLayout, SpecConstantsCount,
-			IndirectScenePass.DescriptorSetLayout,
+			BaseSceneIndirectPass.Pipelines,
+			BaseSceneIndirectPass.PipelineLayout,
+			MainRenderPass,
+			SpecConstantsCount, EGraphicsFlags::VertexIndexed,
 			"Resources/Shaders/Scene_VS.spv",
-			"Resources/Shaders/Scene_FS.spv",
-			true/*bDepthTest*/, true/*bCullBack*/, false/*bInstanced*/);
+			"Resources/Shaders/Scene_FS.spv");
 		CreateGraphicsPipelines(
-			IndirectScenePass.PipelinesInstanced,
-			IndirectScenePass.PipelineLayout, SpecConstantsCount,
-			IndirectScenePass.DescriptorSetLayout,
+			BaseSceneIndirectPass.PipelinesInstanced,
+			BaseSceneIndirectPass.PipelineLayout,
+			MainRenderPass,
+			SpecConstantsCount, EGraphicsFlags::Instanced,
 			"Resources/Shaders/SceneInstanced_VS.spv",
-			"Resources/Shaders/Scene_FS.spv",
-			true/*bDepthTest*/, true/*bCullBack*/, true/*bInstanced*/);
+			"Resources/Shaders/Scene_FS.spv");
+	}
+
+	/** 创建GBuffer, 用于延迟渲染*/
+	void CreateBaseSceneDeferredPass()
+	{
+		// Depth Stencil (Currently depth-only)
+		GBuffer.DepthStencilFormat = VK_FORMAT_D32_SFLOAT;
+		CreateImage(GBuffer.DepthStencilImage, GBuffer.DepthStencilMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.DepthStencilFormat,
+			VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		CreateImageView(GBuffer.DepthStencilImageView, GBuffer.DepthStencilImage, GBuffer.DepthStencilFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
+		CreateSampler(GBuffer.DepthStencilSampler);
+
+		// Scene Color
+		GBuffer.SceneColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
+		CreateImage(GBuffer.SceneColorImage, GBuffer.SceneColorMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.SceneColorFormat,
+			VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		CreateImageView(GBuffer.SceneColorImageView, GBuffer.SceneColorImage, GBuffer.SceneColorFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+		CreateSampler(GBuffer.SceneColorSampler);
+
+		// GBufferA Normal+(CastShadow+Masked)
+		GBuffer.GBufferAFormat = VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+		CreateImage(GBuffer.GBufferAImage, GBuffer.GBufferAMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.GBufferAFormat,
+			VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		CreateImageView(GBuffer.GBufferAImageView, GBuffer.GBufferAImage, GBuffer.GBufferAFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+		CreateSampler(GBuffer.GBufferASampler);
+
+		// GBufferB M+S+R+(ShadingModelID+SelectiveOutputMask) for unreal
+		// GBufferB M+S+R+(OpacityMask) for me
+		GBuffer.GBufferBFormat = VK_FORMAT_R8G8B8A8_UNORM;
+		CreateImage(GBuffer.GBufferBImage, GBuffer.GBufferBMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.GBufferBFormat,
+			VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		CreateImageView(GBuffer.GBufferBImageView, GBuffer.GBufferBImage, GBuffer.GBufferBFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+		CreateSampler(GBuffer.GBufferBSampler);
+
+		// GBufferC BaseColor + AO
+		GBuffer.GBufferCFormat = VK_FORMAT_R8G8B8A8_UNORM;
+		CreateImage(GBuffer.GBufferCImage, GBuffer.GBufferCMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.GBufferCFormat,
+			VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		CreateImageView(GBuffer.GBufferCImageView, GBuffer.GBufferCImage, GBuffer.GBufferCFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+		CreateSampler(GBuffer.GBufferCSampler);
+
+		// GBufferD Position + ID
+		GBuffer.GBufferDFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+		CreateImage(GBuffer.GBufferDImage, GBuffer.GBufferDMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.GBufferDFormat,
+			VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		CreateImageView(GBuffer.GBufferDImageView, GBuffer.GBufferDImage, GBuffer.GBufferDFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+		CreateSampler(GBuffer.GBufferDSampler);
+
+		VkAttachmentDescription DepthAttachment{};
+		DepthAttachment.format = FindDepthFormat();
+		DepthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+		DepthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+		DepthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		DepthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		DepthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
+		DepthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		DepthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+
+		VkAttachmentDescription ColorAttachment{};
+		ColorAttachment.format = SwapChainImageFormat;
+		ColorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+		ColorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+		ColorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		ColorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		ColorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		ColorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		ColorAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+		std::array<VkAttachmentDescription, 6> AttachmentDescriptions = {};
+		AttachmentDescriptions[0] = DepthAttachment;
+		AttachmentDescriptions[1] = ColorAttachment;
+		AttachmentDescriptions[2] = ColorAttachment;
+		AttachmentDescriptions[3] = ColorAttachment;
+		AttachmentDescriptions[4] = ColorAttachment;
+		AttachmentDescriptions[5] = ColorAttachment;
+		AttachmentDescriptions[0].format = GBuffer.DepthStencilFormat;
+		AttachmentDescriptions[1].format = GBuffer.SceneColorFormat;
+		AttachmentDescriptions[2].format = GBuffer.GBufferAFormat;
+		AttachmentDescriptions[3].format = GBuffer.GBufferBFormat;
+		AttachmentDescriptions[4].format = GBuffer.GBufferCFormat;
+		AttachmentDescriptions[5].format = GBuffer.GBufferDFormat;
+
+		VkAttachmentReference DepthAttachmentRef = {};
+		DepthAttachmentRef.attachment = 0;
+		DepthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+		std::vector<VkAttachmentReference> ColorAttachmentRefs;
+		ColorAttachmentRefs.push_back({ 1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL });
+		ColorAttachmentRefs.push_back({ 2, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL });
+		ColorAttachmentRefs.push_back({ 3, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL });
+		ColorAttachmentRefs.push_back({ 4, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL });
+		ColorAttachmentRefs.push_back({ 5, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL });
+
+		VkSubpassDescription subpass{};
+		subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+		subpass.colorAttachmentCount = static_cast<uint32_t>(ColorAttachmentRefs.size());
+		subpass.pColorAttachments = ColorAttachmentRefs.data();
+		subpass.pDepthStencilAttachment = &DepthAttachmentRef;
+
+		std::array<VkSubpassDependency, 2> dependencies;
+		dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+		dependencies[0].dstSubpass = 0;
+		dependencies[0].srcStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+		dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		dependencies[0].srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+		dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		dependencies[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+
+		dependencies[1].srcSubpass = 0;
+		dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+		dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		dependencies[1].dstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+		dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		dependencies[1].dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+		dependencies[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+
+		VkRenderPassCreateInfo renderPassCI = {};
+		renderPassCI.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+		renderPassCI.attachmentCount = static_cast<uint32_t>(AttachmentDescriptions.size());
+		renderPassCI.pAttachments = AttachmentDescriptions.data();
+		renderPassCI.subpassCount = 1;
+		renderPassCI.pSubpasses = &subpass;
+		renderPassCI.dependencyCount = static_cast<uint32_t>(dependencies.size());
+		renderPassCI.pDependencies = dependencies.data();
+
+		if (vkCreateRenderPass(Device, &renderPassCI, nullptr, &BaseSceneDeferredPass.SceneRenderPass) != VK_SUCCESS) {
+			throw std::runtime_error("failed to Create render pass!");
+		}
+
+		std::array<VkImageView, 6> attachments =
+		{
+			GBuffer.DepthStencilImageView,
+			GBuffer.SceneColorImageView,
+			GBuffer.GBufferAImageView,
+			GBuffer.GBufferBImageView,
+			GBuffer.GBufferCImageView,
+			GBuffer.GBufferDImageView,
+		};
+
+		VkFramebufferCreateInfo frameBufferCI{};
+		frameBufferCI.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+		frameBufferCI.renderPass = BaseSceneDeferredPass.SceneRenderPass;
+		frameBufferCI.attachmentCount = static_cast<uint32_t>(attachments.size());
+		frameBufferCI.pAttachments = attachments.data();
+		frameBufferCI.width = SwapChainExtent.width;
+		frameBufferCI.height = SwapChainExtent.height;
+		frameBufferCI.layers = 1;
+
+		if (vkCreateFramebuffer(Device, &frameBufferCI, nullptr, &BaseSceneDeferredPass.SceneFrameBuffer) != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to Create framebuffer!");
+		}
+
+		CreateDescriptorSetLayout(BaseSceneDeferredPass.SceneDescriptorSetLayout, EGraphicsFlags::DeferredScene);
+		BaseSceneDeferredPass.ScenePipelines.resize(GlobalConstants.SpecConstantsCount);
+		BaseSceneDeferredPass.ScenePipelinesInstanced.resize(GlobalConstants.SpecConstantsCount);
+		CreatePipelineLayout(BaseSceneDeferredPass.ScenePipelineLayout, BaseSceneDeferredPass.SceneDescriptorSetLayout);
+		CreateGraphicsPipelines(
+			BaseSceneDeferredPass.ScenePipelines,
+			BaseSceneDeferredPass.ScenePipelineLayout,
+			BaseSceneDeferredPass.SceneRenderPass,
+			GlobalConstants.SpecConstantsCount, EGraphicsFlags::VertexIndexed | EGraphicsFlags::DeferredScene,
+			"Resources/Shaders/Scene_VS.spv",
+			"Resources/Shaders/SceneBase_FS.spv");
+		CreateGraphicsPipelines(
+			BaseSceneDeferredPass.ScenePipelinesInstanced,
+			BaseSceneDeferredPass.ScenePipelineLayout,
+			BaseSceneDeferredPass.SceneRenderPass,
+			GlobalConstants.SpecConstantsCount, EGraphicsFlags::Instanced | EGraphicsFlags::DeferredScene,
+			"Resources/Shaders/SceneInstanced_VS.spv",
+			"Resources/Shaders/SceneBase_FS.spv");
+
+		/** Create DescriptorSetLayout for Lighting*/
+		// UnifromBufferObject（ubo）绑定
+		CreateDescriptorSetLayout(BaseSceneDeferredPass.LightingDescriptorSetLayout, EGraphicsFlags::DeferredLighting);
+
+		/** Create DescriptorPool for Lighting*/
+		std::vector<VkDescriptorPoolSize> poolSizes;
+		poolSizes.resize(9);
+		poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+		poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+		poolSizes[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		poolSizes[2].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+		for (size_t i = 0; i < 6; i++)
+		{
+			poolSizes[i + 3].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			poolSizes[i + 3].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+		}
+
+		VkDescriptorPoolCreateInfo poolCI{};
+		poolCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+		poolCI.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+		poolCI.pPoolSizes = poolSizes.data();
+		poolCI.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+
+		if (vkCreateDescriptorPool(Device, &poolCI, nullptr, &BaseSceneDeferredPass.LightingDescriptorPool) != VK_SUCCESS) {
+			throw std::runtime_error("failed to Create descriptor pool!");
+		}
+
+		/** 创建DescriptorSets*/
+		std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, BaseSceneDeferredPass.LightingDescriptorSetLayout);
+		VkDescriptorSetAllocateInfo allocInfo{};
+		allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+		allocInfo.descriptorPool = BaseSceneDeferredPass.LightingDescriptorPool;
+		allocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+		allocInfo.pSetLayouts = layouts.data();
+
+		BaseSceneDeferredPass.LightingDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+		if (vkAllocateDescriptorSets(Device, &allocInfo, BaseSceneDeferredPass.LightingDescriptorSets.data()) != VK_SUCCESS) {
+			throw std::runtime_error("failed to allocate descriptor sets!");
+		}
+
+		UpdateBaseSceneDeferredPassDescriptorSet();
+
+		CreatePipelineLayout(BaseSceneDeferredPass.LightingPipelineLayout, BaseSceneDeferredPass.LightingDescriptorSetLayout);
+		BaseSceneDeferredPass.LightingPipelines.resize(GlobalConstants.SpecConstantsCount);
+		CreateGraphicsPipelines(
+			BaseSceneDeferredPass.LightingPipelines,
+			BaseSceneDeferredPass.LightingPipelineLayout,
+			MainRenderPass,
+			GlobalConstants.SpecConstantsCount, EGraphicsFlags::ScreenRect | EGraphicsFlags::DisableDepthTest | EGraphicsFlags::DeferredLighting,
+			"Resources/Shaders/Background_VS.spv",
+			"Resources/Shaders/SceneBaseLighting_FS.spv");
+	}
+
+	void CreateEngineScene()
+	{
+		Scene.DescriptorSetLayout = &BaseScenePass.DescriptorSetLayout;
+		Scene.IndirectDescriptorSetLayout = &BaseSceneIndirectPass.DescriptorSetLayout;
+		Scene.DeferredSceneDescriptorSetLayout = &BaseSceneDeferredPass.SceneDescriptorSetLayout;
+		Scene.DeferredLightingDescriptorSetLayout = &BaseSceneDeferredPass.LightingDescriptorSetLayout;
+
+		CreateImageCubeContext(CubemapImage, CubemapImageMemory, CubemapImageView, CubemapSampler, CubemapMaxMips, {
+		"Resources/Contents/Textures/T/cubemap_X0.png",
+		"Resources/Contents/Textures/T/cubemap_X1.png",
+		"Resources/Contents/Textures/T/cubemap_Y2.png",
+		"Resources/Contents/Textures/T/cubemap_Y3.png",
+		"Resources/Contents/Textures/T/cubemap_Z4.png",
+		"Resources/Contents/Textures/T/cubemap_Z5.png" });
 
 		if (ENABLE_INDIRECT_DRAW)
 		{
 			FRenderIndirectObject object;
 			std::string object_obj = "Resources/Contents/Meshes/dragon.meshlet";
 			std::vector<std::string> object_imgs = {
-				"Resources/Contents/Textures/default_grey.png",
-				"Resources/Contents/Textures/default_black.png",
-				"Resources/Contents/Textures/default_white.png",
-				"Resources/Contents/Textures/default_normal.png",
-				"Resources/Contents/Textures/default_white.png" };
+				"Resources/Contents/Textures/default_grey.png",		// BaseColor
+				"Resources/Contents/Textures/default_black.png",	// Metallic
+				"Resources/Contents/Textures/default_white.png",	// Roughness
+				"Resources/Contents/Textures/default_normal.png",	// Normal
+				"Resources/Contents/Textures/default_white.png",	// AmbientOcclution
+				"Resources/Contents/Textures/default_black.png",	// Emissive
+				"Resources/Contents/Textures/default_white.png" };	// Mask
 
 			CreateRenderIndirectObject<FRenderIndirectObject>(object, object_obj, object_imgs);
-			
+
 			object.IndirectCommands.clear();
-			
+
 			for (uint32_t i = 0; i < object.MeshData.MeshletSet.Meshlets.size(); ++i)
 			{
 				const FMeshlet meshletSet = object.MeshData.MeshletSet.Meshlets[i];
@@ -2248,8 +2672,8 @@ protected:
 				//float ConeAxis[3];
 				//float ConeCutoff, Pad;
 				VkDrawIndexedIndirectCommand indirectCmd{};
-                // @Note: indexCount = TriangleCount * 3, this is easy to get confused
-				indirectCmd.indexCount = (uint32_t)(meshletSet.TriangleCount * 3) ; /*indexCount*/
+				// @Note: indexCount = TriangleCount * 3, this is easy to get confused
+				indirectCmd.indexCount = (uint32_t)(meshletSet.TriangleCount * 3); /*indexCount*/
 				indirectCmd.instanceCount = 1; /*instanceCount*/
 				indirectCmd.firstIndex = meshletSet.TriangleOffset; /*firstIndex*/
 				indirectCmd.vertexOffset = meshletSet.VertexOffset; /*vertexOffset*/
@@ -2265,8 +2689,66 @@ protected:
 			//object.IndirectCommands.push_back(indirectCmd);
 
 			CreateRenderIndirectBuffer<FRenderIndirectObject>(object);
-			IndirectScenePass.RenderIndirectObject.push_back(object);
+			Scene.RenderIndirectObjects.push_back(object);
 		}
+
+		float rock_safe_zone = 1.0f;
+		std::vector<FInstanceData> rock_InstanceData;
+		uint32_t rock_InstanceCount = 64;
+		rock_InstanceData.resize(rock_InstanceCount);
+		for (uint32_t i = 0; i < rock_InstanceCount; i++) {
+			float radians = (((float)RandRange(0, 3600) / 10.0f));
+			float distance = (((float)RandRange(0, 500) / 100.0f)) + rock_safe_zone;
+			float X = sin(glm::radians(radians)) * distance;
+			float Y = cos(glm::radians(radians)) * distance;
+			float Z = 0.0;
+			rock_InstanceData[i].InstancePosition = glm::vec3(X, Y, Z);
+			// Y(Pitch), Z(Yaw), X(Roll)
+			float Yaw = float(M_PI) * RandRange(0, 99) / 100.0f;
+			rock_InstanceData[i].InstanceRotation = glm::vec3(0.0, Yaw, 0.0);
+			rock_InstanceData[i].InstancePScale = RandRange(2, 5) / 10.0f;
+			rock_InstanceData[i].InstanceTexIndex = RandRange(0, 255);
+		}
+
+		std::vector<FInstanceData> grass_01_InstanceData;
+		uint32_t grass_01_InstanceCount = INSTANCE_COUNT;
+		grass_01_InstanceData.resize(grass_01_InstanceCount);
+		for (uint32_t i = 0; i < grass_01_InstanceCount; i++) {
+			float radians = (((float)RandRange(0, 3600) / 10.0f));
+			float distance = (((float)RandRange(0, 800) / 100.0f)) + rock_safe_zone * 2.0f;
+			float X = sin(glm::radians(radians)) * distance;
+			float Y = cos(glm::radians(radians)) * distance;
+			float Z = 0.0;
+			grass_01_InstanceData[i].InstancePosition = glm::vec3(X, Y, Z);
+			// Y(Pitch), Z(Yaw), X(Roll)
+			float Yaw = float(M_PI) * RandRange(0, 99) / 100.0f;
+			grass_01_InstanceData[i].InstanceRotation = glm::vec3(0.0, Yaw, 0.0);
+			grass_01_InstanceData[i].InstancePScale = RandRange(1, 5) / 10.0f;
+			grass_01_InstanceData[i].InstanceTexIndex = RandRange(0, 255);
+		}
+
+		std::vector<FInstanceData> grass_02_InstanceData;
+		uint32_t grass_02_InstanceCount = INSTANCE_COUNT;
+		grass_02_InstanceData.resize(grass_02_InstanceCount);
+		for (uint32_t i = 0; i < grass_02_InstanceCount; i++) {
+			float radians = (((float)RandRange(0, 3600) / 10.0f));
+			float distance = (((float)RandRange(0, 900) / 100.0f)) + rock_safe_zone;
+			float X = sin(glm::radians(radians)) * distance;
+			float Y = cos(glm::radians(radians)) * distance;
+			float Z = 0.0;
+			grass_02_InstanceData[i].InstancePosition = glm::vec3(X, Y, Z);
+			// Y(Pitch), Z(Yaw), X(Roll)
+			float Yaw = float(M_PI) * RandRange(0, 99) / 100.0f;
+			grass_02_InstanceData[i].InstanceRotation = glm::vec3(0.0, Yaw, 0.0);
+			grass_02_InstanceData[i].InstancePScale = RandRange(1, 5) / 10.0f;
+			grass_02_InstanceData[i].InstanceTexIndex = RandRange(0, 255);
+		}
+
+		CreateRenderObjectsFromProfabs(Scene.RenderDeferredObjects, *Scene.DeferredSceneDescriptorSetLayout, "terrain");
+		CreateRenderObjectsFromProfabs(Scene.RenderDeferredObjects, *Scene.DeferredSceneDescriptorSetLayout, "rock_01");
+		CreateRenderObjectsFromProfabs(Scene.RenderDeferredInstancedObjects, *Scene.DeferredSceneDescriptorSetLayout, "rock_02", rock_InstanceData);
+		CreateRenderObjectsFromProfabs(Scene.RenderDeferredInstancedObjects, *Scene.DeferredSceneDescriptorSetLayout, "grass_01", grass_01_InstanceData);
+		CreateRenderObjectsFromProfabs(Scene.RenderDeferredInstancedObjects, *Scene.DeferredSceneDescriptorSetLayout, "grass_02", grass_02_InstanceData);
 	}
 
 	/** 创建指令缓存，多个CPU Core可以并行的往CommandBuffer中发送指令，可以充分利用CPU的多核性能*/
@@ -2288,6 +2770,74 @@ protected:
 	/** 把需要执行的指令写入指令缓存，对应每一个SwapChain的图像*/
 	void RecordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex)
 	{
+		auto BeginTransitionImageLayoutRT = [commandBuffer](VkImage& image, const VkImageAspectFlagBits aspectMask, const VkImageLayout oldLayout, const VkImageLayout newLayout)
+		{
+			VkImageMemoryBarrier barrier{};
+			barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+			barrier.oldLayout = oldLayout;
+			barrier.newLayout = newLayout;
+			barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barrier.image = image;
+			barrier.subresourceRange.aspectMask = aspectMask;
+			barrier.subresourceRange.baseMipLevel = 0;
+			barrier.subresourceRange.levelCount = 1;
+			barrier.subresourceRange.baseArrayLayer = 0;
+			barrier.subresourceRange.layerCount = 1;
+
+			VkPipelineStageFlags sourceStage;
+			VkPipelineStageFlags destinationStage;
+
+			barrier.srcAccessMask = 0;
+			barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+			sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+			destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+
+			vkCmdPipelineBarrier(
+				commandBuffer,
+				sourceStage, destinationStage,
+				0,
+				0, nullptr,
+				0, nullptr,
+				1, &barrier
+			);
+		};
+
+		auto EndTransitionImageLayoutRT = [commandBuffer](VkImage& image, const VkImageAspectFlagBits aspectMask, const VkImageLayout oldLayout, const VkImageLayout newLayout)
+		{
+			VkImageMemoryBarrier barrier{};
+			barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+			barrier.oldLayout = oldLayout;
+			barrier.newLayout = newLayout;
+			barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barrier.image = image;
+			barrier.subresourceRange.aspectMask = aspectMask;
+			barrier.subresourceRange.baseMipLevel = 0;
+			barrier.subresourceRange.levelCount = 1;
+			barrier.subresourceRange.baseArrayLayer = 0;
+			barrier.subresourceRange.layerCount = 1;
+
+			VkPipelineStageFlags sourceStage;
+			VkPipelineStageFlags destinationStage;
+
+			barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+			barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+			sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+			destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+
+			vkCmdPipelineBarrier(
+				commandBuffer,
+				sourceStage, destinationStage,
+				0,
+				0, nullptr,
+				0, nullptr,
+				1, &barrier
+			);
+		};
+
 		VkCommandBufferBeginInfo beginInfo{};
 		beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 
@@ -2348,53 +2898,53 @@ protected:
 				depthBiasSlope);
 
 			// 【阴影】渲染场景
-			for (size_t i = 0; i < BaseScenePass.RenderObjects.size(); i++)
+			for (size_t i = 0; i < ShadowmapPass.RenderObjects.size(); i++)
 			{
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ShadowmapPass.Pipeline);
-				FRenderObject renderObject = BaseScenePass.RenderObjects[i];
-				VkBuffer objectVertexBuffers[] = { renderObject.MeshData.VertexBuffer };
+				FRenderObject* renderObject = ShadowmapPass.RenderObjects[i];
+				VkBuffer objectVertexBuffers[] = { renderObject->MeshData.VertexBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
-				vkCmdBindIndexBuffer(commandBuffer, renderObject.MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
-				vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-					ShadowmapPass.PipelineLayout, 0, 1, &ShadowmapPass.DescriptorSets[CurrentFrame], 0, nullptr);
-				//vkCmdPushConstants(commandBuffer, ShadowmapPass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
-				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderObject.MeshData.Indices.size()), 1, 0, 0, 0);
-			}
-			// 【阴影】渲染 Instanced 场景
-			for (size_t i = 0; i < BaseScenePass.RenderInstancedObjects.size(); i++)
-			{
-				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ShadowmapPass.PipelineInstanced);
-				FRenderInstancedObject renderInstancedObject = BaseScenePass.RenderInstancedObjects[i];
-				VkBuffer objectVertexBuffers[] = { renderInstancedObject.MeshData.VertexBuffer };
-				VkBuffer objectInstanceBuffers[] = { renderInstancedObject.MeshData.InstancedBuffer };
-				VkDeviceSize objectOffsets[] = { 0 };
-				vkCmdBindVertexBuffers(commandBuffer, VERTEX_BUFFER_BIND_ID, 1, objectVertexBuffers, objectOffsets);
-				vkCmdBindVertexBuffers(commandBuffer, INSTANCE_BUFFER_BIND_ID, 1, objectInstanceBuffers, objectOffsets);
-				vkCmdBindIndexBuffer(commandBuffer, renderInstancedObject.MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+				vkCmdBindIndexBuffer(commandBuffer, renderObject->MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 				vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
 					ShadowmapPass.PipelineLayout, 0, 1, &ShadowmapPass.DescriptorSets[CurrentFrame], 0, nullptr);
 				vkCmdPushConstants(commandBuffer, ShadowmapPass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
-				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderInstancedObject.MeshData.Indices.size()), INSTANCE_COUNT, 0, 0, 0);
+				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderObject->MeshData.Indices.size()), 1, 0, 0, 0);
+			}
+			// 【阴影】渲染 Instanced 场景
+			for (size_t i = 0; i < ShadowmapPass.RenderInstancedObjects.size(); i++)
+			{
+				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ShadowmapPass.PipelineInstanced);
+				FRenderInstancedObject* renderInstancedObject = ShadowmapPass.RenderInstancedObjects[i];
+				VkBuffer objectVertexBuffers[] = { renderInstancedObject->MeshData.VertexBuffer };
+				VkBuffer objectInstanceBuffers[] = { renderInstancedObject->MeshData.InstancedBuffer };
+				VkDeviceSize objectOffsets[] = { 0 };
+				vkCmdBindVertexBuffers(commandBuffer, VERTEX_BUFFER_BIND_ID, 1, objectVertexBuffers, objectOffsets);
+				vkCmdBindVertexBuffers(commandBuffer, INSTANCE_BUFFER_BIND_ID, 1, objectInstanceBuffers, objectOffsets);
+				vkCmdBindIndexBuffer(commandBuffer, renderInstancedObject->MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+				vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+					ShadowmapPass.PipelineLayout, 0, 1, &ShadowmapPass.DescriptorSets[CurrentFrame], 0, nullptr);
+				vkCmdPushConstants(commandBuffer, ShadowmapPass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
+				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderInstancedObject->MeshData.Indices.size()), renderInstancedObject->InstanceCount, 0, 0, 0);
 			}
 			// 【阴影】渲染Indirect场景
 			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ShadowmapPass.Pipeline);
 			vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
 				ShadowmapPass.PipelineLayout, 0, 1, &ShadowmapPass.DescriptorSets[CurrentFrame], 0, nullptr);
 			vkCmdPushConstants(commandBuffer, ShadowmapPass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
-			for (size_t i = 0; i < IndirectScenePass.RenderIndirectObject.size(); i++)
+			for (size_t i = 0; i < ShadowmapPass.RenderIndirectObjects.size(); i++)
 			{
-				FRenderIndirectObject RenderIndirectObject = IndirectScenePass.RenderIndirectObject[i];
-				VkBuffer objectVertexBuffers[] = { RenderIndirectObject.MeshData.VertexBuffer };
+				FRenderIndirectObject* RenderIndirectObject = ShadowmapPass.RenderIndirectObjects[i];
+				VkBuffer objectVertexBuffers[] = { RenderIndirectObject->MeshData.VertexBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
-				vkCmdBindIndexBuffer(commandBuffer, RenderIndirectObject.MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
-				uint32_t indirectDrawCount = static_cast<uint32_t>(RenderIndirectObject.IndirectCommands.size());
+				vkCmdBindIndexBuffer(commandBuffer, RenderIndirectObject->MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+				uint32_t indirectDrawCount = static_cast<uint32_t>(RenderIndirectObject->IndirectCommands.size());
 				if (IsSupportMultiDrawIndirect(PhysicalDevice))
 				{
 					vkCmdDrawIndexedIndirect(
 						commandBuffer, /*commandBuffer*/
-						RenderIndirectObject.IndirectCommandsBuffer, /*buffer*/
+						RenderIndirectObject->IndirectCommandsBuffer, /*buffer*/
 						0, /*offset*/
 						indirectDrawCount, /*drawCount*/
 						sizeof(VkDrawIndexedIndirectCommand) /*stride*/);
@@ -2402,11 +2952,11 @@ protected:
 				else
 				{
 					// If multi draw is not available, we must issue separate draw commands
-					for (auto j = 0; j < RenderIndirectObject.IndirectCommands.size(); j++)
+					for (auto j = 0; j < RenderIndirectObject->IndirectCommands.size(); j++)
 					{
 						vkCmdDrawIndexedIndirect(
 							commandBuffer, /*commandBuffer*/
-							RenderIndirectObject.IndirectCommandsBuffer, /*buffer*/
+							RenderIndirectObject->IndirectCommandsBuffer, /*buffer*/
 							j * sizeof(VkDrawIndexedIndirectCommand), /*offset*/
 							1, /*drawCount*/
 							sizeof(VkDrawIndexedIndirectCommand) /*stride*/);
@@ -2418,21 +2968,21 @@ protected:
 			vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
 				ShadowmapPass.PipelineLayout, 0, 1, &ShadowmapPass.DescriptorSets[CurrentFrame], 0, nullptr);
 			vkCmdPushConstants(commandBuffer, ShadowmapPass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
-			for (size_t i = 0; i < IndirectScenePass.RenderIndirectInstancedObject.size(); i++)
+			for (size_t i = 0; i < ShadowmapPass.RenderIndirectInstancedObjects.size(); i++)
 			{
-				FRenderIndirectInstancedObject RenderIndirectInstancedObject = IndirectScenePass.RenderIndirectInstancedObject[i];
-				VkBuffer objectVertexBuffers[] = { RenderIndirectInstancedObject.MeshData.VertexBuffer };
-				VkBuffer objectInstanceBuffers[] = { RenderIndirectInstancedObject.MeshData.InstancedBuffer };
+				FRenderIndirectInstancedObject* RenderIndirectInstancedObject = ShadowmapPass.RenderIndirectInstancedObjects[i];
+				VkBuffer objectVertexBuffers[] = { RenderIndirectInstancedObject->MeshData.VertexBuffer };
+				VkBuffer objectInstanceBuffers[] = { RenderIndirectInstancedObject->MeshData.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, VERTEX_BUFFER_BIND_ID, 1, objectVertexBuffers, objectOffsets);
 				vkCmdBindVertexBuffers(commandBuffer, INSTANCE_BUFFER_BIND_ID, 1, objectInstanceBuffers, objectOffsets);
-				vkCmdBindIndexBuffer(commandBuffer, RenderIndirectInstancedObject.MeshData.IndexBuffer, 0 , VK_INDEX_TYPE_UINT32);
-				uint32_t indirectDrawCount = static_cast<uint32_t>(RenderIndirectInstancedObject.IndirectCommands.size());
+				vkCmdBindIndexBuffer(commandBuffer, RenderIndirectInstancedObject->MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+				uint32_t indirectDrawCount = static_cast<uint32_t>(RenderIndirectInstancedObject->IndirectCommands.size());
 				if (IsSupportMultiDrawIndirect(PhysicalDevice))
 				{
 					vkCmdDrawIndexedIndirect(
 						commandBuffer, /*commandBuffer*/
-						RenderIndirectInstancedObject.IndirectCommandsBuffer, /*buffer*/
+						RenderIndirectInstancedObject->IndirectCommandsBuffer, /*buffer*/
 						0, /*offset*/
 						indirectDrawCount, /*drawCount*/
 						sizeof(VkDrawIndexedIndirectCommand) /*stride*/);
@@ -2440,11 +2990,11 @@ protected:
 				else
 				{
 					// If multi draw is not available, we must issue separate draw commands
-					for (auto j = 0; j < RenderIndirectInstancedObject.IndirectCommands.size(); j++)
+					for (auto j = 0; j < RenderIndirectInstancedObject->IndirectCommands.size(); j++)
 					{
 						vkCmdDrawIndexedIndirect(
 							commandBuffer, /*commandBuffer*/
-							RenderIndirectInstancedObject.IndirectCommandsBuffer, /*buffer*/
+							RenderIndirectInstancedObject->IndirectCommandsBuffer, /*buffer*/
 							j * sizeof(VkDrawIndexedIndirectCommand), /*offset*/
 							1, /*drawCount*/
 							sizeof(VkDrawIndexedIndirectCommand) /*stride*/);
@@ -2456,11 +3006,123 @@ protected:
 			vkCmdEndRenderPass(commandBuffer);
 		}
 
+		// 渲染视口信息
+		VkViewport mainViewport{};
+		mainViewport.x = 0.0f;
+		mainViewport.y = 0.0f;
+		mainViewport.width = (float)SwapChainExtent.width;
+		mainViewport.height = (float)SwapChainExtent.height;
+		mainViewport.minDepth = 0.0f;
+		mainViewport.maxDepth = 1.0f;
+
+		// 视口剪切信息
+		VkRect2D mainScissor{};
+		mainScissor.offset = { 0, 0 };
+		mainScissor.extent = SwapChainExtent;
+
+#if ENABLE_DEFEERED_RENDERING
+		// 【延迟渲染】渲染场景
+		{
+			VkRenderPassBeginInfo renderPassInfo{};
+			renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+			renderPassInfo.renderPass = BaseSceneDeferredPass.SceneRenderPass;
+			renderPassInfo.framebuffer = BaseSceneDeferredPass.SceneFrameBuffer;
+			renderPassInfo.renderArea.offset = { 0, 0 };
+			renderPassInfo.renderArea.extent = SwapChainExtent;
+
+			std::array<VkClearValue, 6> clearValues{};
+			clearValues[0].depthStencil = { 1.0f, 0 };
+			clearValues[1].color = { {0.0f, 0.0f, 0.0f, 1.0f} };
+			clearValues[2].color = { {0.0f, 0.0f, 0.0f, 0.0f} };
+			clearValues[3].color = { {0.0f, 0.0f, 0.0f, 1.0f} };
+			clearValues[4].color = { {0.0f, 0.0f, 0.0f, 1.0f} };
+			clearValues[5].color = { {0.0f, 0.0f, 0.0f, 1.0f} };
+
+			renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
+			renderPassInfo.pClearValues = clearValues.data();
+
+			// 【延迟渲染】开始 RenderPass
+			vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+			vkCmdSetViewport(commandBuffer, 0, 1, &mainViewport);
+			vkCmdSetScissor(commandBuffer, 0, 1, &mainScissor);
+
+			// 【延迟渲染】渲染场景
+			for (size_t i = 0; i < BaseSceneDeferredPass.RenderDeferredObjects.size(); i++)
+			{
+				uint32_t SpecConstants = GlobalConstants.SpecConstants;
+				VkPipeline baseScenePassPipeline = BaseSceneDeferredPass.ScenePipelines[SpecConstants];
+				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, baseScenePassPipeline);
+				FRenderDeferredObject* renderObject = BaseSceneDeferredPass.RenderDeferredObjects[i];
+				VkBuffer objectVertexBuffers[] = { renderObject->MeshData.VertexBuffer };
+				VkDeviceSize objectOffsets[] = { 0 };
+				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
+				vkCmdBindIndexBuffer(commandBuffer, renderObject->MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+				vkCmdBindDescriptorSets(
+					commandBuffer,
+					VK_PIPELINE_BIND_POINT_GRAPHICS,
+					BaseSceneDeferredPass.ScenePipelineLayout, 0, 1,
+					&renderObject->MateData.DescriptorSets[CurrentFrame], 0, nullptr);
+				vkCmdPushConstants(commandBuffer, BaseSceneDeferredPass.ScenePipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
+				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderObject->MeshData.Indices.size()), 1, 0, 0, 0);
+			}
+			// 【延迟渲染】渲染 Instanced 场景
+			for (size_t i = 0; i < BaseSceneDeferredPass.RenderDeferredInstancedObjects.size(); i++)
+			{
+				uint32_t SpecConstants = GlobalConstants.SpecConstants;
+				VkPipeline BaseScenePassPipelineInstanced = BaseSceneDeferredPass.ScenePipelinesInstanced[SpecConstants];
+				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BaseScenePassPipelineInstanced);
+				FRenderDeferredInstancedObject* renderInstancedObject = BaseSceneDeferredPass.RenderDeferredInstancedObjects[i];
+				VkBuffer objectVertexBuffers[] = { renderInstancedObject->MeshData.VertexBuffer };
+				VkBuffer objectInstanceBuffers[] = { renderInstancedObject->MeshData.InstancedBuffer };
+				VkDeviceSize objectOffsets[] = { 0 };
+				vkCmdBindVertexBuffers(commandBuffer, VERTEX_BUFFER_BIND_ID, 1, objectVertexBuffers, objectOffsets);
+				vkCmdBindVertexBuffers(commandBuffer, INSTANCE_BUFFER_BIND_ID, 1, objectInstanceBuffers, objectOffsets);
+				vkCmdBindIndexBuffer(commandBuffer, renderInstancedObject->MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+				vkCmdBindDescriptorSets(
+					commandBuffer,
+					VK_PIPELINE_BIND_POINT_GRAPHICS,
+					BaseSceneDeferredPass.ScenePipelineLayout, 0, 1,
+					&renderInstancedObject->MateData.DescriptorSets[CurrentFrame], 0, nullptr);
+				vkCmdPushConstants(commandBuffer, BaseSceneDeferredPass.ScenePipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
+				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderInstancedObject->MeshData.Indices.size()), renderInstancedObject->InstanceCount, 0, 0, 0);
+			}
+
+			// 【延迟渲染】结束RenderPass
+			vkCmdEndRenderPass(commandBuffer);
+		}
+
+		VkImageCopy copyRegion = {};
+		copyRegion.srcSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+		copyRegion.srcSubresource.baseArrayLayer = 0;
+		copyRegion.srcSubresource.mipLevel = 0;
+		copyRegion.srcSubresource.layerCount = 1;
+		copyRegion.srcOffset = { 0, 0, 0 };
+		copyRegion.dstSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+		copyRegion.dstSubresource.baseArrayLayer = 0;
+		copyRegion.dstSubresource.mipLevel = 0;
+		copyRegion.dstSubresource.layerCount = 1;
+		copyRegion.dstOffset = { 0, 0, 0 };
+		copyRegion.extent.width = static_cast<uint32_t>(SwapChainExtent.width);
+		copyRegion.extent.height = static_cast<uint32_t>(SwapChainExtent.height);
+		copyRegion.extent.depth = 1;
+
+		BeginTransitionImageLayoutRT(GBuffer.DepthStencilImage,
+			VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+		BeginTransitionImageLayoutRT(DepthImage,
+			VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+		vkCmdCopyImage(commandBuffer, GBuffer.DepthStencilImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+			DepthImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
+		EndTransitionImageLayoutRT(GBuffer.DepthStencilImage,
+			VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+		EndTransitionImageLayoutRT(DepthImage,
+			VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+#endif
+
 		// 【主场景】渲染场景
 		{
 			VkRenderPassBeginInfo renderPassInfo{};
 			renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-			renderPassInfo.renderPass = RenderPass;
+			renderPassInfo.renderPass = MainRenderPass;
 			renderPassInfo.framebuffer = SwapChainFramebuffers[imageIndex];
 			renderPassInfo.renderArea.offset = { 0, 0 };
 			renderPassInfo.renderArea.extent = SwapChainExtent;
@@ -2475,34 +3137,162 @@ protected:
 			// 【主场景】开始 RenderPass
 			vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-			// 【主场景】渲染视口信息
-			VkViewport viewport{};
-			viewport.x = 0.0f;
-			viewport.y = 0.0f;
-			viewport.width = (float)SwapChainExtent.width;
-			viewport.height = (float)SwapChainExtent.height;
-			viewport.minDepth = 0.0f;
-			viewport.maxDepth = 1.0f;
-
-			// 【主场景】视口剪切信息
-			VkRect2D scissor{};
-			scissor.offset = { 0, 0 };
-			scissor.extent = SwapChainExtent;
-
 			// 【主场景】设置渲染视口
-			vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+			vkCmdSetViewport(commandBuffer, 0, 1, &mainViewport);
 
 			// 【主场景】设置视口剪切，是否可以通过这个函数来实现 Tiled-Based Rendering ？
-			vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+			vkCmdSetScissor(commandBuffer, 0, 1, &mainScissor);
 
-			// 【主场景】渲染背景面片
-			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BackgroundPass.Pipelines[0]);
-			vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BackgroundPass.PipelineLayout, 0, 1, &BackgroundPass.DescriptorSets[CurrentFrame], 0, nullptr);
-			vkCmdPushConstants(commandBuffer, BackgroundPass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
+#if ENABLE_DEFEERED_RENDERING
+			// 【主场景】渲染延迟渲染灯光
+			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BaseSceneDeferredPass.LightingPipelines[GlobalConstants.SpecConstants]);
+			vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BaseSceneDeferredPass.LightingPipelineLayout, 0, 1, &BaseSceneDeferredPass.LightingDescriptorSets[CurrentFrame], 0, nullptr);
+			vkCmdPushConstants(commandBuffer, BaseSceneDeferredPass.LightingPipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
 			vkCmdDraw(commandBuffer, 6, 1, 0, 0);
+#endif
+
+			// 【主场景】渲染场景
+			for (size_t i = 0; i < BaseScenePass.RenderObjects.size(); i++)
+			{
+				VkPipeline baseScenePassPipeline = BaseScenePass.Pipelines[GlobalConstants.SpecConstants];
+				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, baseScenePassPipeline);
+				FRenderObject* renderObject = BaseScenePass.RenderObjects[i];
+				VkBuffer objectVertexBuffers[] = { renderObject->MeshData.VertexBuffer };
+				VkDeviceSize objectOffsets[] = { 0 };
+				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
+				vkCmdBindIndexBuffer(commandBuffer, renderObject->MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+				vkCmdBindDescriptorSets(
+					commandBuffer,
+					VK_PIPELINE_BIND_POINT_GRAPHICS,
+					BaseScenePass.PipelineLayout, 0, 1,
+					&renderObject->MateData.DescriptorSets[CurrentFrame], 0, nullptr);
+				vkCmdPushConstants(commandBuffer, BaseScenePass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
+				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderObject->MeshData.Indices.size()), 1, 0, 0, 0);
+			}
+			// 【主场景】渲染 Instanced 场景
+			for (size_t i = 0; i < BaseScenePass.RenderInstancedObjects.size(); i++)
+			{
+				VkPipeline BaseScenePassPipelineInstanced = BaseScenePass.PipelinesInstanced[GlobalConstants.SpecConstants];
+				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BaseScenePassPipelineInstanced);
+				FRenderInstancedObject* renderInstancedObject = BaseScenePass.RenderInstancedObjects[i];
+				VkBuffer objectVertexBuffers[] = { renderInstancedObject->MeshData.VertexBuffer };
+				VkBuffer objectInstanceBuffers[] = { renderInstancedObject->MeshData.InstancedBuffer };
+				VkDeviceSize objectOffsets[] = { 0 };
+				vkCmdBindVertexBuffers(commandBuffer, VERTEX_BUFFER_BIND_ID, 1, objectVertexBuffers, objectOffsets);
+				vkCmdBindVertexBuffers(commandBuffer, INSTANCE_BUFFER_BIND_ID, 1, objectInstanceBuffers, objectOffsets);
+				vkCmdBindIndexBuffer(commandBuffer, renderInstancedObject->MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+				vkCmdBindDescriptorSets(
+					commandBuffer,
+					VK_PIPELINE_BIND_POINT_GRAPHICS,
+					BaseScenePass.PipelineLayout, 0, 1,
+					&renderInstancedObject->MateData.DescriptorSets[CurrentFrame], 0, nullptr);
+				vkCmdPushConstants(commandBuffer, BaseScenePass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
+				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderInstancedObject->MeshData.Indices.size()), renderInstancedObject->InstanceCount, 0, 0, 0);
+			}
+			// 【主场景】渲染 Indirect 场景
+			for (size_t i = 0; i < BaseSceneIndirectPass.RenderIndirectObjects.size(); i++)
+			{
+				VkPipeline indirectScenePassPipeline = BaseSceneIndirectPass.Pipelines[GlobalConstants.SpecConstants];
+				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, indirectScenePassPipeline);
+				FRenderIndirectObject* RenderIndirectObject = BaseSceneIndirectPass.RenderIndirectObjects[i];
+				VkBuffer objectVertexBuffers[] = { RenderIndirectObject->MeshData.VertexBuffer };
+				VkDeviceSize objectOffsets[] = { 0 };
+				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
+				vkCmdBindIndexBuffer(commandBuffer, RenderIndirectObject->MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+				vkCmdBindDescriptorSets(
+					commandBuffer,
+					VK_PIPELINE_BIND_POINT_GRAPHICS,
+					BaseSceneIndirectPass.PipelineLayout, 0, 1,
+					&RenderIndirectObject->MateData.DescriptorSets[CurrentFrame], 0, nullptr);
+				vkCmdPushConstants(commandBuffer, BaseSceneIndirectPass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
+				uint32_t indirectDrawCount = static_cast<uint32_t>(RenderIndirectObject->IndirectCommands.size());
+				if (IsSupportMultiDrawIndirect(PhysicalDevice))
+				{
+					/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+					//01 void FakeDrawIndexedIndirect(VkCommandBuffer commandBuffer, void* buffer, VkDeviceSize offset, uint32_t drawCount, uint32_t stride)
+					//02 {
+					//03 	char* memory = (char*)buffer + offset;
+					//04 
+					//05 	for (uint32_t i = 0; i < drawCount; i++)
+					//06 	{
+					//07 		VkDrawIndexedIndirectCommand* command = (VkDrawIndexedIndirectCommand*)(memory + (i * stride));
+					//08 
+					//09 		vkCmdDrawIndexed(commandBuffer,
+					//10 			command->indexCount,
+					//11 			command->instanceCount,
+					//12 			command->firstIndex,
+					//13 			command->vertexOffset,
+					//14 			command->firstInstance);
+					//15 	}
+					//16 }
+					vkCmdDrawIndexedIndirect(
+						commandBuffer, /*commandBuffer*/
+						RenderIndirectObject->IndirectCommandsBuffer, /*buffer*/
+						0, /*offset*/
+						indirectDrawCount, /*drawCount*/
+						sizeof(VkDrawIndexedIndirectCommand) /*stride*/);
+				}
+				else
+				{
+					// If multi draw is not available, we must issue separate draw commands
+					for (auto j = 0; j < RenderIndirectObject->IndirectCommands.size(); j++)
+					{
+						vkCmdDrawIndexedIndirect(
+							commandBuffer, /*commandBuffer*/
+							RenderIndirectObject->IndirectCommandsBuffer, /*buffer*/
+							j * sizeof(VkDrawIndexedIndirectCommand), /*offset*/
+							1, /*drawCount*/
+							sizeof(VkDrawIndexedIndirectCommand) /*stride*/);
+					}
+				}
+			}
+			// 【主场景】渲染 Indirect Instanced 场景
+			for (size_t i = 0; i < BaseSceneIndirectPass.RenderIndirectInstancedObjects.size(); i++)
+			{
+				VkPipeline indirectScenePassPipelineInstanced = BaseSceneIndirectPass.PipelinesInstanced[GlobalConstants.SpecConstants];
+				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, indirectScenePassPipelineInstanced);
+				FRenderIndirectInstancedObject* RenderIndirectInstancedObject = BaseSceneIndirectPass.RenderIndirectInstancedObjects[i];
+				VkBuffer objectVertexBuffers[] = { RenderIndirectInstancedObject->MeshData.VertexBuffer };
+				VkBuffer objectInstanceBuffers[] = { RenderIndirectInstancedObject->MeshData.InstancedBuffer };
+				VkDeviceSize objectOffsets[] = { 0 };
+				// Binding point 0 : Mesh vertex buffer
+				vkCmdBindVertexBuffers(commandBuffer, VERTEX_BUFFER_BIND_ID, 1, objectVertexBuffers, objectOffsets);
+				// Binding point 1 : Instance data buffer
+				vkCmdBindVertexBuffers(commandBuffer, INSTANCE_BUFFER_BIND_ID, 1, objectInstanceBuffers, objectOffsets);
+				vkCmdBindIndexBuffer(commandBuffer, RenderIndirectInstancedObject->MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+				vkCmdBindDescriptorSets(
+					commandBuffer,
+					VK_PIPELINE_BIND_POINT_GRAPHICS,
+					BaseSceneIndirectPass.PipelineLayout, 0, 1,
+					&RenderIndirectInstancedObject->MateData.DescriptorSets[CurrentFrame], 0, nullptr);
+				vkCmdPushConstants(commandBuffer, BaseSceneIndirectPass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
+				uint32_t indirectDrawCount = static_cast<uint32_t>(RenderIndirectInstancedObject->IndirectCommands.size());
+				if (IsSupportMultiDrawIndirect(PhysicalDevice))
+				{
+					vkCmdDrawIndexedIndirect(
+						commandBuffer, /*commandBuffer*/
+						RenderIndirectInstancedObject->IndirectCommandsBuffer, /*buffer*/
+						0, /*offset*/
+						indirectDrawCount, /*drawCount*/
+						sizeof(VkDrawIndexedIndirectCommand) /*stride*/);
+				}
+				else
+				{
+					// If multi draw is not available, we must issue separate draw commands
+					for (auto j = 0; j < RenderIndirectInstancedObject->IndirectCommands.size(); j++)
+					{
+						vkCmdDrawIndexedIndirect(
+							commandBuffer, /*commandBuffer*/
+							RenderIndirectInstancedObject->IndirectCommandsBuffer, /*buffer*/
+							j * sizeof(VkDrawIndexedIndirectCommand), /*offset*/
+							1, /*drawCount*/
+							sizeof(VkDrawIndexedIndirectCommand) /*stride*/);
+					}
+				}
+			}
 
 			// 【主场景】渲染天空球
-			if (ENABLE_SHOW_SKYDOME)
+			if (ENABLE_SHOW_SKYDOME && GlobalConstants.SpecConstants == 0 /* Don't render sky on debug mode*/)
 			{
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, SkydomePass.Pipelines[0]);
 				vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, SkydomePass.PipelineLayout, 0, 1, &SkydomePass.DescriptorSets[CurrentFrame], 0, nullptr);
@@ -2513,152 +3303,12 @@ protected:
 				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(SkydomePass.SkydomeMesh.Indices.size()), 1, 0, 0, 0);
 			}
 
-			// 【主场景】渲染场景
-			for (size_t i = 0; i < BaseScenePass.RenderObjects.size(); i++)
-			{
-				uint32_t SpecConstants = GlobalConstants.SpecConstants;
-				VkPipeline baseScenePassPipeline = BaseScenePass.Pipelines[SpecConstants];
-				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, baseScenePassPipeline);
-				FRenderObject renderObject = BaseScenePass.RenderObjects[i];
-				VkBuffer objectVertexBuffers[] = { renderObject.MeshData.VertexBuffer };
-				VkDeviceSize objectOffsets[] = { 0 };
-				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
-				vkCmdBindIndexBuffer(commandBuffer, renderObject.MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
-				vkCmdBindDescriptorSets(
-					commandBuffer,
-					VK_PIPELINE_BIND_POINT_GRAPHICS,
-					BaseScenePass.PipelineLayout, 0, 1,
-					&renderObject.MaterialData.DescriptorSets[CurrentFrame], 0, nullptr);
-				vkCmdPushConstants(commandBuffer, BaseScenePass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
-				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderObject.MeshData.Indices.size()), 1, 0, 0, 0);
-			}
-			// 【主场景】渲染 Instanced 场景
-			for (size_t i = 0; i < BaseScenePass.RenderInstancedObjects.size(); i++)
-			{
-				uint32_t SpecConstants = GlobalConstants.SpecConstants;
-				VkPipeline baseScenePassPipelineInstanced = BaseScenePass.PipelinesInstanced[SpecConstants];
-				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, baseScenePassPipelineInstanced);
-				FRenderInstancedObject renderInstancedObject = BaseScenePass.RenderInstancedObjects[i];
-				VkBuffer objectVertexBuffers[] = { renderInstancedObject.MeshData.VertexBuffer };
-				VkBuffer objectInstanceBuffers[] = { renderInstancedObject.MeshData.InstancedBuffer };
-				VkDeviceSize objectOffsets[] = { 0 };
-				vkCmdBindVertexBuffers(commandBuffer, VERTEX_BUFFER_BIND_ID, 1, objectVertexBuffers, objectOffsets);
-				vkCmdBindVertexBuffers(commandBuffer, INSTANCE_BUFFER_BIND_ID, 1, objectInstanceBuffers, objectOffsets);
-				vkCmdBindIndexBuffer(commandBuffer, renderInstancedObject.MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
-				vkCmdBindDescriptorSets(
-					commandBuffer,
-					VK_PIPELINE_BIND_POINT_GRAPHICS,
-					BaseScenePass.PipelineLayout, 0, 1,
-					&renderInstancedObject.MaterialData.DescriptorSets[CurrentFrame], 0, nullptr);
-				vkCmdPushConstants(commandBuffer, BaseScenePass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
-				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderInstancedObject.MeshData.Indices.size()), INSTANCE_COUNT, 0, 0, 0);
-			}
-			// 【主场景】渲染 Indirect 场景
-			for (size_t i = 0; i < IndirectScenePass.RenderIndirectObject.size(); i++)
-			{
-				uint32_t SpecConstants = GlobalConstants.SpecConstants;
-				VkPipeline indirectScenePassPipeline = IndirectScenePass.Pipelines[SpecConstants];
-				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, indirectScenePassPipeline);
-				FRenderIndirectObject RenderIndirectObject = IndirectScenePass.RenderIndirectObject[i];
-				VkBuffer objectVertexBuffers[] = { RenderIndirectObject.MeshData.VertexBuffer };
-				VkDeviceSize objectOffsets[] = { 0 };
-				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
-				vkCmdBindIndexBuffer(commandBuffer, RenderIndirectObject.MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
-				vkCmdBindDescriptorSets(
-					commandBuffer,
-					VK_PIPELINE_BIND_POINT_GRAPHICS,
-					IndirectScenePass.PipelineLayout, 0, 1,
-					&RenderIndirectObject.MaterialData.DescriptorSets[CurrentFrame], 0, nullptr);
-				vkCmdPushConstants(commandBuffer, IndirectScenePass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
-				uint32_t indirectDrawCount = static_cast<uint32_t>(RenderIndirectObject.IndirectCommands.size());
-				if (IsSupportMultiDrawIndirect(PhysicalDevice))
-				{
-					/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-					//01 void FakeDrawIndexedIndirect(VkCommandBuffer commandBuffer, void* buffer, VkDeviceSize offset, uint32_t drawCount, uint32_t stride)
-					//02 {
-					//03     char* memory = (char*)buffer + offset;
-					//04
-					//05     for (uint32_t i = 0; i < drawCount; i++)
-					//06     {
-					//07         VkDrawIndexedIndirectCommand* command = (VkDrawIndexedIndirectCommand*)(memory + (i * stride));
-					//08
-					//09         vkCmdDrawIndexed(commandBuffer,
-					//10             command->indexCount,
-					//11             command->instanceCount,
-					//12             command->firstIndex,
-					//13             command->vertexOffset,
-					//14             command->firstInstance);
-					//15     }
-					//16 }
-					vkCmdDrawIndexedIndirect(
-						commandBuffer, /*commandBuffer*/
-						RenderIndirectObject.IndirectCommandsBuffer, /*buffer*/
-						0, /*offset*/
-						indirectDrawCount, /*drawCount*/
-						sizeof(VkDrawIndexedIndirectCommand) /*stride*/);
-				}
-				else
-				{
-					// If multi draw is not available, we must issue separate draw commands
-					for (auto j = 0; j < RenderIndirectObject.IndirectCommands.size(); j++)
-					{
-						GlobalConstants.Index = j;
-						GlobalConstants.IndexCount = (uint32_t)RenderIndirectObject.IndirectCommands.size();
-						vkCmdPushConstants(commandBuffer, IndirectScenePass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
-						vkCmdDrawIndexedIndirect(
-							commandBuffer, /*commandBuffer*/
-							RenderIndirectObject.IndirectCommandsBuffer, /*buffer*/
-							j * sizeof(VkDrawIndexedIndirectCommand), /*offset*/
-							1, /*drawCount*/
-							sizeof(VkDrawIndexedIndirectCommand) /*stride*/);
-					}
-				}
-			}
-			// 【主场景】渲染 Indirect Instanced 场景
-			for (size_t i = 0; i < IndirectScenePass.RenderIndirectInstancedObject.size(); i++)
-			{
-				uint32_t SpecConstants = GlobalConstants.SpecConstants;
-				VkPipeline indirectScenePassPipelineInstanced = IndirectScenePass.PipelinesInstanced[SpecConstants];
-				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, indirectScenePassPipelineInstanced);
-				FRenderIndirectInstancedObject RenderIndirectInstancedObject = IndirectScenePass.RenderIndirectInstancedObject[i];
-				VkBuffer objectVertexBuffers[] = { RenderIndirectInstancedObject.MeshData.VertexBuffer };
-				VkBuffer objectInstanceBuffers[] = { RenderIndirectInstancedObject.MeshData.InstancedBuffer };
-				VkDeviceSize objectOffsets[] = { 0 };
-				// Binding point 0 : Mesh vertex buffer
-				vkCmdBindVertexBuffers(commandBuffer, VERTEX_BUFFER_BIND_ID, 1, objectVertexBuffers, objectOffsets);
-				// Binding point 1 : Instance data buffer
-				vkCmdBindVertexBuffers(commandBuffer, INSTANCE_BUFFER_BIND_ID, 1, objectInstanceBuffers, objectOffsets);
-				vkCmdBindIndexBuffer(commandBuffer, RenderIndirectInstancedObject.MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
-				vkCmdBindDescriptorSets(
-					commandBuffer,
-					VK_PIPELINE_BIND_POINT_GRAPHICS,
-					IndirectScenePass.PipelineLayout, 0, 1,
-					&RenderIndirectInstancedObject.MaterialData.DescriptorSets[CurrentFrame], 0, nullptr);
-				vkCmdPushConstants(commandBuffer, IndirectScenePass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
-				uint32_t indirectDrawCount = static_cast<uint32_t>(RenderIndirectInstancedObject.IndirectCommands.size());
-				if (IsSupportMultiDrawIndirect(PhysicalDevice))
-				{
-					vkCmdDrawIndexedIndirect(
-						commandBuffer, /*commandBuffer*/
-						RenderIndirectInstancedObject.IndirectCommandsBuffer, /*buffer*/
-						0, /*offset*/
-						indirectDrawCount, /*drawCount*/
-						sizeof(VkDrawIndexedIndirectCommand) /*stride*/);
-				}
-				else
-				{
-					// If multi draw is not available, we must issue separate draw commands
-					for (auto j = 0; j < RenderIndirectInstancedObject.IndirectCommands.size(); j++)
-					{
-						vkCmdDrawIndexedIndirect(
-							commandBuffer, /*commandBuffer*/
-							RenderIndirectInstancedObject.IndirectCommandsBuffer, /*buffer*/
-							j * sizeof(VkDrawIndexedIndirectCommand), /*offset*/
-							1, /*drawCount*/
-							sizeof(VkDrawIndexedIndirectCommand) /*stride*/);
-					}
-				}
-			}
+			// 【主场景】渲染背景面片
+			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BackgroundPass.Pipelines[0]);
+			vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BackgroundPass.PipelineLayout, 0, 1, &BackgroundPass.DescriptorSets[CurrentFrame], 0, nullptr);
+			vkCmdPushConstants(commandBuffer, BackgroundPass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
+			vkCmdDraw(commandBuffer, 6, 1, 0, 0);
+
 			// 【主场景】结束RenderPass
 			vkCmdEndRenderPass(commandBuffer);
 		}
@@ -2707,7 +3357,7 @@ protected:
 			vkDestroyFence(Device, InFlightFences[i], nullptr);
 		}
 
-		vkDestroyRenderPass(Device, RenderPass, nullptr);
+		vkDestroyRenderPass(Device, MainRenderPass, nullptr);
 
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
 		{
@@ -2725,6 +3375,133 @@ protected:
 		vkDestroySampler(Device, CubemapSampler, nullptr);
 		vkDestroyImage(Device, CubemapImage, nullptr);
 		vkFreeMemory(Device, CubemapImageMemory, nullptr);
+
+		// Clean up Scene
+		for (size_t i = 0; i < Scene.RenderObjects.size(); i++)
+		{
+			FRenderObject& renderObject = Scene.RenderObjects[i];
+
+			vkDestroyDescriptorPool(Device, renderObject.MateData.DescriptorPool, nullptr);
+
+			for (size_t j = 0; j < renderObject.MateData.TextureImages.size(); j++)
+			{
+				vkDestroyImageView(Device, renderObject.MateData.TextureImageViews[j], nullptr);
+				vkDestroySampler(Device, renderObject.MateData.TextureSamplers[j], nullptr);
+				vkDestroyImage(Device, renderObject.MateData.TextureImages[j], nullptr);
+				vkFreeMemory(Device, renderObject.MateData.TextureImageMemorys[j], nullptr);
+			}
+
+			vkDestroyBuffer(Device, renderObject.MeshData.VertexBuffer, nullptr);
+			vkFreeMemory(Device, renderObject.MeshData.VertexBufferMemory, nullptr);
+			vkDestroyBuffer(Device, renderObject.MeshData.IndexBuffer, nullptr);
+			vkFreeMemory(Device, renderObject.MeshData.IndexBufferMemory, nullptr);
+		}
+		for (size_t i = 0; i < Scene.RenderInstancedObjects.size(); i++)
+		{
+			FRenderInstancedObject& renderInstancedObject = Scene.RenderInstancedObjects[i];
+
+			vkDestroyDescriptorPool(Device, renderInstancedObject.MateData.DescriptorPool, nullptr);
+
+			for (size_t j = 0; j < renderInstancedObject.MateData.TextureImages.size(); j++)
+			{
+				vkDestroyImageView(Device, renderInstancedObject.MateData.TextureImageViews[j], nullptr);
+				vkDestroySampler(Device, renderInstancedObject.MateData.TextureSamplers[j], nullptr);
+				vkDestroyImage(Device, renderInstancedObject.MateData.TextureImages[j], nullptr);
+				vkFreeMemory(Device, renderInstancedObject.MateData.TextureImageMemorys[j], nullptr);
+			}
+
+			vkDestroyBuffer(Device, renderInstancedObject.MeshData.InstancedBuffer, nullptr);
+			vkFreeMemory(Device, renderInstancedObject.MeshData.InstancedBufferMemory, nullptr);
+			vkDestroyBuffer(Device, renderInstancedObject.MeshData.VertexBuffer, nullptr);
+			vkFreeMemory(Device, renderInstancedObject.MeshData.VertexBufferMemory, nullptr);
+			vkDestroyBuffer(Device, renderInstancedObject.MeshData.IndexBuffer, nullptr);
+			vkFreeMemory(Device, renderInstancedObject.MeshData.IndexBufferMemory, nullptr);
+		}
+		for (size_t i = 0; i < Scene.RenderIndirectObjects.size(); i++)
+		{
+			FRenderIndirectObject& RenderIndirectObject = Scene.RenderIndirectObjects[i];
+
+			vkDestroyDescriptorPool(Device, RenderIndirectObject.MateData.DescriptorPool, nullptr);
+
+			for (size_t j = 0; j < RenderIndirectObject.MateData.TextureImages.size(); j++)
+			{
+				vkDestroyImageView(Device, RenderIndirectObject.MateData.TextureImageViews[j], nullptr);
+				vkDestroySampler(Device, RenderIndirectObject.MateData.TextureSamplers[j], nullptr);
+				vkDestroyImage(Device, RenderIndirectObject.MateData.TextureImages[j], nullptr);
+				vkFreeMemory(Device, RenderIndirectObject.MateData.TextureImageMemorys[j], nullptr);
+			}
+			vkDestroyBuffer(Device, RenderIndirectObject.MeshData.VertexBuffer, nullptr);
+			vkFreeMemory(Device, RenderIndirectObject.MeshData.VertexBufferMemory, nullptr);
+			vkDestroyBuffer(Device, RenderIndirectObject.MeshData.IndexBuffer, nullptr);
+			vkFreeMemory(Device, RenderIndirectObject.MeshData.IndexBufferMemory, nullptr);
+			vkDestroyBuffer(Device, RenderIndirectObject.IndirectCommandsBuffer, nullptr);
+			vkFreeMemory(Device, RenderIndirectObject.IndirectCommandsBufferMemory, nullptr);
+		}
+		for (size_t i = 0; i < Scene.RenderIndirectInstancedObjects.size(); i++)
+		{
+			FRenderIndirectInstancedObject& RenderIndirectInstancedObject = Scene.RenderIndirectInstancedObjects[i];
+
+			vkDestroyDescriptorPool(Device, RenderIndirectInstancedObject.MateData.DescriptorPool, nullptr);
+
+			for (size_t j = 0; j < RenderIndirectInstancedObject.MateData.TextureImages.size(); j++)
+			{
+				vkDestroyImageView(Device, RenderIndirectInstancedObject.MateData.TextureImageViews[j], nullptr);
+				vkDestroySampler(Device, RenderIndirectInstancedObject.MateData.TextureSamplers[j], nullptr);
+				vkDestroyImage(Device, RenderIndirectInstancedObject.MateData.TextureImages[j], nullptr);
+				vkFreeMemory(Device, RenderIndirectInstancedObject.MateData.TextureImageMemorys[j], nullptr);
+			}
+
+			vkDestroyBuffer(Device, RenderIndirectInstancedObject.MeshData.InstancedBuffer, nullptr);
+			vkFreeMemory(Device, RenderIndirectInstancedObject.MeshData.InstancedBufferMemory, nullptr);
+			vkDestroyBuffer(Device, RenderIndirectInstancedObject.MeshData.VertexBuffer, nullptr);
+			vkFreeMemory(Device, RenderIndirectInstancedObject.MeshData.VertexBufferMemory, nullptr);
+			vkDestroyBuffer(Device, RenderIndirectInstancedObject.MeshData.IndexBuffer, nullptr);
+			vkFreeMemory(Device, RenderIndirectInstancedObject.MeshData.IndexBufferMemory, nullptr);
+			vkDestroyBuffer(Device, RenderIndirectInstancedObject.IndirectCommandsBuffer, nullptr);
+			vkFreeMemory(Device, RenderIndirectInstancedObject.IndirectCommandsBufferMemory, nullptr);
+		}
+#if ENABLE_DEFEERED_RENDERING
+		for (size_t i = 0; i < Scene.RenderDeferredObjects.size(); i++)
+		{
+			FRenderDeferredObject& renderObject = Scene.RenderDeferredObjects[i];
+
+			vkDestroyDescriptorPool(Device, renderObject.MateData.DescriptorPool, nullptr);
+
+			for (size_t j = 0; j < renderObject.MateData.TextureImages.size(); j++)
+			{
+				vkDestroyImageView(Device, renderObject.MateData.TextureImageViews[j], nullptr);
+				vkDestroySampler(Device, renderObject.MateData.TextureSamplers[j], nullptr);
+				vkDestroyImage(Device, renderObject.MateData.TextureImages[j], nullptr);
+				vkFreeMemory(Device, renderObject.MateData.TextureImageMemorys[j], nullptr);
+			}
+
+			vkDestroyBuffer(Device, renderObject.MeshData.VertexBuffer, nullptr);
+			vkFreeMemory(Device, renderObject.MeshData.VertexBufferMemory, nullptr);
+			vkDestroyBuffer(Device, renderObject.MeshData.IndexBuffer, nullptr);
+			vkFreeMemory(Device, renderObject.MeshData.IndexBufferMemory, nullptr);
+		}
+		for (size_t i = 0; i < Scene.RenderDeferredInstancedObjects.size(); i++)
+		{
+			FRenderDeferredInstancedObject& renderInstancedObject = Scene.RenderDeferredInstancedObjects[i];
+
+			vkDestroyDescriptorPool(Device, renderInstancedObject.MateData.DescriptorPool, nullptr);
+
+			for (size_t j = 0; j < renderInstancedObject.MateData.TextureImages.size(); j++)
+			{
+				vkDestroyImageView(Device, renderInstancedObject.MateData.TextureImageViews[j], nullptr);
+				vkDestroySampler(Device, renderInstancedObject.MateData.TextureSamplers[j], nullptr);
+				vkDestroyImage(Device, renderInstancedObject.MateData.TextureImages[j], nullptr);
+				vkFreeMemory(Device, renderInstancedObject.MateData.TextureImageMemorys[j], nullptr);
+			}
+
+			vkDestroyBuffer(Device, renderInstancedObject.MeshData.InstancedBuffer, nullptr);
+			vkFreeMemory(Device, renderInstancedObject.MeshData.InstancedBufferMemory, nullptr);
+			vkDestroyBuffer(Device, renderInstancedObject.MeshData.VertexBuffer, nullptr);
+			vkFreeMemory(Device, renderInstancedObject.MeshData.VertexBufferMemory, nullptr);
+			vkDestroyBuffer(Device, renderInstancedObject.MeshData.IndexBuffer, nullptr);
+			vkFreeMemory(Device, renderInstancedObject.MeshData.IndexBufferMemory, nullptr);
+		}
+#endif
 
 		// 清理 ShadowmapPass
 		vkDestroyRenderPass(Device, ShadowmapPass.RenderPass, nullptr);
@@ -2776,98 +3553,59 @@ protected:
 			vkDestroyPipeline(Device, BaseScenePass.Pipelines[i], nullptr);
 			vkDestroyPipeline(Device, BaseScenePass.PipelinesInstanced[i], nullptr);
 		}
-		for (size_t i = 0; i < BaseScenePass.RenderObjects.size(); i++)
-		{
-			FRenderObject& renderObject = BaseScenePass.RenderObjects[i];
 
-			vkDestroyDescriptorPool(Device, renderObject.MaterialData.DescriptorPool, nullptr);
-
-			for (size_t j = 0; j < renderObject.MaterialData.TextureImages.size(); j++)
-			{
-				vkDestroyImageView(Device, renderObject.MaterialData.TextureImageViews[j], nullptr);
-				vkDestroySampler(Device, renderObject.MaterialData.TextureSamplers[j], nullptr);
-				vkDestroyImage(Device, renderObject.MaterialData.TextureImages[j], nullptr);
-				vkFreeMemory(Device, renderObject.MaterialData.TextureImageMemorys[j], nullptr);
-			}
-
-			vkDestroyBuffer(Device, renderObject.MeshData.VertexBuffer, nullptr);
-			vkFreeMemory(Device, renderObject.MeshData.VertexBufferMemory, nullptr);
-			vkDestroyBuffer(Device, renderObject.MeshData.IndexBuffer, nullptr);
-			vkFreeMemory(Device, renderObject.MeshData.IndexBufferMemory, nullptr);
-		}
-		for (size_t i = 0; i < BaseScenePass.RenderInstancedObjects.size(); i++)
-		{
-			FRenderInstancedObject& renderInstancedObject = BaseScenePass.RenderInstancedObjects[i];
-
-			vkDestroyDescriptorPool(Device, renderInstancedObject.MaterialData.DescriptorPool, nullptr);
-
-			for (size_t j = 0; j < renderInstancedObject.MaterialData.TextureImages.size(); j++)
-			{
-				vkDestroyImageView(Device, renderInstancedObject.MaterialData.TextureImageViews[j], nullptr);
-				vkDestroySampler(Device, renderInstancedObject.MaterialData.TextureSamplers[j], nullptr);
-				vkDestroyImage(Device, renderInstancedObject.MaterialData.TextureImages[j], nullptr);
-				vkFreeMemory(Device, renderInstancedObject.MaterialData.TextureImageMemorys[j], nullptr);
-			}
-
-			vkDestroyBuffer(Device, renderInstancedObject.MeshData.InstancedBuffer, nullptr);
-			vkFreeMemory(Device, renderInstancedObject.MeshData.InstancedBufferMemory, nullptr);
-			vkDestroyBuffer(Device, renderInstancedObject.MeshData.VertexBuffer, nullptr);
-			vkFreeMemory(Device, renderInstancedObject.MeshData.VertexBufferMemory, nullptr);
-			vkDestroyBuffer(Device, renderInstancedObject.MeshData.IndexBuffer, nullptr);
-			vkFreeMemory(Device, renderInstancedObject.MeshData.IndexBufferMemory, nullptr);
-		}
-
-		// 清理 IndirectScenePass
-		vkDestroyDescriptorSetLayout(Device, IndirectScenePass.DescriptorSetLayout, nullptr);
-		vkDestroyPipelineLayout(Device, IndirectScenePass.PipelineLayout, nullptr);
+		// 清理 BaseSceneIndirectPass
+		vkDestroyDescriptorSetLayout(Device, BaseSceneIndirectPass.DescriptorSetLayout, nullptr);
+		vkDestroyPipelineLayout(Device, BaseSceneIndirectPass.PipelineLayout, nullptr);
 		for (uint32_t i = 0; i < GlobalConstants.SpecConstantsCount; i++)
 		{
-			vkDestroyPipeline(Device, IndirectScenePass.Pipelines[i], nullptr);
-			vkDestroyPipeline(Device, IndirectScenePass.PipelinesInstanced[i], nullptr);
+			vkDestroyPipeline(Device, BaseSceneIndirectPass.Pipelines[i], nullptr);
+			vkDestroyPipeline(Device, BaseSceneIndirectPass.PipelinesInstanced[i], nullptr);
 		}
-		for (size_t i = 0; i < IndirectScenePass.RenderIndirectObject.size(); i++)
+
+		// 清理 BaseSceneDeferredPass
+#if ENABLE_DEFEERED_RENDERING
+		vkDestroyDescriptorSetLayout(Device, BaseSceneDeferredPass.LightingDescriptorSetLayout, nullptr);
+		vkDestroyDescriptorPool(Device, BaseSceneDeferredPass.LightingDescriptorPool, nullptr);
+		vkDestroyPipelineLayout(Device, BaseSceneDeferredPass.LightingPipelineLayout, nullptr);
+		for (uint32_t i = 0; i < GlobalConstants.SpecConstantsCount; i++)
 		{
-			FRenderIndirectObject& RenderIndirectObject = IndirectScenePass.RenderIndirectObject[i];
-
-			vkDestroyDescriptorPool(Device, RenderIndirectObject.MaterialData.DescriptorPool, nullptr);
-
-			for (size_t j = 0; j < RenderIndirectObject.MaterialData.TextureImages.size(); j++)
-			{
-				vkDestroyImageView(Device, RenderIndirectObject.MaterialData.TextureImageViews[j], nullptr);
-				vkDestroySampler(Device, RenderIndirectObject.MaterialData.TextureSamplers[j], nullptr);
-				vkDestroyImage(Device, RenderIndirectObject.MaterialData.TextureImages[j], nullptr);
-				vkFreeMemory(Device, RenderIndirectObject.MaterialData.TextureImageMemorys[j], nullptr);
-			}
-			vkDestroyBuffer(Device, RenderIndirectObject.MeshData.VertexBuffer, nullptr);
-			vkFreeMemory(Device, RenderIndirectObject.MeshData.VertexBufferMemory, nullptr);
-			vkDestroyBuffer(Device, RenderIndirectObject.MeshData.IndexBuffer, nullptr);
-			vkFreeMemory(Device, RenderIndirectObject.MeshData.IndexBufferMemory, nullptr);
-			vkDestroyBuffer(Device, RenderIndirectObject.IndirectCommandsBuffer, nullptr);
-			vkFreeMemory(Device, RenderIndirectObject.IndirectCommandsBufferMemory, nullptr);
+			vkDestroyPipeline(Device, BaseSceneDeferredPass.LightingPipelines[i], nullptr);
 		}
-		for (size_t i = 0; i < IndirectScenePass.RenderIndirectInstancedObject.size(); i++)
+		vkDestroyRenderPass(Device, BaseSceneDeferredPass.SceneRenderPass, nullptr);
+		vkDestroyFramebuffer(Device, BaseSceneDeferredPass.SceneFrameBuffer, nullptr);
+		vkDestroyDescriptorSetLayout(Device, BaseSceneDeferredPass.SceneDescriptorSetLayout, nullptr);
+		vkDestroyPipelineLayout(Device, BaseSceneDeferredPass.ScenePipelineLayout, nullptr);
+		for (uint32_t i = 0; i < GlobalConstants.SpecConstantsCount; i++)
 		{
-			FRenderIndirectInstancedObject& RenderIndirectInstancedObject = IndirectScenePass.RenderIndirectInstancedObject[i];
-
-			vkDestroyDescriptorPool(Device, RenderIndirectInstancedObject.MaterialData.DescriptorPool, nullptr);
-
-			for (size_t j = 0; j < RenderIndirectInstancedObject.MaterialData.TextureImages.size(); j++)
-			{
-				vkDestroyImageView(Device, RenderIndirectInstancedObject.MaterialData.TextureImageViews[j], nullptr);
-				vkDestroySampler(Device, RenderIndirectInstancedObject.MaterialData.TextureSamplers[j], nullptr);
-				vkDestroyImage(Device, RenderIndirectInstancedObject.MaterialData.TextureImages[j], nullptr);
-				vkFreeMemory(Device, RenderIndirectInstancedObject.MaterialData.TextureImageMemorys[j], nullptr);
-			}
-
-			vkDestroyBuffer(Device, RenderIndirectInstancedObject.MeshData.InstancedBuffer, nullptr);
-			vkFreeMemory(Device, RenderIndirectInstancedObject.MeshData.InstancedBufferMemory, nullptr);
-			vkDestroyBuffer(Device, RenderIndirectInstancedObject.MeshData.VertexBuffer, nullptr);
-			vkFreeMemory(Device, RenderIndirectInstancedObject.MeshData.VertexBufferMemory, nullptr);
-			vkDestroyBuffer(Device, RenderIndirectInstancedObject.MeshData.IndexBuffer, nullptr);
-			vkFreeMemory(Device, RenderIndirectInstancedObject.MeshData.IndexBufferMemory, nullptr);
-			vkDestroyBuffer(Device, RenderIndirectInstancedObject.IndirectCommandsBuffer, nullptr);
-			vkFreeMemory(Device, RenderIndirectInstancedObject.IndirectCommandsBufferMemory, nullptr);
+			vkDestroyPipeline(Device, BaseSceneDeferredPass.ScenePipelines[i], nullptr);
+			vkDestroyPipeline(Device, BaseSceneDeferredPass.ScenePipelinesInstanced[i], nullptr);
 		}
+		vkDestroyImageView(Device, GBuffer.DepthStencilImageView, nullptr);
+		vkDestroySampler(Device, GBuffer.DepthStencilSampler, nullptr);
+		vkDestroyImage(Device, GBuffer.DepthStencilImage, nullptr);
+		vkFreeMemory(Device, GBuffer.DepthStencilMemory, nullptr);
+		vkDestroyImageView(Device, GBuffer.SceneColorImageView, nullptr);
+		vkDestroySampler(Device, GBuffer.SceneColorSampler, nullptr);
+		vkDestroyImage(Device, GBuffer.SceneColorImage, nullptr);
+		vkFreeMemory(Device, GBuffer.SceneColorMemory, nullptr);
+		vkDestroyImageView(Device, GBuffer.GBufferAImageView, nullptr);
+		vkDestroySampler(Device, GBuffer.GBufferASampler, nullptr);
+		vkDestroyImage(Device, GBuffer.GBufferAImage, nullptr);
+		vkFreeMemory(Device, GBuffer.GBufferAMemory, nullptr);
+		vkDestroyImageView(Device, GBuffer.GBufferBImageView, nullptr);
+		vkDestroySampler(Device, GBuffer.GBufferBSampler, nullptr);
+		vkDestroyImage(Device, GBuffer.GBufferBImage, nullptr);
+		vkFreeMemory(Device, GBuffer.GBufferBMemory, nullptr);
+		vkDestroyImageView(Device, GBuffer.GBufferCImageView, nullptr);
+		vkDestroySampler(Device, GBuffer.GBufferCSampler, nullptr);
+		vkDestroyImage(Device, GBuffer.GBufferCImage, nullptr);
+		vkFreeMemory(Device, GBuffer.GBufferCMemory, nullptr);
+		vkDestroyImageView(Device, GBuffer.GBufferDImageView, nullptr);
+		vkDestroySampler(Device, GBuffer.GBufferDSampler, nullptr);
+		vkDestroyImage(Device, GBuffer.GBufferDImage, nullptr);
+		vkFreeMemory(Device, GBuffer.GBufferDMemory, nullptr);
+#endif
 
 		vkDestroyCommandPool(Device, CommandPool, nullptr);
 
@@ -2887,13 +3625,13 @@ protected:
 	VkSurfaceFormatKHR ChooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats)
 	{
 		// 找到合适的图像格式
-		// VK_FORMAT_B8G8R8A8_SRGB 将图像BGRA存储在 unsigned normalized format 中，使用SRGB 非线性编码，颜色空间为非线性空间，不用Gamma矫正最终结果
-		// VK_FORMAT_B8G8R8A8_UNORM 将图像BGRA存储在 unsigned normalized format 中，颜色空间为线性空间，像素的最终输出颜色需要Gamma矫正
+		// VK_FORMAT_R8G8B8A8_SNORM 将图像BGRA存储在 unsigned normalized format 中，使用SRGB 非线性编码，颜色空间为非线性空间，不用Gamma矫正最终结果
+		// VK_FORMAT_R8G8B8A8_UNORM 将图像BGRA存储在 unsigned normalized format 中，颜色空间为线性空间，像素的最终输出颜色需要Gamma矫正
 		for (const auto& availableFormat : availableFormats)
 		{
 			// 将 FrameBuffer Image 设置为线性空间，方便 PBR 的工作流以及颜色矫正（ColorCorrection）
-			//if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB && availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
-			if (availableFormat.format == VK_FORMAT_B8G8R8A8_UNORM)
+			//if (availableFormat.format == VK_FORMAT_R8G8B8A8_SRGB && availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+			if (availableFormat.format == VK_FORMAT_R8G8B8A8_UNORM)
 			{
 				return availableFormat;
 			}
@@ -3257,21 +3995,14 @@ protected:
 		ShadowmapPass.zNear = zNear;
 		ShadowmapPass.zFar = zFar;
 
-		FLight light;
-		glm::vec3 center = glm::vec3(0.0f);
-		glm::vec3 lightPos = glm::vec3(4.0f, 0.0f, 4.0f);
 		float RollLight = GlobalInput.bPlayLightRoll ?
-			(GlobalInput.RollLight + GlobalInput.DeltaTime * 45.0f) : GlobalInput.RollLight;
+			(GlobalInput.RollLight + GlobalInput.DeltaTime) : GlobalInput.RollLight;
 		GlobalInput.RollLight = RollLight;
-		lightPos.x = cos(glm::radians(RollLight)) * 4.0f;
-		lightPos.y = sin(glm::radians(RollLight)) * 4.0f;
-		glm::vec3 lightDir = glm::normalize(lightPos - center);
 
-		light.Position = glm::vec4(lightPos, 0.0);
-		light.Color = glm::vec4(1.0, 1.0, 1.0, 3.0);
-		light.Direction = glm::vec4(lightDir, 0.0);
-		light.LightInfo = glm::vec4(0.0, 0.0, 0.0, 0.0);
+		glm::vec3 center = glm::vec3(0.0f);
 
+		FLight* MoonLight = &View.DirectionalLights[0];
+		glm::vec3 lightPos = glm::vec3(MoonLight->Position.x, MoonLight->Position.y, MoonLight->Position.z);
 		float RollStage = GlobalInput.bPlayStageRoll ?
 			(GlobalInput.RollStage + GlobalInput.DeltaTime * glm::radians(15.0f)) : GlobalInput.RollStage;
 		GlobalInput.RollStage = RollStage;
@@ -3291,19 +4022,27 @@ protected:
 		memcpy(data_base_ubo, &UBOBaseData, sizeof(UBOBaseData));
 		vkUnmapMemory(Device, BaseUniformBuffersMemory[currentImageIdx]);
 
-		FUniformBufferView UBOViewData{};
 		// ShadowmapSpace 的 MVP 矩阵中，M矩阵在FS中计算，所以传入 localToWorld 进入FS
-		UBOViewData.ShadowmapSpace = shadowProjection * shadowView;
-		UBOViewData.LocalToWorld = localToWorld;
-		UBOViewData.CameraInfo = glm::vec4(CameraPos, CameraFOV);
-		UBOViewData.LightsCount = glm::ivec4(1, 0, 0, CubemapMaxMips);
-		UBOViewData.DirectionalLights[0] = light;
-		UBOViewData.zNear = ShadowmapPass.zNear;
-		UBOViewData.zFar = ShadowmapPass.zFar;
+		View.ShadowmapSpace = shadowProjection * shadowView;
+		View.LocalToWorld = localToWorld;
+		View.CameraInfo = glm::vec4(CameraPos, CameraFOV);
+		uint32_t PointLightNum = POINT_LIGHTS_NUM;
+		for (uint32_t i = 0; i < PointLightNum; i++)
+		{
+			float radians = ((float)i / (float)PointLightNum) * 360.0f - RollLight * 100.0f;
+			float distance = ((float)i / (float)PointLightNum) * 5.0f + 2.5f;
+			float X = sin(glm::radians(radians)) * distance;
+			float Y = cos(glm::radians(radians)) * distance;
+			float Z = 1.5;
+			View.PointLights[i].Position = glm::vec4(X, Y, Z, 1.0);
+		}
+		View.LightsCount = glm::ivec4(1, PointLightNum, 0, CubemapMaxMips);
+		View.zNear = ShadowmapPass.zNear;
+		View.zFar = ShadowmapPass.zFar;
 
 		void* data_view;
-		vkMapMemory(Device, ViewUniformBuffersMemory[currentImageIdx], 0, sizeof(UBOViewData), 0, &data_view);
-		memcpy(data_view, &UBOViewData, sizeof(UBOViewData));
+		vkMapMemory(Device, ViewUniformBuffersMemory[currentImageIdx], 0, sizeof(View), 0, &data_view);
+		memcpy(data_view, &View, sizeof(View));
 		vkUnmapMemory(Device, ViewUniformBuffersMemory[currentImageIdx]);
 
 		FUniformBufferBase UBOShadowData{};
@@ -3315,6 +4054,76 @@ protected:
 		vkMapMemory(Device, ShadowmapPass.UniformBuffersMemory[currentImageIdx], 0, sizeof(UBOShadowData), 0, &data_shadow_ubo);
 		memcpy(data_shadow_ubo, &UBOShadowData, sizeof(UBOShadowData));
 		vkUnmapMemory(Device, ShadowmapPass.UniformBuffersMemory[currentImageIdx]);
+
+		ShadowmapPass.RenderObjects.clear();
+		ShadowmapPass.RenderInstancedObjects.clear();
+		ShadowmapPass.RenderIndirectObjects.clear();
+		ShadowmapPass.RenderIndirectInstancedObjects.clear();
+		BaseScenePass.RenderObjects.clear();
+		BaseScenePass.RenderInstancedObjects.clear();
+		BaseSceneIndirectPass.RenderIndirectObjects.clear();
+		BaseSceneIndirectPass.RenderIndirectInstancedObjects.clear();
+		BaseSceneDeferredPass.RenderDeferredObjects.clear();
+		BaseSceneDeferredPass.RenderDeferredInstancedObjects.clear();
+
+		for (size_t i = 0; i < Scene.RenderObjects.size(); i++)
+		{
+			FRenderObject* RenderObject = &Scene.RenderObjects[i];
+			//UpdateSceneDescriptorSet(RenderObject->MateData.DescriptorSets, RenderObject->MateData.TextureImageViews, RenderObject->MateData.TextureSamplers);
+
+			BaseScenePass.RenderObjects.push_back(RenderObject);
+			ShadowmapPass.RenderObjects.push_back(RenderObject);
+		}
+		for (size_t i = 0; i < Scene.RenderInstancedObjects.size(); i++)
+		{
+			FRenderInstancedObject* RenderInstancedObject = &Scene.RenderInstancedObjects[i];
+			//UpdateSceneDescriptorSet(RenderInstancedObject->MateData.DescriptorSets, 
+			//	RenderInstancedObject->MateData.TextureImageViews, RenderInstancedObject->MateData.TextureSamplers);
+
+			BaseScenePass.RenderInstancedObjects.push_back(RenderInstancedObject);\
+			ShadowmapPass.RenderInstancedObjects.push_back(RenderInstancedObject);
+		}
+		for (size_t i = 0; i < Scene.RenderIndirectObjects.size(); i++)
+		{
+			FRenderIndirectObject* RenderIndirectObject = &Scene.RenderIndirectObjects[i];
+			//UpdateSceneDescriptorSet(RenderIndirectObject->MateData.DescriptorSets,
+			//	RenderIndirectObject->MateData.TextureImageViews, RenderIndirectObject->MateData.TextureSamplers);
+
+			BaseSceneIndirectPass.RenderIndirectObjects.push_back(RenderIndirectObject);
+			ShadowmapPass.RenderIndirectObjects.push_back(RenderIndirectObject);
+		}
+		for (size_t i = 0; i < Scene.RenderIndirectInstancedObjects.size(); i++)
+		{
+			FRenderIndirectInstancedObject* RenderIndirectInstancedObject = &Scene.RenderIndirectInstancedObjects[i];
+			//UpdateSceneDescriptorSet(RenderIndirectInstancedObject->MateData.DescriptorSets,
+			//	RenderIndirectInstancedObject->MateData.TextureImageViews, RenderIndirectInstancedObject->MateData.TextureSamplers);
+
+			BaseSceneIndirectPass.RenderIndirectInstancedObjects.push_back(RenderIndirectInstancedObject);
+			ShadowmapPass.RenderIndirectInstancedObjects.push_back(RenderIndirectInstancedObject);
+		}
+#if ENABLE_DEFEERED_RENDERING
+		for (size_t i = 0; i < Scene.RenderDeferredObjects.size(); i++)
+		{
+			FRenderDeferredObject* RenderDeferredObject = &Scene.RenderDeferredObjects[i];
+			//UpdateSceneDescriptorSet(RenderDeferredObject->MateData.DescriptorSets,
+			//	RenderDeferredObject->MateData.TextureImageViews, RenderDeferredObject->MateData.TextureSamplers);
+
+			BaseSceneDeferredPass.RenderDeferredObjects.push_back(RenderDeferredObject);
+			ShadowmapPass.RenderObjects.push_back(RenderDeferredObject);
+		}
+		for (size_t i = 0; i < Scene.RenderDeferredInstancedObjects.size(); i++)
+		{
+			FRenderDeferredInstancedObject* RenderDeferredInstancedObject = &Scene.RenderDeferredInstancedObjects[i];
+			//UpdateSceneDescriptorSet(RenderDeferredInstancedObject->MateData.DescriptorSets,
+			//	RenderDeferredInstancedObject->MateData.TextureImageViews, RenderDeferredInstancedObject->MateData.TextureSamplers);
+
+			BaseSceneDeferredPass.RenderDeferredInstancedObjects.push_back(RenderDeferredInstancedObject);
+			ShadowmapPass.RenderInstancedObjects.push_back(RenderDeferredInstancedObject);
+		}
+#endif
+
+		//UpdateSceneDescriptorSet(SkydomePass.DescriptorSets, SkydomePass.ImageView, SkydomePass.Sampler);
+		//UpdateSceneDescriptorSet(BackgroundPass.DescriptorSets, BackgroundPass.ImageView, BackgroundPass.Sampler);
 	}
 
 	/** 创建Shader模块*/
@@ -3359,18 +4168,16 @@ protected:
 			throw std::runtime_error("failed to Create pipeline layout!");
 		}
 	}
-	
+
 	/**创建图形渲染管线*/
 	void CreateGraphicsPipelines(
 		std::vector<VkPipeline>& outPipelines,
 		const VkPipelineLayout& inPipelineLayout,
+		const VkRenderPass& inRenderPass,
 		const uint32_t inSpecConstantsCount,
-		const VkDescriptorSetLayout& inDescriptorSetLayout,
+		const EGraphicsFlags inGraphicsFlags,
 		const std::string& inVertFilename,
-		const std::string& inFragFilename,
-		const bool bDepthTest = true,
-		const bool bCullBack = true,
-		const bool bInstanced = false)
+		const std::string& inFragFilename)
 	{
 		auto vertShaderCode = LoadShaderSource(inVertFilename);
 		auto fragShaderCode = LoadShaderSource(inFragFilename);
@@ -3400,26 +4207,21 @@ protected:
 
 		// 渲染管线VertexBuffer输入
 		VkPipelineVertexInputStateCreateInfo vertexInputCI{};
-		if (!bDepthTest && !bCullBack) // 如果不做深度检测并且不做背面剔除，那么认为是渲染背景，不需要绑定VBO
+		if (inGraphicsFlags == EGraphicsFlags::Instanced)
 		{
-			vertexInputCI.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-			vertexInputCI.vertexBindingDescriptionCount = 0;
-			vertexInputCI.vertexAttributeDescriptionCount = 0;
-		}
-		else if (bInstanced)
-		{
-			// @Note: this is weird when I put the functions under into "elseif{}",
-			// </> auto bindingInstancedDescriptions = FVertex::GetBindingInstancedDescriptions();
-			// </> auto attributeInstancedDescriptions = FVertex::GetAttributeInstancedDescriptions();
-			// the NVIDIA graphics drivers would crash and report "unload nvoglv64.pdb",
-			// only happen when build Release!
 			vertexInputCI.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 			vertexInputCI.vertexBindingDescriptionCount = static_cast<uint32_t>(bindingInstancedDescriptions.size());
 			vertexInputCI.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeInstancedDescriptions.size());
 			vertexInputCI.pVertexBindingDescriptions = bindingInstancedDescriptions.data();
 			vertexInputCI.pVertexAttributeDescriptions = attributeInstancedDescriptions.data();
 		}
-		else // 正常VBO渲染绑定
+		else if (inGraphicsFlags == EGraphicsFlags::ScreenRect)
+		{
+			vertexInputCI.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+			vertexInputCI.vertexBindingDescriptionCount = 0;
+			vertexInputCI.vertexAttributeDescriptionCount = 0;
+		}
+		else
 		{
 			vertexInputCI.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 			vertexInputCI.vertexBindingDescriptionCount = 1;
@@ -3442,10 +4244,9 @@ protected:
 		rasterizerCI.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
 		rasterizerCI.depthClampEnable = VK_FALSE;
 		rasterizerCI.rasterizerDiscardEnable = VK_FALSE;
-		rasterizerCI.polygonMode = ENABLE_SHOW_WIREFRAME ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL;
+		rasterizerCI.polygonMode = VK_POLYGON_MODE_FILL;
 		rasterizerCI.lineWidth = 1.0f;
-		// 关闭背面剔除，使得材质TwoSide渲染
-		rasterizerCI.cullMode = bCullBack ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
+		rasterizerCI.cullMode = (inGraphicsFlags == EGraphicsFlags::TwoSided) ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
 		rasterizerCI.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 		rasterizerCI.depthBiasEnable = VK_FALSE;
 
@@ -3457,9 +4258,9 @@ protected:
 		// 打开深度测试
 		VkPipelineDepthStencilStateCreateInfo depthStencilCI{};
 		depthStencilCI.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-		depthStencilCI.depthTestEnable = bDepthTest ? VK_TRUE : VK_FALSE;
-		depthStencilCI.depthWriteEnable = bDepthTest ? VK_TRUE : VK_FALSE;
-		depthStencilCI.depthCompareOp = VK_COMPARE_OP_LESS;
+		depthStencilCI.depthTestEnable = (inGraphicsFlags == EGraphicsFlags::DisableDepthTest) ? VK_FALSE : VK_TRUE;
+		depthStencilCI.depthWriteEnable = (inGraphicsFlags == EGraphicsFlags::DisableDepthTest) ? VK_FALSE : VK_TRUE;
+		depthStencilCI.depthCompareOp = (inGraphicsFlags == EGraphicsFlags::Background) ? VK_COMPARE_OP_LESS_OR_EQUAL : VK_COMPARE_OP_LESS_OR_EQUAL;
 		depthStencilCI.depthBoundsTestEnable = VK_FALSE;
 		depthStencilCI.minDepthBounds = 0.0f; // Optional
 		depthStencilCI.maxDepthBounds = 1.0f; // Optional
@@ -3477,10 +4278,33 @@ protected:
 		colorBlendingCI.logicOp = VK_LOGIC_OP_COPY;
 		colorBlendingCI.attachmentCount = 1;
 		colorBlendingCI.pAttachments = &colorBlendAttachment;
+
 		colorBlendingCI.blendConstants[0] = 0.0f;
 		colorBlendingCI.blendConstants[1] = 0.0f;
 		colorBlendingCI.blendConstants[2] = 0.0f;
 		colorBlendingCI.blendConstants[3] = 0.0f;
+
+		if (inGraphicsFlags == EGraphicsFlags::DeferredScene)
+		{
+			std::array<VkPipelineColorBlendAttachmentState, 5> colorBlendAttachments;
+			colorBlendAttachments[0] = colorBlendAttachment;
+			colorBlendAttachments[1] = colorBlendAttachment;
+			colorBlendAttachments[2] = colorBlendAttachment;
+			colorBlendAttachments[3] = colorBlendAttachment;
+			colorBlendAttachments[4] = colorBlendAttachment;
+			colorBlendingCI.attachmentCount = static_cast<uint32_t>(colorBlendAttachments.size());
+			colorBlendingCI.pAttachments = colorBlendAttachments.data();
+		}
+		else if (inGraphicsFlags == EGraphicsFlags::DeferredLighting)
+		{
+			colorBlendingCI.attachmentCount = 1;
+			colorBlendingCI.pAttachments = &colorBlendAttachment;
+		}
+		else
+		{
+			colorBlendingCI.attachmentCount = 1;
+			colorBlendingCI.pAttachments = &colorBlendAttachment;
+		}
 
 		std::vector<VkDynamicState> dynamicStates = {
 			VK_DYNAMIC_STATE_VIEWPORT,
@@ -3500,11 +4324,11 @@ protected:
 		pipelineCI.pViewportState = &viewportStateCI;
 		pipelineCI.pRasterizationState = &rasterizerCI;
 		pipelineCI.pMultisampleState = &multiSamplingCI;
-		pipelineCI.pDepthStencilState = &depthStencilCI; // 加上深度测试
+		pipelineCI.pDepthStencilState = &depthStencilCI;
 		pipelineCI.pColorBlendState = &colorBlendingCI;
 		pipelineCI.pDynamicState = &dynamicStateCI;
 		pipelineCI.layout = inPipelineLayout;
-		pipelineCI.renderPass = RenderPass;
+		pipelineCI.renderPass = inRenderPass;
 		pipelineCI.subpass = 0;
 		pipelineCI.basePipelineHandle = VK_NULL_HANDLE;
 
@@ -3531,6 +4355,367 @@ protected:
 
 		vkDestroyShaderModule(Device, fragShaderModule, nullptr);
 		vkDestroyShaderModule(Device, vertShaderModule, nullptr);
+	}
+
+	/** 通用函数用来创建DescriptorSetLayout*/
+	void CreateDescriptorSetLayout(VkDescriptorSetLayout& outDescriptorSetLayout, const EGraphicsFlags inGraphicsFlags)
+	{
+		uint32_t SamplerNumber = PBR_SAMPLER_NUMBER;
+		if (inGraphicsFlags == EGraphicsFlags::OpaqueScene)
+		{
+			SamplerNumber = PBR_SAMPLER_NUMBER;
+		}
+		else if (inGraphicsFlags == EGraphicsFlags::Background)
+		{
+			SamplerNumber = 1;
+		}
+		else if (inGraphicsFlags == EGraphicsFlags::Skydome)
+		{
+			SamplerNumber = 1;
+		}
+
+		if (inGraphicsFlags == EGraphicsFlags::DeferredLighting)
+		{
+			VkDescriptorSetLayoutBinding viewLayoutBinding{};
+			viewLayoutBinding.binding = 0;
+			viewLayoutBinding.descriptorCount = 1;
+			viewLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+			viewLayoutBinding.pImmutableSamplers = nullptr;
+			viewLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+			// 环境反射Cubemap贴图绑定
+			VkDescriptorSetLayoutBinding cubemapLayoutBinding{};
+			cubemapLayoutBinding.binding = 1;
+			cubemapLayoutBinding.descriptorCount = 1;
+			cubemapLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			cubemapLayoutBinding.pImmutableSamplers = nullptr;
+			cubemapLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+			// 阴影Shadowmap贴图绑定
+			VkDescriptorSetLayoutBinding shadowmapLayoutBinding{};
+			shadowmapLayoutBinding.binding = 2;
+			shadowmapLayoutBinding.descriptorCount = 1;
+			shadowmapLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			shadowmapLayoutBinding.pImmutableSamplers = nullptr;
+			shadowmapLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+			// 将UnifromBufferObject和贴图采样器绑定到DescriptorSetLayout上
+			std::vector<VkDescriptorSetLayoutBinding> bindings;
+			bindings.resize(9);
+			bindings[0] = viewLayoutBinding;
+			bindings[1] = cubemapLayoutBinding;
+			bindings[2] = shadowmapLayoutBinding;
+			for (size_t i = 0; i < 6; i++)
+			{
+				VkDescriptorSetLayoutBinding samplerLayoutBinding{};
+				samplerLayoutBinding.binding = static_cast<uint32_t>(i + 3);
+				samplerLayoutBinding.descriptorCount = 1;
+				samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+				samplerLayoutBinding.pImmutableSamplers = nullptr;
+				samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+				bindings[i + 3] = samplerLayoutBinding;
+			}
+			VkDescriptorSetLayoutCreateInfo layoutInfo{};
+			layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+			layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+			layoutInfo.pBindings = bindings.data();
+			if (vkCreateDescriptorSetLayout(Device, &layoutInfo, nullptr, &BaseSceneDeferredPass.LightingDescriptorSetLayout) != VK_SUCCESS) {
+				throw std::runtime_error("failed to Create descriptor set layout!");
+			}
+		}
+		else
+		{
+			// UnifromBufferObject（ubo）绑定
+			VkDescriptorSetLayoutBinding baseUBOLayoutBinding{};
+			baseUBOLayoutBinding.binding = 0;
+			baseUBOLayoutBinding.descriptorCount = 1;
+			baseUBOLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+			baseUBOLayoutBinding.pImmutableSamplers = nullptr;
+			baseUBOLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+			// UnifromBufferObject（ubo）绑定
+			VkDescriptorSetLayoutBinding viewUBOLayoutBinding{};
+			viewUBOLayoutBinding.binding = 1;
+			viewUBOLayoutBinding.descriptorCount = 1;
+			viewUBOLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+			viewUBOLayoutBinding.pImmutableSamplers = nullptr;
+			viewUBOLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT; // View ubo 主要信息用于 fragment shader
+
+			// 环境反射Cubemap贴图绑定
+			VkDescriptorSetLayoutBinding cubemapLayoutBinding{};
+			cubemapLayoutBinding.binding = 2;
+			cubemapLayoutBinding.descriptorCount = 1;
+			cubemapLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			cubemapLayoutBinding.pImmutableSamplers = nullptr;
+			cubemapLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+			VkDescriptorSetLayoutBinding shadowmapLayoutBinding{};
+			shadowmapLayoutBinding.binding = 3;
+			shadowmapLayoutBinding.descriptorCount = 1;
+			shadowmapLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			shadowmapLayoutBinding.pImmutableSamplers = nullptr;
+			shadowmapLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+			// 将UnifromBufferObject和贴图采样器绑定到DescriptorSetLayout上
+			std::vector<VkDescriptorSetLayoutBinding> bindings;
+			bindings.resize(SamplerNumber + 4); // 这里3是2个UniformBuffer和1个环境Cubemap贴图
+			bindings[0] = baseUBOLayoutBinding;
+			bindings[1] = viewUBOLayoutBinding;
+			bindings[2] = cubemapLayoutBinding;
+			bindings[3] = shadowmapLayoutBinding;
+			for (size_t i = 0; i < SamplerNumber; i++)
+			{
+				VkDescriptorSetLayoutBinding samplerLayoutBinding{};
+				samplerLayoutBinding.binding = static_cast<uint32_t>(i + 4);
+				samplerLayoutBinding.descriptorCount = 1;
+				samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+				samplerLayoutBinding.pImmutableSamplers = nullptr;
+				samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+				bindings[i + 4] = samplerLayoutBinding;
+			}
+			VkDescriptorSetLayoutCreateInfo layoutInfo{};
+			layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+			layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+			layoutInfo.pBindings = bindings.data();
+			if (vkCreateDescriptorSetLayout(Device, &layoutInfo, nullptr, &outDescriptorSetLayout) != VK_SUCCESS) {
+				throw std::runtime_error("failed to Create descriptor set layout!");
+			}
+		}
+	}
+
+	/** 函数用来创建默认的只有一份贴图的DescriptorSets*/
+	void CreateDescriptorSet(std::vector<VkDescriptorSet>& outDescriptorSets, VkDescriptorPool& outDescriptorPool, const VkDescriptorSetLayout& inDescriptorSetLayout, const VkImageView& inImageView, const VkSampler& inSampler)
+	{
+		CreateDescriptorSet(outDescriptorSets, outDescriptorPool, inDescriptorSetLayout, std::vector<VkImageView>{inImageView}, std::vector<VkSampler>{inSampler});
+	}
+
+	/** 通用函数用来创建DescriptorSets*/
+	void CreateDescriptorSet(std::vector<VkDescriptorSet>& outDescriptorSets, VkDescriptorPool& outDescriptorPool,
+		const VkDescriptorSetLayout& inDescriptorSetLayout, const std::vector<VkImageView>& inImageViews, const std::vector<VkSampler>& inSamplers)
+	{
+		uint32_t SamplerNumber = static_cast<uint32_t>(inSamplers.size());
+		std::vector<VkDescriptorPoolSize> poolSizes;
+		poolSizes.resize(SamplerNumber + 4);
+		poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+		poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+		poolSizes[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		poolSizes[2].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+		poolSizes[3].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		poolSizes[3].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+		for (size_t i = 0; i < SamplerNumber; i++)
+		{
+			poolSizes[i + 4].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			poolSizes[i + 4].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+		}
+
+		VkDescriptorPoolCreateInfo poolCI{};
+		poolCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+		poolCI.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+		poolCI.pPoolSizes = poolSizes.data();
+		poolCI.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+
+		if (vkCreateDescriptorPool(Device, &poolCI, nullptr, &outDescriptorPool) != VK_SUCCESS) {
+			throw std::runtime_error("failed to Create descriptor pool!");
+		}
+
+		std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, inDescriptorSetLayout);
+		VkDescriptorSetAllocateInfo allocInfo{};
+		allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+		allocInfo.descriptorPool = outDescriptorPool;
+		allocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+		allocInfo.pSetLayouts = layouts.data();
+
+		outDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+		if (vkAllocateDescriptorSets(Device, &allocInfo, outDescriptorSets.data()) != VK_SUCCESS) {
+			throw std::runtime_error("failed to allocate descriptor sets!");
+		}
+
+		UpdateSceneDescriptorSet(outDescriptorSets, inImageViews, inSamplers);
+	}
+
+	void UpdateSceneDescriptorSet(std::vector<VkDescriptorSet>& outDescriptorSets, const VkImageView& inImageView, const VkSampler& inSampler)
+	{
+		UpdateSceneDescriptorSet(outDescriptorSets, std::vector<VkImageView>{ inImageView }, std::vector<VkSampler>{ inSampler });
+	}
+
+	void UpdateSceneDescriptorSet(std::vector<VkDescriptorSet>& outDescriptorSets, const std::vector<VkImageView>& inImageViews, const std::vector<VkSampler>& inSamplers)
+	{
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+
+			uint32_t write_size = static_cast<uint32_t>(inImageViews.size()) + 4; // 这里加2为 UniformBuffer 的个数
+			std::vector<VkWriteDescriptorSet> descriptorWrites{};
+			descriptorWrites.resize(write_size);
+
+			// 绑定 UnifromBuffer
+			VkDescriptorBufferInfo baseBufferInfo{};
+			baseBufferInfo.buffer = BaseUniformBuffers[i];
+			baseBufferInfo.offset = 0;
+			baseBufferInfo.range = sizeof(FUniformBufferBase);
+
+			descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			descriptorWrites[0].dstSet = outDescriptorSets[i];
+			descriptorWrites[0].dstBinding = 0;
+			descriptorWrites[0].dstArrayElement = 0;
+			descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+			descriptorWrites[0].descriptorCount = 1;
+			descriptorWrites[0].pBufferInfo = &baseBufferInfo;
+
+			// 绑定 UnifromBuffer
+			VkDescriptorBufferInfo viewBufferInfo{};
+			viewBufferInfo.buffer = ViewUniformBuffers[i];
+			viewBufferInfo.offset = 0;
+			viewBufferInfo.range = sizeof(FUniformBufferView);
+
+			descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			descriptorWrites[1].dstSet = outDescriptorSets[i];
+			descriptorWrites[1].dstBinding = 1;
+			descriptorWrites[1].dstArrayElement = 0;
+			descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+			descriptorWrites[1].descriptorCount = 1;
+			descriptorWrites[1].pBufferInfo = &viewBufferInfo;
+
+			VkDescriptorImageInfo imageInfo{};
+			imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			imageInfo.imageView = CubemapImageView;
+			imageInfo.sampler = CubemapSampler;
+
+			descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			descriptorWrites[2].dstSet = outDescriptorSets[i];
+			descriptorWrites[2].dstBinding = 2;
+			descriptorWrites[2].dstArrayElement = 0;
+			descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			descriptorWrites[2].descriptorCount = 1;
+			descriptorWrites[2].pImageInfo = &imageInfo;
+
+			VkDescriptorImageInfo shadowmapImageInfo{};
+			shadowmapImageInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+			shadowmapImageInfo.imageView = ShadowmapPass.ImageView;
+			shadowmapImageInfo.sampler = ShadowmapPass.Sampler;
+
+			descriptorWrites[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			descriptorWrites[3].dstSet = outDescriptorSets[i];
+			descriptorWrites[3].dstBinding = 3;
+			descriptorWrites[3].dstArrayElement = 0;
+			descriptorWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			descriptorWrites[3].descriptorCount = 1;
+			descriptorWrites[3].pImageInfo = &shadowmapImageInfo;
+
+			// 绑定 Textures
+			// descriptorWrites会引用每一个创建的VkDescriptorImageInfo，所以需要用一个数组把它们存储起来
+			std::vector<VkDescriptorImageInfo> imageInfos;
+			imageInfos.resize(inImageViews.size());
+			for (size_t j = 0; j < inImageViews.size(); j++)
+			{
+				VkDescriptorImageInfo imageInfo{};
+				imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+				imageInfo.imageView = inImageViews[j];
+				imageInfo.sampler = inSamplers[j];
+				imageInfos[j] = imageInfo;
+
+				descriptorWrites[j + 4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+				descriptorWrites[j + 4].dstSet = outDescriptorSets[i];
+				descriptorWrites[j + 4].dstBinding = static_cast<uint32_t>(j + 4);
+				descriptorWrites[j + 4].dstArrayElement = 0;
+				descriptorWrites[j + 4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+				descriptorWrites[j + 4].descriptorCount = 1;
+				descriptorWrites[j + 4].pImageInfo = &imageInfos[j]; // 注意，这里是引用了VkDescriptorImageInfo，所有需要创建imageInfos这个数组，存储所有的imageInfo而不是使用局部变量imageInfo
+			}
+
+			vkUpdateDescriptorSets(Device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
+		}
+	}
+
+	void UpdateBaseSceneDeferredPassDescriptorSet()
+	{
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+		{
+			uint32_t write_size = 9;
+			std::vector<VkWriteDescriptorSet> descriptorWrites{};
+			descriptorWrites.resize(write_size);
+
+			// 绑定 UnifromBuffer
+			VkDescriptorBufferInfo viewBufferInfo{};
+			viewBufferInfo.buffer = ViewUniformBuffers[i];
+			viewBufferInfo.offset = 0;
+			viewBufferInfo.range = sizeof(FUniformBufferView);
+
+			descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			descriptorWrites[0].dstSet = BaseSceneDeferredPass.LightingDescriptorSets[i];
+			descriptorWrites[0].dstBinding = 0;
+			descriptorWrites[0].dstArrayElement = 0;
+			descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+			descriptorWrites[0].descriptorCount = 1;
+			descriptorWrites[0].pBufferInfo = &viewBufferInfo;
+
+			VkDescriptorImageInfo cubemapImageInfo{};
+			cubemapImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			cubemapImageInfo.imageView = CubemapImageView;
+			cubemapImageInfo.sampler = CubemapSampler;
+
+			descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			descriptorWrites[1].dstSet = BaseSceneDeferredPass.LightingDescriptorSets[i];
+			descriptorWrites[1].dstBinding = 1;
+			descriptorWrites[1].dstArrayElement = 0;
+			descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			descriptorWrites[1].descriptorCount = 1;
+			descriptorWrites[1].pImageInfo = &cubemapImageInfo;
+
+			VkDescriptorImageInfo shadowmapImageInfo{};
+			shadowmapImageInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+			shadowmapImageInfo.imageView = ShadowmapPass.ImageView;
+			shadowmapImageInfo.sampler = ShadowmapPass.Sampler;
+
+			descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			descriptorWrites[2].dstSet = BaseSceneDeferredPass.LightingDescriptorSets[i];
+			descriptorWrites[2].dstBinding = 2;
+			descriptorWrites[2].dstArrayElement = 0;
+			descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			descriptorWrites[2].descriptorCount = 1;
+			descriptorWrites[2].pImageInfo = &shadowmapImageInfo;
+
+			std::vector<VkImageView> ImageViews;
+			ImageViews.resize(6);
+			std::vector<VkSampler> Samplers;
+			Samplers.resize(6);
+			ImageViews[0] = GBuffer.DepthStencilImageView;
+			ImageViews[1] = GBuffer.SceneColorImageView;
+			ImageViews[2] = GBuffer.GBufferAImageView;
+			ImageViews[3] = GBuffer.GBufferBImageView;
+			ImageViews[4] = GBuffer.GBufferCImageView;
+			ImageViews[5] = GBuffer.GBufferDImageView;
+			Samplers[0] = GBuffer.DepthStencilSampler;
+			Samplers[1] = GBuffer.SceneColorSampler;
+			Samplers[2] = GBuffer.GBufferASampler;
+			Samplers[3] = GBuffer.GBufferBSampler;
+			Samplers[4] = GBuffer.GBufferCSampler;
+			Samplers[5] = GBuffer.GBufferDSampler;
+			// 绑定 Textures
+			// descriptorWrites会引用每一个创建的VkDescriptorImageInfo，所以需要用一个数组把它们存储起来
+			std::vector<VkDescriptorImageInfo> imageInfos;
+			imageInfos.resize(ImageViews.size());
+			for (size_t j = 0; j < ImageViews.size(); j++)
+			{
+				VkDescriptorImageInfo imageInfo{};
+				imageInfo.imageLayout = (j == 0) ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+				imageInfo.imageView = ImageViews[j];
+				imageInfo.sampler = Samplers[j];
+				imageInfos[j] = imageInfo;
+
+				descriptorWrites[j + 3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+				descriptorWrites[j + 3].dstSet = BaseSceneDeferredPass.LightingDescriptorSets[i];
+				descriptorWrites[j + 3].dstBinding = static_cast<uint32_t>(j + 3);
+				descriptorWrites[j + 3].dstArrayElement = 0;
+				descriptorWrites[j + 3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+				descriptorWrites[j + 3].descriptorCount = 1;
+				descriptorWrites[j + 3].pImageInfo = &imageInfos[j];
+			}
+
+			vkUpdateDescriptorSets(Device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
+		}
 	}
 
 	/** 读取一个贴图路径，然后创建图像、视口和采样器等资源*/
@@ -3589,7 +4774,7 @@ protected:
 	}
 
 	/** 读取一个HDR贴图路径，然后创建CUBEMAP图像资源*/
-	void CreateImageHDRContext(
+	void CreateImageCubeContext(
 		VkImage& outImage,
 		VkDeviceMemory& outMemory,
 		VkImageView& outImageView,
@@ -4097,227 +5282,23 @@ protected:
 		}
 	}
 
-	/** 通用函数用来创建DescriptorSetLayout*/
-	void CreateDescriptorSetLayout(VkDescriptorSetLayout& outDescriptorSetLayout, uint32_t inSamplerNumber = 1)
-	{
-		// UnifromBufferObject（ubo）绑定
-		VkDescriptorSetLayoutBinding baseUBOLayoutBinding{};
-		baseUBOLayoutBinding.binding = 0;
-		baseUBOLayoutBinding.descriptorCount = 1;
-		baseUBOLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-		baseUBOLayoutBinding.pImmutableSamplers = nullptr;
-		baseUBOLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-
-		// UnifromBufferObject（ubo）绑定
-		VkDescriptorSetLayoutBinding viewUBOLayoutBinding{};
-		viewUBOLayoutBinding.binding = 1;
-		viewUBOLayoutBinding.descriptorCount = 1;
-		viewUBOLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-		viewUBOLayoutBinding.pImmutableSamplers = nullptr;
-		viewUBOLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT; // View ubo 主要信息用于 fragment shader
-
-		// 环境反射Cubemap贴图绑定
-		VkDescriptorSetLayoutBinding cubemapLayoutBinding{};
-		cubemapLayoutBinding.binding = 2;
-		cubemapLayoutBinding.descriptorCount = 1;
-		cubemapLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-		cubemapLayoutBinding.pImmutableSamplers = nullptr;
-		cubemapLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-		VkDescriptorSetLayoutBinding shadowmapLayoutBinding{};
-		shadowmapLayoutBinding.binding = 3;
-		shadowmapLayoutBinding.descriptorCount = 1;
-		shadowmapLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-		shadowmapLayoutBinding.pImmutableSamplers = nullptr;
-		shadowmapLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-		// 将UnifromBufferObject和贴图采样器绑定到DescriptorSetLayout上
-		std::vector<VkDescriptorSetLayoutBinding> bindings;
-		bindings.resize(inSamplerNumber + 4); // 这里3是2个UniformBuffer和1个环境Cubemap贴图
-		bindings[0] = baseUBOLayoutBinding;
-		bindings[1] = viewUBOLayoutBinding;
-		bindings[2] = cubemapLayoutBinding;
-		bindings[3] = shadowmapLayoutBinding;
-		for (size_t i = 0; i < inSamplerNumber; i++)
-		{
-			VkDescriptorSetLayoutBinding samplerLayoutBinding{};
-			samplerLayoutBinding.binding = static_cast<uint32_t>(i + 4);
-			samplerLayoutBinding.descriptorCount = 1;
-			samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-			samplerLayoutBinding.pImmutableSamplers = nullptr;
-			samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-			bindings[i + 4] = samplerLayoutBinding;
-		}
-		VkDescriptorSetLayoutCreateInfo layoutInfo{};
-		layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-		layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
-		layoutInfo.pBindings = bindings.data();
-		if (vkCreateDescriptorSetLayout(Device, &layoutInfo, nullptr, &outDescriptorSetLayout) != VK_SUCCESS) {
-			throw std::runtime_error("failed to Create descriptor set layout!");
-		}
-	}
-
-	/** 通用函数用来创建DescriptorPool
-	 * outDescriptorPool ：输出的DescriptorPool
-	 * inSamplerNumber ：贴图采样器的数量
-	 */
-	void CreateDescriptorPool(VkDescriptorPool& outDescriptorPool, uint32_t inSamplerNumber = 1)
-	{
-		std::vector<VkDescriptorPoolSize> poolSizes;
-		poolSizes.resize(inSamplerNumber + 4); // 这里3是2个UniformBuffer和一个环境Cubemap贴图
-		poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-		poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-		poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-		poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-		poolSizes[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-		poolSizes[2].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-		poolSizes[3].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-		poolSizes[3].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-		for (size_t i = 0; i < inSamplerNumber; i++)
-		{
-			poolSizes[i + 4].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-			poolSizes[i + 4].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-		}
-
-		VkDescriptorPoolCreateInfo poolCI{};
-		poolCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-		poolCI.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
-		poolCI.pPoolSizes = poolSizes.data();
-		poolCI.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-
-		if (vkCreateDescriptorPool(Device, &poolCI, nullptr, &outDescriptorPool) != VK_SUCCESS) {
-			throw std::runtime_error("failed to Create descriptor pool!");
-		}
-	}
-
-	/** 函数用来创建默认的只有一份贴图的DescriptorSets*/
-	void CreateDescriptorSets(std::vector<VkDescriptorSet>& outDescriptorSets, const VkDescriptorPool& inDescriptorPool, const VkDescriptorSetLayout& inDescriptorSetLayout, const VkImageView& inImageView, const VkSampler& inSampler)
-	{
-		std::vector<VkImageView> imageViews;
-		imageViews.push_back(inImageView);
-		std::vector<VkSampler> samplers;
-		samplers.push_back(inSampler);
-		CreateDescriptorSets(outDescriptorSets, inDescriptorPool, inDescriptorSetLayout, imageViews, samplers);
-	}
-
-	/** 通用函数用来创建DescriptorSets*/
-	void CreateDescriptorSets(std::vector<VkDescriptorSet>& outDescriptorSets, const VkDescriptorPool& inDescriptorPool, const VkDescriptorSetLayout& inDescriptorSetLayout, const std::vector<VkImageView>& inImageViews, const std::vector<VkSampler>& inSamplers)
-	{
-		std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, inDescriptorSetLayout);
-		VkDescriptorSetAllocateInfo allocInfo{};
-		allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-		allocInfo.descriptorPool = inDescriptorPool;
-		allocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-		allocInfo.pSetLayouts = layouts.data();
-
-		outDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
-		if (vkAllocateDescriptorSets(Device, &allocInfo, outDescriptorSets.data()) != VK_SUCCESS) {
-			throw std::runtime_error("failed to allocate descriptor sets!");
-		}
-
-		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-
-			uint32_t write_size = static_cast<uint32_t>(inImageViews.size()) + 4; // 这里加2为 UniformBuffer 的个数
-			std::vector<VkWriteDescriptorSet> descriptorWrites{};
-			descriptorWrites.resize(write_size);
-
-			// 绑定 UnifromBuffer
-			VkDescriptorBufferInfo baseBufferInfo{};
-			baseBufferInfo.buffer = BaseUniformBuffers[i];
-			baseBufferInfo.offset = 0;
-			baseBufferInfo.range = sizeof(FUniformBufferBase);
-
-			descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-			descriptorWrites[0].dstSet = outDescriptorSets[i];
-			descriptorWrites[0].dstBinding = 0;
-			descriptorWrites[0].dstArrayElement = 0;
-			descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-			descriptorWrites[0].descriptorCount = 1;
-			descriptorWrites[0].pBufferInfo = &baseBufferInfo;
-
-			// 绑定 UnifromBuffer
-			VkDescriptorBufferInfo viewBufferInfo{};
-			viewBufferInfo.buffer = ViewUniformBuffers[i];
-			viewBufferInfo.offset = 0;
-			viewBufferInfo.range = sizeof(FUniformBufferView);
-
-			descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-			descriptorWrites[1].dstSet = outDescriptorSets[i];
-			descriptorWrites[1].dstBinding = 1;
-			descriptorWrites[1].dstArrayElement = 0;
-			descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-			descriptorWrites[1].descriptorCount = 1;
-			descriptorWrites[1].pBufferInfo = &viewBufferInfo;
-
-			VkDescriptorImageInfo imageInfo{};
-			imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-			imageInfo.imageView = CubemapImageView;
-			imageInfo.sampler = CubemapSampler;
-
-			descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-			descriptorWrites[2].dstSet = outDescriptorSets[i];
-			descriptorWrites[2].dstBinding = 2;
-			descriptorWrites[2].dstArrayElement = 0;
-			descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-			descriptorWrites[2].descriptorCount = 1;
-			descriptorWrites[2].pImageInfo = &imageInfo;
-
-			VkDescriptorImageInfo shadowmapImageInfo{};
-			shadowmapImageInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-			shadowmapImageInfo.imageView = ShadowmapPass.ImageView;
-			shadowmapImageInfo.sampler = ShadowmapPass.Sampler;
-
-			descriptorWrites[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-			descriptorWrites[3].dstSet = outDescriptorSets[i];
-			descriptorWrites[3].dstBinding = 3;
-			descriptorWrites[3].dstArrayElement = 0;
-			descriptorWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-			descriptorWrites[3].descriptorCount = 1;
-			descriptorWrites[3].pImageInfo = &shadowmapImageInfo;
-
-			// 绑定 Textures
-			// descriptorWrites会引用每一个创建的VkDescriptorImageInfo，所以需要用一个数组把它们存储起来
-			std::vector<VkDescriptorImageInfo> imageInfos;
-			imageInfos.resize(inImageViews.size());
-			for (size_t j = 0; j < inImageViews.size(); j++)
-			{
-				VkDescriptorImageInfo imageInfo{};
-				imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-				imageInfo.imageView = inImageViews[j];
-				imageInfo.sampler = inSamplers[j];
-				imageInfos[j] = imageInfo;
-
-				descriptorWrites[j + 4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-				descriptorWrites[j + 4].dstSet = outDescriptorSets[i];
-				descriptorWrites[j + 4].dstBinding = static_cast<uint32_t>(j + 4);
-				descriptorWrites[j + 4].dstArrayElement = 0;
-				descriptorWrites[j + 4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-				descriptorWrites[j + 4].descriptorCount = 1;
-				descriptorWrites[j + 4].pImageInfo = &imageInfos[j]; // 注意，这里是引用了VkDescriptorImageInfo，所有需要创建imageInfos这个数组，存储所有的imageInfo而不是使用局部变量imageInfo
-			}
-
-			vkUpdateDescriptorSets(Device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
-		}
-	}
-
 	template <typename T>
-	void CreateRenderObject(T& outObject, const std::string& objfile, const std::vector<std::string>& pngfiles)
+	void CreateRenderObject(T& outObject, const std::string& objfile, const std::vector<std::string>& pngfiles, const VkDescriptorSetLayout& inDescriptorSetLayout)
 	{
 		CreateMesh(outObject.MeshData.Vertices, outObject.MeshData.Indices, objfile);
-		outObject.MaterialData.TextureImages.resize(pngfiles.size());
-		outObject.MaterialData.TextureImageMemorys.resize(pngfiles.size());
-		outObject.MaterialData.TextureImageViews.resize(pngfiles.size());
-		outObject.MaterialData.TextureSamplers.resize(pngfiles.size());
+		outObject.MateData.TextureImages.resize(pngfiles.size());
+		outObject.MateData.TextureImageMemorys.resize(pngfiles.size());
+		outObject.MateData.TextureImageViews.resize(pngfiles.size());
+		outObject.MateData.TextureSamplers.resize(pngfiles.size());
 		for (size_t i = 0; i < pngfiles.size(); i++)
 		{
 			// 一个便捷函数，创建图像，视口和采样器
 			bool sRGB = (i == 0);
 			CreateImageContext(
-				outObject.MaterialData.TextureImages[i],
-				outObject.MaterialData.TextureImageMemorys[i],
-				outObject.MaterialData.TextureImageViews[i],
-				outObject.MaterialData.TextureSamplers[i],
+				outObject.MateData.TextureImages[i],
+				outObject.MateData.TextureImageMemorys[i],
+				outObject.MateData.TextureImageViews[i],
+				outObject.MateData.TextureSamplers[i],
 				pngfiles[i], sRGB);
 		}
 
@@ -4329,15 +5310,12 @@ protected:
 			outObject.MeshData.IndexBuffer,
 			outObject.MeshData.IndexBufferMemory,
 			outObject.MeshData.Indices);
-		CreateDescriptorPool(
-			outObject.MaterialData.DescriptorPool,
-			static_cast<uint32_t>(pngfiles.size() + 1));
-		CreateDescriptorSets(
-			outObject.MaterialData.DescriptorSets,
-			outObject.MaterialData.DescriptorPool,
-			BaseScenePass.DescriptorSetLayout,
-			outObject.MaterialData.TextureImageViews,
-			outObject.MaterialData.TextureSamplers);
+		CreateDescriptorSet(
+			outObject.MateData.DescriptorSets,
+			outObject.MateData.DescriptorPool,
+			inDescriptorSetLayout,
+			outObject.MateData.TextureImageViews,
+			outObject.MateData.TextureSamplers);
 	};
 
 	template <typename T>
@@ -4346,19 +5324,19 @@ protected:
 		CreateMeshlet(outObject.MeshData.Vertices, outObject.MeshData.Indices,
 			outObject.MeshData.MeshletSet.Meshlets, outObject.MeshData.MeshletSet.MeshletVertices, outObject.MeshData.MeshletSet.MeshletTriangles, objfile);
 
-		outObject.MaterialData.TextureImages.resize(pngfiles.size());
-		outObject.MaterialData.TextureImageMemorys.resize(pngfiles.size());
-		outObject.MaterialData.TextureImageViews.resize(pngfiles.size());
-		outObject.MaterialData.TextureSamplers.resize(pngfiles.size());
+		outObject.MateData.TextureImages.resize(pngfiles.size());
+		outObject.MateData.TextureImageMemorys.resize(pngfiles.size());
+		outObject.MateData.TextureImageViews.resize(pngfiles.size());
+		outObject.MateData.TextureSamplers.resize(pngfiles.size());
 		for (size_t i = 0; i < pngfiles.size(); i++)
 		{
 			// 一个便捷函数，创建图像，视口和采样器
 			bool sRGB = (i == 0);
 			CreateImageContext(
-				outObject.MaterialData.TextureImages[i],
-				outObject.MaterialData.TextureImageMemorys[i],
-				outObject.MaterialData.TextureImageViews[i],
-				outObject.MaterialData.TextureSamplers[i],
+				outObject.MateData.TextureImages[i],
+				outObject.MateData.TextureImageMemorys[i],
+				outObject.MateData.TextureImageViews[i],
+				outObject.MateData.TextureSamplers[i],
 				pngfiles[i], sRGB);
 		}
 
@@ -4389,20 +5367,18 @@ protected:
 			outObject.MeshData.IndexBuffer,
 			outObject.MeshData.IndexBufferMemory,
 			outObject.MeshData.Indices);
-		CreateDescriptorPool(
-			outObject.MaterialData.DescriptorPool,
-			static_cast<uint32_t>(pngfiles.size() + 1));
-		CreateDescriptorSets(
-			outObject.MaterialData.DescriptorSets,
-			outObject.MaterialData.DescriptorPool,
+		CreateDescriptorSet(
+			outObject.MateData.DescriptorSets,
+			outObject.MateData.DescriptorPool,
 			BaseScenePass.DescriptorSetLayout,
-			outObject.MaterialData.TextureImageViews,
-			outObject.MaterialData.TextureSamplers);
+			outObject.MateData.TextureImageViews,
+			outObject.MateData.TextureSamplers);
 	};
 
 	template <typename T>
 	void CreateInstancedBuffer(T& outObject, const std::vector<FInstanceData>& inInstanceData)
 	{
+		outObject.InstanceCount = static_cast<uint32_t>(inInstanceData.size());
 		VkDeviceSize bufferSize = inInstanceData.size() * sizeof(FInstanceData);
 		VkBuffer stagingBuffer;
 		VkDeviceMemory stagingBufferMemory;
@@ -4461,7 +5437,7 @@ protected:
 	};
 
 	template <typename T>
-	void CreateRenderObjectsFromProfabs(std::vector<T>& outRenderObjects, const std::string& inAssetName, const std::vector<FInstanceData>& inInstanceData = {})
+	void CreateRenderObjectsFromProfabs(std::vector<T>& outRenderObjects, const VkDescriptorSetLayout& inLayout, const std::string& inAssetName, const std::vector<FInstanceData>& inInstanceData = {})
 	{
 		std::string asset_set_dir = "Resources/Profabs";
 		for (const auto& folder : std::filesystem::directory_iterator(asset_set_dir))
@@ -4509,6 +5485,14 @@ protected:
 				if (!std::filesystem::exists(texture_ao)) {
 					texture_ao = std::string("Resources/Contents/Textures/default_white.png");
 				}
+				std::string texture_ev = textures_dir + model_name + std::string("_ev.png");
+				if (!std::filesystem::exists(texture_ev)) {
+					texture_ev = std::string("Resources/Contents/Textures/default_black.png");
+				}
+				std::string texture_ms = textures_dir + model_name + std::string("_ms.png");
+				if (!std::filesystem::exists(texture_ms)) {
+					texture_ms = std::string("Resources/Contents/Textures/default_white.png");
+				}
 
 				T asset;
 				std::string asset_obj = model_file;
@@ -4517,8 +5501,11 @@ protected:
 					texture_m,
 					texture_r,
 					texture_n,
-					texture_ao };
-				CreateRenderObject<T>(asset, asset_obj, asset_imgs);
+					texture_ao,
+					texture_ev,
+					texture_ms};
+
+				CreateRenderObject<T>(asset, asset_obj, asset_imgs, inLayout);
 				if (inInstanceData.size() > 0)
 				{
 					CreateInstancedBuffer<T>(asset, inInstanceData);
@@ -4549,8 +5536,9 @@ private:
 
 		return buffer;
 	}
-	
-	static void LoadTextureAssetInternal(const std::string& filename, std::vector<uint8_t>& outPixels, int& outWidth, int& outHeight, int& outChannels, int& outMipLevels)
+
+	/** 从图片文件中读取贴像素信息*/
+	static void LoadTextureAsset(const std::string& filename, std::vector<uint8_t>& outPixels, int& outWidth, int& outHeight, int& outChannels, int& outMipLevels)
 	{
 		stbi_hdr_to_ldr_scale(2.2f);
 		stbi_uc* pixels = stbi_load(filename.c_str(), &outWidth, &outHeight, &outChannels, STBI_rgb_alpha);
@@ -4566,94 +5554,8 @@ private:
 		stbi_image_free(pixels);
 	}
 
-	/** 从图片文件中读取贴像素信息*/
-	static void LoadTextureAsset(const std::string& filename, std::vector<uint8_t>& outPixels, int& outWidth, int& outHeight, int& outChannels, int& outMipLevels)
-	{
-#if ENABLE_CACHE_FILE
-		struct FTextureCache{
-			// https://stackoverflow.com/questions/57348861/load-and-save-a-large-amount-of-structured-data-to-and-from-a-file-c
-			void save(std::ofstream& output) const
-			{
-				size_t size;
-				
-				// Pixels
-				// https://stackoverflow.com/questions/6406356/how-to-write-vector-values-to-a-file
-				//std::ostream_iterator<uint8_t> fout_iterator(output, "\n");
-				//std::copy(std::begin(Pixels), std::end(Pixels), fout_iterator);
-				
-				// https://cplusplus.com/forum/beginner/76436/
-				size = Pixels.size();
-				output.write((char*)&size,sizeof(size));
-				output.write((const char*)&Pixels[0], size);
-
-				output.write((char*)&Width,sizeof(Width));
-				output.write((char*)&Height,sizeof(Height));
-				output.write((char*)&Channels,sizeof(Channels));
-				output.write((char*)&MipLevels,sizeof(MipLevels));
-			}
-			
-			void load(std::ifstream& input)
-			{
-				size_t size;
-				
-				input.read((char*)&size,sizeof(size));
-				Pixels.resize(size);
-				for (unsigned i=0; i<size; ++i)
-				{
-					input.read((char*)&Pixels[i],sizeof(uint8_t));
-				}
-				// https://gist.github.com/looopTools/64edd6f0be3067971e0595e1e4328cbc
-				//std::vector<uint8_t> TempPixels((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-				//Pixels = TempPixels;
-				input.read((char*)&Height,sizeof(Height));
-				input.read((char*)&Width,sizeof(Width));
-				input.read((char*)&Channels,sizeof(Channels));
-				input.read((char*)&MipLevels,sizeof(MipLevels));
-			}
-			int Width, Height, Channels, MipLevels;
-			std::vector<uint8_t> Pixels;
-
-			static std::string findCache(const std::string& inFilename)
-			{
-				std::string outFilename = inFilename;
-				return outFilename.replace(inFilename.find(".png"), sizeof(".png") - 1, ".cache");
-			};
-		} cache;
-		
-		std::string cachefile = cache.findCache(filename);
-
-		if (std::filesystem::exists(cachefile))
-		{
-			std::ifstream iout(cachefile, std::ios::in | std::ios::binary);
-			cache.load(iout);
-			iout.close();
-
-			outMipLevels = cache.MipLevels;
-			outChannels = cache.Channels;
-			outHeight = cache.Height;
-			outWidth = cache.Width;
-			outPixels = cache.Pixels;
-		}
-		else
-		{
-			LoadTextureAssetInternal(filename, outPixels, outWidth, outHeight, outChannels, outMipLevels);
-			
-			cache.Pixels = outPixels;
-			cache.Width = outWidth;
-			cache.Height = outHeight;
-			cache.Channels = outChannels;
-			cache.MipLevels = outMipLevels;
-			
-			std::ofstream fout(cachefile, std::ios::out | std::ios::binary);
-			cache.save(fout);
-			fout.close();
-		}
-#else
-		LoadTextureAssetInternal(filename, outPixels, outWidth, outHeight, outChannels, outMipLevels);
-#endif
-	}
-
-	static void LoadMeshAssetInternal(const std::string& filename, std::vector<FVertex>& outVertices, std::vector<uint32_t>& outIndices)
+	/** 从模型文件中读取贴顶点信息*/
+	static void LoadMeshAsset(const std::string& filename, std::vector<FVertex>& outVertices, std::vector<uint32_t>& outIndices)
 	{
 		tinyobj::attrib_t attrib;
 		std::vector<tinyobj::shape_t> shapes;
@@ -4698,80 +5600,6 @@ private:
 				outIndices.push_back(uniqueVertices[vertex]);
 			}
 		}
-	}
-
-	/** 从模型文件中读取贴顶点信息*/
-	static void LoadMeshAsset(const std::string& filename, std::vector<FVertex>& outVertices, std::vector<uint32_t>& outIndices)
-	{
-#if ENABLE_CACHE_FILE
-		struct FMeshCache{
-			void save(std::ofstream& output) const
-			{
-				size_t size;
-				
-				size = Vertices.size();
-				output.write((char*)&size,sizeof(size));
-				output.write((char*)&Vertices[0], size * sizeof(FVertex));
-
-				size = Indices.size();
-				output.write((char*)&size,sizeof(size));
-				output.write((char*)&Indices[0], size * sizeof(uint32_t));
-			}
-			
-			void load(std::ifstream& input)
-			{
-				size_t size;
-				
-				input.read((char*)&size,sizeof(size));
-				Vertices.resize(size);
-				for (unsigned i=0; i<size; ++i)
-				{
-					input.read((char*)&Vertices[i],sizeof(FVertex));
-				}
-
-				input.read((char*)&size,sizeof(size));
-				Indices.resize(size);
-				for (unsigned i=0; i<size; ++i)
-				{
-					input.read((char*)&Indices[i],sizeof(uint32_t));
-				}
-			}
-			
-			static std::string findCache(const std::string& inFilename)
-			{
-				std::string outFilename = inFilename;
-				return outFilename.replace(inFilename.find(".obj"), sizeof(".obj") - 1, ".cache");
-			};
-
-			std::vector<FVertex> Vertices;
-			std::vector<uint32_t> Indices;
-		} cache;
-
-		std::string cachefile = cache.findCache(filename);
-
-		if (std::filesystem::exists(cachefile))
-		{
-			std::ifstream iout(cachefile, std::ios::in | std::ios::binary);
-			cache.load(iout);
-			iout.close();
-
-			outVertices = cache.Vertices;
-			outIndices = cache.Indices;
-		}
-		else
-		{
-			LoadMeshAssetInternal(filename, outVertices, outIndices);
-
-			cache.Vertices = outVertices;
-			cache.Indices = outIndices;
-			
-			std::ofstream fout(cachefile, std::ios::out | std::ios::binary);
-			cache.save(fout);
-			fout.close();
-		}
-#else
-		LoadMeshAssetInternal(filename, outVertices, outIndices);
-#endif
 	}
 
 	/** Load meshlet struct data file*/
@@ -5014,7 +5842,7 @@ int main()
 	FZeldaEngineApp EngineApp;
 
 	try {
-		EngineApp.MainTask();
+		EngineApp.Run();
 	}
 	catch (const std::exception& e) {
 		std::cerr << e.what() << std::endl;

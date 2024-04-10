@@ -1,17 +1,5 @@
 #version 450
 
-// push constants block
-layout( push_constant ) uniform constants
-{
-	float time;
-	float roughness;
-	float metallic;
-	uint specConstants;
-	uint specConstantsCount;
-	uint index;
-	uint indexCount;
-} global;
-
 layout(set = 0, binding = 0) uniform uniformbuffer
 {
 	mat4 model;
@@ -32,10 +20,9 @@ layout (location = 6) in float inInstancePScale;
 layout (location = 7) in uint inInstanceTexIndex;
 
 layout(location = 0) out vec3 outPosition;
-layout(location = 1) out vec3 outPositionWS;
-layout(location = 2) out vec3 outNormal;
-layout(location = 3) out vec3 outColor;
-layout(location = 4) out vec2 outTexCoord;
+layout(location = 1) out vec3 outNormal;
+layout(location = 2) out vec3 outColor;
+layout(location = 3) out vec2 outTexCoord;
 
 // https://www.ronja-tutorials.com/post/041-hsv-colorspace/
 vec3 Hue2RGB(float hue) {
@@ -82,8 +69,7 @@ void main()
 	mat4 rotMat = MakeRotMatrix(inInstanceRotation);
 	vec3 position = (inPosition * inInstancePScale) * mat3(rotMat) + inInstancePosition;
 	gl_Position = ubo.proj * ubo.view * ubo.model * vec4(position, 1.0);
-	outPosition = position;
-	outPositionWS = (ubo.model * vec4(position, 1.0)).rgb;
+	outPosition = (ubo.model * vec4(position, 1.0)).rgb;
 	outNormal = (ubo.model * vec4(normalize(inNormal), 1.0)).rgb * mat3(rotMat);
 	outColor = Hue2RGB(inInstanceTexIndex / 256.0f);
 	outTexCoord = inTexCoord;
