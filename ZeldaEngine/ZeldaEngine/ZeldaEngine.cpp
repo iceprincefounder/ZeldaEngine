@@ -340,6 +340,20 @@ inline bool operator==(ERenderFlags a, ERenderFlags b)
 	return ((static_cast<uint16_t>(a) & static_cast<uint16_t>(b))) == static_cast<uint16_t>(b);
 }
 
+/** Model MVP matrices */
+struct FUniformBufferBase {
+	glm::mat4 Model;
+	glm::mat4 View;
+	glm::mat4 Proj;
+};
+
+/** Model transform matrix.*/
+// @TODO: we use a global transform for all render object currently
+// It's great to use model's own transform
+struct FUniformBufferTransfrom {
+	glm::mat4 Model;
+	glm::vec4 Info;
+};
 
 /** The instance of mesh data block*/
 struct FInstanceData {
@@ -514,7 +528,7 @@ struct FMaterial {
 	std::vector<VkImage> TextureImages;
 	std::vector<VkDeviceMemory> TextureImageMemorys;
 	std::vector<VkImageView> TextureImageViews;
-	std::vector<VkSampler> TextureSamplers;
+	std::vector<VkSampler> TextureImageSamplers;
 
 	VkDescriptorPool DescriptorPool;
 	std::vector<VkDescriptorSet> DescriptorSets;
@@ -527,6 +541,12 @@ struct FRenderBase
 {
 	FMaterial MateData;
 	uint32_t InstanceCount;
+	
+	// @TODO: use model's own transform
+	/* uniform buffers contain model transform */
+	std::vector<VkBuffer> TransfromUniformBuffers;
+	/* uniform buffers memory contain model transform */
+	std::vector<VkDeviceMemory> TransfromUniformBuffersMemory;
 };
 
 /** RenderObject for a single draw call.*/
@@ -559,13 +579,6 @@ struct FRenderIndirectInstancedObject : public FRenderIndirectObjectBase
 
 typedef FRenderObject FRenderDeferredObject;
 typedef FRenderInstancedObject FRenderDeferredInstancedObject;
-
-/** Model MVP matrix data struct.*/
-struct FUniformBufferBase {
-	glm::mat4 Model;
-	glm::mat4 View;
-	glm::mat4 Proj;
-};
 
 
 /** Common light data struct.*/
@@ -757,6 +770,7 @@ class FZeldaEngineApp
 
 	/** Scene viewport data struct.*/
 	struct FUniformBufferView {
+		glm::mat4 ViewProjSpace;
 		glm::mat4 ShadowmapSpace;
 		glm::mat4 LocalToWorld;
 		glm::vec4 CameraInfo;
@@ -3082,60 +3096,23 @@ protected:
 		for (size_t i = 0; i < Scene.RenderObjects.size(); i++)
 		{
 			FRenderObject& renderObject = Scene.RenderObjects[i];
-
-			vkDestroyDescriptorPool(Device, renderObject.MateData.DescriptorPool, nullptr);
-
-			for (size_t j = 0; j < renderObject.MateData.TextureImages.size(); j++)
-			{
-				vkDestroyImageView(Device, renderObject.MateData.TextureImageViews[j], nullptr);
-				vkDestroySampler(Device, renderObject.MateData.TextureSamplers[j], nullptr);
-				vkDestroyImage(Device, renderObject.MateData.TextureImages[j], nullptr);
-				vkFreeMemory(Device, renderObject.MateData.TextureImageMemorys[j], nullptr);
-			}
-
-			vkDestroyBuffer(Device, renderObject.MeshData.VertexBuffer, nullptr);
-			vkFreeMemory(Device, renderObject.MeshData.VertexBufferMemory, nullptr);
-			vkDestroyBuffer(Device, renderObject.MeshData.IndexBuffer, nullptr);
-			vkFreeMemory(Device, renderObject.MeshData.IndexBufferMemory, nullptr);
+			DestroyRenderObject(renderObject);
 		}
 		for (size_t i = 0; i < Scene.RenderInstancedObjects.size(); i++)
 		{
 			FRenderInstancedObject& renderInstancedObject = Scene.RenderInstancedObjects[i];
 
-			vkDestroyDescriptorPool(Device, renderInstancedObject.MateData.DescriptorPool, nullptr);
-
-			for (size_t j = 0; j < renderInstancedObject.MateData.TextureImages.size(); j++)
-			{
-				vkDestroyImageView(Device, renderInstancedObject.MateData.TextureImageViews[j], nullptr);
-				vkDestroySampler(Device, renderInstancedObject.MateData.TextureSamplers[j], nullptr);
-				vkDestroyImage(Device, renderInstancedObject.MateData.TextureImages[j], nullptr);
-				vkFreeMemory(Device, renderInstancedObject.MateData.TextureImageMemorys[j], nullptr);
-			}
+			DestroyRenderObject(renderInstancedObject);
 
 			vkDestroyBuffer(Device, renderInstancedObject.MeshData.InstancedBuffer, nullptr);
 			vkFreeMemory(Device, renderInstancedObject.MeshData.InstancedBufferMemory, nullptr);
-			vkDestroyBuffer(Device, renderInstancedObject.MeshData.VertexBuffer, nullptr);
-			vkFreeMemory(Device, renderInstancedObject.MeshData.VertexBufferMemory, nullptr);
-			vkDestroyBuffer(Device, renderInstancedObject.MeshData.IndexBuffer, nullptr);
-			vkFreeMemory(Device, renderInstancedObject.MeshData.IndexBufferMemory, nullptr);
 		}
 		for (size_t i = 0; i < Scene.RenderIndirectObjects.size(); i++)
 		{
 			FRenderIndirectObject& RenderIndirectObject = Scene.RenderIndirectObjects[i];
 
-			vkDestroyDescriptorPool(Device, RenderIndirectObject.MateData.DescriptorPool, nullptr);
+			DestroyRenderObject(RenderIndirectObject);
 
-			for (size_t j = 0; j < RenderIndirectObject.MateData.TextureImages.size(); j++)
-			{
-				vkDestroyImageView(Device, RenderIndirectObject.MateData.TextureImageViews[j], nullptr);
-				vkDestroySampler(Device, RenderIndirectObject.MateData.TextureSamplers[j], nullptr);
-				vkDestroyImage(Device, RenderIndirectObject.MateData.TextureImages[j], nullptr);
-				vkFreeMemory(Device, RenderIndirectObject.MateData.TextureImageMemorys[j], nullptr);
-			}
-			vkDestroyBuffer(Device, RenderIndirectObject.MeshData.VertexBuffer, nullptr);
-			vkFreeMemory(Device, RenderIndirectObject.MeshData.VertexBufferMemory, nullptr);
-			vkDestroyBuffer(Device, RenderIndirectObject.MeshData.IndexBuffer, nullptr);
-			vkFreeMemory(Device, RenderIndirectObject.MeshData.IndexBufferMemory, nullptr);
 			vkDestroyBuffer(Device, RenderIndirectObject.IndirectCommandsBuffer, nullptr);
 			vkFreeMemory(Device, RenderIndirectObject.IndirectCommandsBufferMemory, nullptr);
 		}
@@ -3143,22 +3120,11 @@ protected:
 		{
 			FRenderIndirectInstancedObject& RenderIndirectInstancedObject = Scene.RenderIndirectInstancedObjects[i];
 
-			vkDestroyDescriptorPool(Device, RenderIndirectInstancedObject.MateData.DescriptorPool, nullptr);
-
-			for (size_t j = 0; j < RenderIndirectInstancedObject.MateData.TextureImages.size(); j++)
-			{
-				vkDestroyImageView(Device, RenderIndirectInstancedObject.MateData.TextureImageViews[j], nullptr);
-				vkDestroySampler(Device, RenderIndirectInstancedObject.MateData.TextureSamplers[j], nullptr);
-				vkDestroyImage(Device, RenderIndirectInstancedObject.MateData.TextureImages[j], nullptr);
-				vkFreeMemory(Device, RenderIndirectInstancedObject.MateData.TextureImageMemorys[j], nullptr);
-			}
+			DestroyRenderObject(RenderIndirectInstancedObject);
 
 			vkDestroyBuffer(Device, RenderIndirectInstancedObject.MeshData.InstancedBuffer, nullptr);
 			vkFreeMemory(Device, RenderIndirectInstancedObject.MeshData.InstancedBufferMemory, nullptr);
-			vkDestroyBuffer(Device, RenderIndirectInstancedObject.MeshData.VertexBuffer, nullptr);
-			vkFreeMemory(Device, RenderIndirectInstancedObject.MeshData.VertexBufferMemory, nullptr);
-			vkDestroyBuffer(Device, RenderIndirectInstancedObject.MeshData.IndexBuffer, nullptr);
-			vkFreeMemory(Device, RenderIndirectInstancedObject.MeshData.IndexBufferMemory, nullptr);
+
 			vkDestroyBuffer(Device, RenderIndirectInstancedObject.IndirectCommandsBuffer, nullptr);
 			vkFreeMemory(Device, RenderIndirectInstancedObject.IndirectCommandsBufferMemory, nullptr);
 		}
@@ -3167,41 +3133,16 @@ protected:
 		{
 			FRenderDeferredObject& renderObject = Scene.RenderDeferredObjects[i];
 
-			vkDestroyDescriptorPool(Device, renderObject.MateData.DescriptorPool, nullptr);
-
-			for (size_t j = 0; j < renderObject.MateData.TextureImages.size(); j++)
-			{
-				vkDestroyImageView(Device, renderObject.MateData.TextureImageViews[j], nullptr);
-				vkDestroySampler(Device, renderObject.MateData.TextureSamplers[j], nullptr);
-				vkDestroyImage(Device, renderObject.MateData.TextureImages[j], nullptr);
-				vkFreeMemory(Device, renderObject.MateData.TextureImageMemorys[j], nullptr);
-			}
-
-			vkDestroyBuffer(Device, renderObject.MeshData.VertexBuffer, nullptr);
-			vkFreeMemory(Device, renderObject.MeshData.VertexBufferMemory, nullptr);
-			vkDestroyBuffer(Device, renderObject.MeshData.IndexBuffer, nullptr);
-			vkFreeMemory(Device, renderObject.MeshData.IndexBufferMemory, nullptr);
+			DestroyRenderObject(renderObject);
 		}
 		for (size_t i = 0; i < Scene.RenderDeferredInstancedObjects.size(); i++)
 		{
 			FRenderDeferredInstancedObject& renderInstancedObject = Scene.RenderDeferredInstancedObjects[i];
 
-			vkDestroyDescriptorPool(Device, renderInstancedObject.MateData.DescriptorPool, nullptr);
-
-			for (size_t j = 0; j < renderInstancedObject.MateData.TextureImages.size(); j++)
-			{
-				vkDestroyImageView(Device, renderInstancedObject.MateData.TextureImageViews[j], nullptr);
-				vkDestroySampler(Device, renderInstancedObject.MateData.TextureSamplers[j], nullptr);
-				vkDestroyImage(Device, renderInstancedObject.MateData.TextureImages[j], nullptr);
-				vkFreeMemory(Device, renderInstancedObject.MateData.TextureImageMemorys[j], nullptr);
-			}
+			DestroyRenderObject(renderInstancedObject);
 
 			vkDestroyBuffer(Device, renderInstancedObject.MeshData.InstancedBuffer, nullptr);
 			vkFreeMemory(Device, renderInstancedObject.MeshData.InstancedBufferMemory, nullptr);
-			vkDestroyBuffer(Device, renderInstancedObject.MeshData.VertexBuffer, nullptr);
-			vkFreeMemory(Device, renderInstancedObject.MeshData.VertexBufferMemory, nullptr);
-			vkDestroyBuffer(Device, renderInstancedObject.MeshData.IndexBuffer, nullptr);
-			vkFreeMemory(Device, renderInstancedObject.MeshData.IndexBufferMemory, nullptr);
 		}
 #endif
 
@@ -3573,18 +3514,22 @@ public:
 		glm::mat4 shadowProjection = glm::perspective(glm::radians(CameraFOV), 1.0f, ShadowmapPass.zNear, ShadowmapPass.zFar);
 		shadowProjection[1][1] *= -1;
 
-		FUniformBufferBase UBOBaseData{};
-		UBOBaseData.Model = localToWorld;
-		UBOBaseData.View = glm::lookAt(CameraPos, CameraLookat, cameraUp);
-		UBOBaseData.Proj = glm::perspective(glm::radians(CameraFOV), SwapChainExtent.width / (float)SwapChainExtent.height, zNear, zFar);
-		UBOBaseData.Proj[1][1] *= -1;
+		glm::mat4 cameraView = glm::lookAt(CameraPos, CameraLookat, cameraUp);
+		glm::mat4 cameraProj = glm::perspective(glm::radians(CameraFOV), SwapChainExtent.width / (float)SwapChainExtent.height, zNear, zFar);
+
+		FUniformBufferBase BaseData{};
+		BaseData.Model = localToWorld;
+		BaseData.View = cameraView;
+		BaseData.Proj = cameraProj;
+		BaseData.Proj[1][1] *= -1;
 
 		void* data_base_ubo;
-		vkMapMemory(Device, BaseUniformBuffersMemory[currentImageIdx], 0, sizeof(UBOBaseData), 0, &data_base_ubo);
-		memcpy(data_base_ubo, &UBOBaseData, sizeof(UBOBaseData));
+		vkMapMemory(Device, BaseUniformBuffersMemory[currentImageIdx], 0, sizeof(BaseData), 0, &data_base_ubo);
+		memcpy(data_base_ubo, &BaseData, sizeof(BaseData));
 		vkUnmapMemory(Device, BaseUniformBuffersMemory[currentImageIdx]);
 
 		// ShadowmapSpace 的 MVP 矩阵中，M矩阵在FS中计算，所以传入 localToWorld 进入FS
+		View.ViewProjSpace = cameraProj * cameraView;
 		View.ShadowmapSpace = shadowProjection * shadowView;
 		View.LocalToWorld = localToWorld;
 		View.CameraInfo = glm::vec4(CameraPos, CameraFOV);
@@ -3634,7 +3579,7 @@ public:
 			BaseScenePass.RenderObjects.push_back(RenderObject);
 			ShadowmapPass.RenderObjects.push_back(RenderObject);
 #if ENABLE_BINDLESS
-			UpdateDescriptorSet(RenderObject->MateData.DescriptorSets, RenderObject->MateData.TextureImageViews, RenderObject->MateData.TextureSamplers);
+			UpdateDescriptorSet(RenderObject->MateData.DescriptorSets, RenderObject->MateData.TextureImageViews, RenderObject->MateData.TextureImageSamplers);
 #endif
 		}
 		for (size_t i = 0; i < Scene.RenderInstancedObjects.size(); i++)
@@ -3644,7 +3589,7 @@ public:
 				ShadowmapPass.RenderInstancedObjects.push_back(RenderInstancedObject);
 #if ENABLE_BINDLESS
 			UpdateDescriptorSet(RenderInstancedObject->MateData.DescriptorSets,
-				RenderInstancedObject->MateData.TextureImageViews, RenderInstancedObject->MateData.TextureSamplers);
+				RenderInstancedObject->MateData.TextureImageViews, RenderInstancedObject->MateData.TextureImageSamplers);
 #endif
 		}
 		for (size_t i = 0; i < Scene.RenderIndirectObjects.size(); i++)
@@ -3654,7 +3599,7 @@ public:
 			ShadowmapPass.RenderIndirectObjects.push_back(RenderIndirectObject);
 #if ENABLE_BINDLESS
 			UpdateDescriptorSet(RenderIndirectObject->MateData.DescriptorSets,
-				RenderIndirectObject->MateData.TextureImageViews, RenderIndirectObject->MateData.TextureSamplers);
+				RenderIndirectObject->MateData.TextureImageViews, RenderIndirectObject->MateData.TextureImageSamplers);
 #endif
 		}
 		for (size_t i = 0; i < Scene.RenderIndirectInstancedObjects.size(); i++)
@@ -3664,7 +3609,7 @@ public:
 			ShadowmapPass.RenderIndirectInstancedObjects.push_back(RenderIndirectInstancedObject);
 #if ENABLE_BINDLESS
 			UpdateDescriptorSet(RenderIndirectInstancedObject->MateData.DescriptorSets,
-				RenderIndirectInstancedObject->MateData.TextureImageViews, RenderIndirectInstancedObject->MateData.TextureSamplers);
+				RenderIndirectInstancedObject->MateData.TextureImageViews, RenderIndirectInstancedObject->MateData.TextureImageSamplers);
 #endif
 		}
 #if ENABLE_DEFEERED_SHADING
@@ -3675,7 +3620,7 @@ public:
 			ShadowmapPass.RenderObjects.push_back(RenderDeferredObject);
 #if ENABLE_BINDLESS
 			UpdateDescriptorSet(RenderDeferredObject->MateData.DescriptorSets,
-				RenderDeferredObject->MateData.TextureImageViews, RenderDeferredObject->MateData.TextureSamplers);
+				RenderDeferredObject->MateData.TextureImageViews, RenderDeferredObject->MateData.TextureImageSamplers);
 #endif
 		}
 		for (size_t i = 0; i < Scene.RenderDeferredInstancedObjects.size(); i++)
@@ -3685,7 +3630,7 @@ public:
 			ShadowmapPass.RenderInstancedObjects.push_back(RenderDeferredInstancedObject);
 #if ENABLE_BINDLESS
 			UpdateDescriptorSet(RenderDeferredInstancedObject->MateData.DescriptorSets,
-				RenderDeferredInstancedObject->MateData.TextureImageViews, RenderDeferredInstancedObject->MateData.TextureSamplers);
+				RenderDeferredInstancedObject->MateData.TextureImageViews, RenderDeferredInstancedObject->MateData.TextureImageSamplers);
 #endif
 		}
 #endif
@@ -4507,6 +4452,96 @@ public:
 		}
 	}
 
+	template<typename T>
+	void UpdateRenderObjectDescriptorSet(T* outObject, const FUniformBufferBase& MVP)
+	{
+
+		uint32_t samplerNumber = PBR_SAMPLER_NUMBER;
+		uint32_t bindingOffset = 4;
+		std::vector<VkDescriptorSet>& DescriptorSets = outObject->MateData.DescriptorSets;
+		std::vector<VkImageView>& ImageViews = outObject->MateData.TextureImageViews;
+		std::vector<VkSampler>& Samplers = outObject->MateData.TextureImageSamplers;
+		std::vector<VkBuffer>& UniformBuffers = outObject->TransfromUniformBuffers;
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+		{
+			std::vector<VkWriteDescriptorSet> descriptorWrites{};
+			descriptorWrites.resize(samplerNumber + bindingOffset);
+
+			VkDescriptorBufferInfo baseBufferInfo{};
+			baseBufferInfo.buffer = UniformBuffers[i];
+			baseBufferInfo.offset = 0;
+			baseBufferInfo.range = sizeof(FUniformBufferBase);
+
+			descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			descriptorWrites[0].dstSet = DescriptorSets[i];
+			descriptorWrites[0].dstBinding = 0;
+			descriptorWrites[0].dstArrayElement = 0;
+			descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+			descriptorWrites[0].descriptorCount = 1;
+			descriptorWrites[0].pBufferInfo = &baseBufferInfo;
+
+			VkDescriptorBufferInfo viewBufferInfo{};
+			viewBufferInfo.buffer = ViewUniformBuffers[i];
+			viewBufferInfo.offset = 0;
+			viewBufferInfo.range = sizeof(FUniformBufferView);
+
+			descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			descriptorWrites[1].dstSet = DescriptorSets[i];
+			descriptorWrites[1].dstBinding = 1;
+			descriptorWrites[1].dstArrayElement = 0;
+			descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+			descriptorWrites[1].descriptorCount = 1;
+			descriptorWrites[1].pBufferInfo = &viewBufferInfo;
+
+			VkDescriptorImageInfo imageInfo{};
+			imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			imageInfo.imageView = CubemapImageView;
+			imageInfo.sampler = CubemapSampler;
+
+			descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			descriptorWrites[2].dstSet = DescriptorSets[i];
+			descriptorWrites[2].dstBinding = 2;
+			descriptorWrites[2].dstArrayElement = 0;
+			descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			descriptorWrites[2].descriptorCount = 1;
+			descriptorWrites[2].pImageInfo = &imageInfo;
+
+			VkDescriptorImageInfo shadowmapImageInfo{};
+			shadowmapImageInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+			shadowmapImageInfo.imageView = ShadowmapPass.ImageView;
+			shadowmapImageInfo.sampler = ShadowmapPass.Sampler;
+
+			descriptorWrites[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			descriptorWrites[3].dstSet = DescriptorSets[i];
+			descriptorWrites[3].dstBinding = 3;
+			descriptorWrites[3].dstArrayElement = 0;
+			descriptorWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			descriptorWrites[3].descriptorCount = 1;
+			descriptorWrites[3].pImageInfo = &shadowmapImageInfo;
+
+			std::vector<VkDescriptorImageInfo> imageInfos;
+			imageInfos.resize(samplerNumber);
+			for (size_t j = 0; j < samplerNumber; j++)
+			{
+				VkDescriptorImageInfo imageInfo{};
+				imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+				imageInfo.imageView = ImageViews[j];
+				imageInfo.sampler = Samplers[j];
+				imageInfos[j] = imageInfo;
+
+				descriptorWrites[j + bindingOffset].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+				descriptorWrites[j + bindingOffset].dstSet = DescriptorSets[i];
+				descriptorWrites[j + bindingOffset].dstBinding = static_cast<uint32_t>(j + bindingOffset);
+				descriptorWrites[j + bindingOffset].dstArrayElement = 0;
+				descriptorWrites[j + bindingOffset].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+				descriptorWrites[j + bindingOffset].descriptorCount = 1;
+				descriptorWrites[j + bindingOffset].pImageInfo = &imageInfos[j];
+			}
+
+			vkUpdateDescriptorSets(Device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
+		}
+	}
+
 	/** 读取一个贴图路径，然后创建图像、视口和采样器等资源*/
 	void CreateImageContext(
 		VkImage& outImage,
@@ -4812,7 +4847,7 @@ public:
 		outObject.MateData.TextureImages.resize(pngfiles.size());
 		outObject.MateData.TextureImageMemorys.resize(pngfiles.size());
 		outObject.MateData.TextureImageViews.resize(pngfiles.size());
-		outObject.MateData.TextureSamplers.resize(pngfiles.size());
+		outObject.MateData.TextureImageSamplers.resize(pngfiles.size());
 		for (size_t i = 0; i < pngfiles.size(); i++)
 		{
 			// 一个便捷函数，创建图像，视口和采样器
@@ -4821,7 +4856,7 @@ public:
 				outObject.MateData.TextureImages[i],
 				outObject.MateData.TextureImageMemorys[i],
 				outObject.MateData.TextureImageViews[i],
-				outObject.MateData.TextureSamplers[i],
+				outObject.MateData.TextureImageSamplers[i],
 				pngfiles[i], sRGB);
 		}
 
@@ -4838,7 +4873,53 @@ public:
 			outObject.MateData.DescriptorPool,
 			inDescriptorSetLayout,
 			outObject.MateData.TextureImageViews,
-			outObject.MateData.TextureSamplers);
+			outObject.MateData.TextureImageSamplers);
+
+		VkDeviceSize BufferSize = sizeof(FUniformBufferTransfrom);
+		outObject.TransfromUniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+		outObject.TransfromUniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
+
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+			CreateBuffer(BufferSize,
+				VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+				outObject.TransfromUniformBuffers[i],
+				outObject.TransfromUniformBuffersMemory[i]);
+		}
+
+		FUniformBufferTransfrom Transfrom{};
+		Transfrom.Model = glm::mat4();
+		Transfrom.Info = glm::vec4(0);
+
+		void* data_ubo;
+		vkMapMemory(Device, outObject.TransfromUniformBuffersMemory[CurrentFrame], 0, sizeof(Transfrom), 0, &data_ubo);
+		memcpy(data_ubo, &Transfrom, sizeof(Transfrom));
+		vkUnmapMemory(Device, outObject.TransfromUniformBuffersMemory[CurrentFrame]);
+	};
+
+	template <typename T>
+	void DestroyRenderObject(T& outObject)
+	{
+		vkDestroyDescriptorPool(Device, outObject.MateData.DescriptorPool, nullptr);
+
+		for (size_t j = 0; j < outObject.MateData.TextureImages.size(); j++)
+		{
+			vkDestroyImageView(Device, outObject.MateData.TextureImageViews[j], nullptr);
+			vkDestroySampler(Device, outObject.MateData.TextureImageSamplers[j], nullptr);
+			vkDestroyImage(Device, outObject.MateData.TextureImages[j], nullptr);
+			vkFreeMemory(Device, outObject.MateData.TextureImageMemorys[j], nullptr);
+		}
+
+		vkDestroyBuffer(Device, outObject.MeshData.VertexBuffer, nullptr);
+		vkFreeMemory(Device, outObject.MeshData.VertexBufferMemory, nullptr);
+		vkDestroyBuffer(Device, outObject.MeshData.IndexBuffer, nullptr);
+		vkFreeMemory(Device, outObject.MeshData.IndexBufferMemory, nullptr);
+
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+		{
+			vkDestroyBuffer(Device, outObject.TransfromUniformBuffers[i], nullptr);
+			vkFreeMemory(Device, outObject.TransfromUniformBuffersMemory[i], nullptr);
+		}
 	};
 
 	template <typename T>
@@ -4850,7 +4931,7 @@ public:
 		outObject.MateData.TextureImages.resize(pngfiles.size());
 		outObject.MateData.TextureImageMemorys.resize(pngfiles.size());
 		outObject.MateData.TextureImageViews.resize(pngfiles.size());
-		outObject.MateData.TextureSamplers.resize(pngfiles.size());
+		outObject.MateData.TextureImageSamplers.resize(pngfiles.size());
 		for (size_t i = 0; i < pngfiles.size(); i++)
 		{
 			// 一个便捷函数，创建图像，视口和采样器
@@ -4859,7 +4940,7 @@ public:
 				outObject.MateData.TextureImages[i],
 				outObject.MateData.TextureImageMemorys[i],
 				outObject.MateData.TextureImageViews[i],
-				outObject.MateData.TextureSamplers[i],
+				outObject.MateData.TextureImageSamplers[i],
 				pngfiles[i], sRGB);
 		}
 
@@ -4895,7 +4976,7 @@ public:
 			outObject.MateData.DescriptorPool,
 			BaseScenePass.DescriptorSetLayout,
 			outObject.MateData.TextureImageViews,
-			outObject.MateData.TextureSamplers);
+			outObject.MateData.TextureImageSamplers);
 	};
 
 	template <typename T>

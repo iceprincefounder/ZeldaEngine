@@ -4,7 +4,7 @@
 // selected at pipeline creation time
 layout(constant_id = 0) const int SPEC_CONSTANTS = 0;
 
-layout(set = 0, binding = 2)  uniform samplerCube skycubemap;   // cubemap
+layout(set = 0, binding = 2)  uniform samplerCube cubemap;   // cubemap
 layout(set = 0, binding = 3)  uniform sampler2D shadowmap;      // shadowmap
 layout(set = 0, binding = 4)  uniform sampler2D sampler1;       // basecolor
 layout(set = 0, binding = 5)  uniform sampler2D sampler2;       // metalic

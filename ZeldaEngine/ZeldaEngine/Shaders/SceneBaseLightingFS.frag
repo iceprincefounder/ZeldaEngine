@@ -27,6 +27,7 @@ layout(push_constant) uniform constants
 
 layout(set = 0, binding = 0) uniform uniformbuffer
 {
+	mat4 viewProjSpace;
 	mat4 shadowmapSpace;
 	mat4 localToWorld;
 	vec4 cameraInfo;
