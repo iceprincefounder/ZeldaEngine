@@ -3335,7 +3335,7 @@ public:
 			BackgroundPass.ImageMemorys[0],
 			BackgroundPass.ImageViews[0],
 			BackgroundPass.ImageSamplers[0],
-			"Resources/Contents/Textures/T/background.png");
+			ProfabsAsset("background.png"));
 		UpdateDescriptorSet(BackgroundPass.DescriptorSets, BackgroundPass.ImageViews, BackgroundPass.ImageSamplers, ERenderFlags::Background);
 		BackgroundPass.EnableBackground = true;
 
@@ -3443,12 +3443,12 @@ public:
 			grass_02_InstanceData[i].InstanceTexIndex = RandRange(0, 255);
 		}
 
+#if ENABLE_DEFEERED_SHADING
 		CreateRenderObjectsFromProfabs(Scene.RenderDeferredObjects, *Scene.DeferredSceneDescriptorSetLayout, "terrain");
 		CreateRenderObjectsFromProfabs(Scene.RenderDeferredObjects, *Scene.DeferredSceneDescriptorSetLayout, "rock_01");
 		CreateRenderObjectsFromProfabs(Scene.RenderDeferredInstancedObjects, *Scene.DeferredSceneDescriptorSetLayout, "rock_02", rock_InstanceData);
 		CreateRenderObjectsFromProfabs(Scene.RenderDeferredInstancedObjects, *Scene.DeferredSceneDescriptorSetLayout, "grass_01", grass_01_InstanceData);
 		CreateRenderObjectsFromProfabs(Scene.RenderDeferredInstancedObjects, *Scene.DeferredSceneDescriptorSetLayout, "grass_02", grass_02_InstanceData);
-#if ENABLE_DEFEERED_SHADING
 		UpdateDescriptorSet(BaseSceneDeferredPass.LightingDescriptorSets, GBuffer.ImageViews(), GBuffer.Samplers(), ERenderFlags::DeferredLighting);
 #endif
 		/* 
