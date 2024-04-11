@@ -589,7 +589,7 @@ struct FLight
 	glm::vec4 Direction;
 	glm::vec4 LightInfo;
 
-	FLight& FLight::operator=(const FLight& rhs)
+	FLight& operator=(const FLight& rhs)
 	{
 		Position = rhs.Position;
 		Color = rhs.Color;
@@ -782,8 +782,9 @@ class FZeldaEngineApp
 		glm::float32 zNear;
 		glm::float32 zFar;
 
-		FUniformBufferView& FUniformBufferView::operator=(const FUniformBufferView& rhs)
+		FUniformBufferView& operator=(const FUniformBufferView& rhs)
 		{
+			ViewProjSpace = rhs.ViewProjSpace;
 			ShadowmapSpace = rhs.ShadowmapSpace;
 			LocalToWorld = rhs.LocalToWorld;
 			CameraInfo = rhs.CameraInfo;

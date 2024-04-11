@@ -11,16 +11,22 @@ A tiny realtime vulkan based 3D engine with modern graphics, all implementations
 | master |✅|✅|⛔️|
 
 ## ✨Feature: GPU-driven & Mesh Shader
-<img width="1192" alt="dragon" src="https://github.com/iceprincefounder/ZeldaEngine/assets/16664056/26339a31-73de-4192-aa02-e4ec85d605fd">
+<img width="1192" alt="GPU-driven & Mesh Shade" src="https://github.com/iceprincefounder/ZeldaEngine/assets/16664056/26339a31-73de-4192-aa02-e4ec85d605fd">
+
+## ✨Feature: Deferred Shading
+<img width="1192" alt="Deferred Shading" src="https://github.com/iceprincefounder/ZeldaEngine/assets/16664056/72c761f7-a0b2-48e8-baaa-8bcd171b31af">
+
+## ✨Feature: GBuffer
+<img width="1192" alt="GBuffer" src="https://github.com/iceprincefounder/ZeldaEngine/assets/16664056/c502e4a9-ff0e-4f13-8d34-173948aff267">
 
 ## ✨Feature: Instancing
-<img width="1192" alt="截屏2024-02-18 22 45 54" src="https://github.com/iceprincefounder/ZeldaEngine/assets/16664056/b7094bcd-b41a-42f1-ab3b-9f5f374b0291">
+<img width="1192" alt="Instancing" src="https://github.com/iceprincefounder/ZeldaEngine/assets/16664056/b7094bcd-b41a-42f1-ab3b-9f5f374b0291">
 
 ## ✨Feature: Shadow and PCF soft shadow
-<img width="1192" alt="截屏2024-02-18 22 43 03" src="https://github.com/iceprincefounder/ZeldaEngine/assets/16664056/da72dabe-d28a-494b-954c-5a55bcc921f7">
+<img width="1192" alt="Shadow and PCF soft shadow" src="https://github.com/iceprincefounder/ZeldaEngine/assets/16664056/da72dabe-d28a-494b-954c-5a55bcc921f7">
 
 ## ✨Feature: PBR based Rendering
-<img width="1192" alt="截屏2024-02-18 22 44 20" src="https://github.com/iceprincefounder/ZeldaEngine/assets/16664056/b3db9154-2661-44d3-8abb-2ea20fda8df9">
+<img width="1192" alt="PBR based Rendering" src="https://github.com/iceprincefounder/ZeldaEngine/assets/16664056/b3db9154-2661-44d3-8abb-2ea20fda8df9">
 
 # How to build
 ### 1. Get source code from Github
