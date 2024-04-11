@@ -1,6 +1,7 @@
-#version 450
+# version 450
 
-layout(binding = 4) uniform sampler2D backgroundSampler;
+layout(set = 0, binding = 0)  uniform samplerCube cubemapSampler;
+layout(set = 0, binding = 1)  uniform sampler2D backgroundSampler;
 
 layout(location = 0) in vec3 fragColor;
 layout(location = 1) in vec2 fragTexCoord;

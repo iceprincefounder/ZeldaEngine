@@ -1,6 +1,7 @@
-#version 450
+# version 450
 
-layout(binding = 4) uniform sampler2D skydomeSampler;
+layout(set = 0, binding = 1)  uniform samplerCube cubemapSampler;
+layout(set = 0, binding = 2)  uniform sampler2D skydomeSampler;
 
 layout(location = 0) in vec3 fragPosition;
 layout(location = 1) in vec3 fragNormal;
