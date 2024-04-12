@@ -1,16 +1,5 @@
 #version 450
 
-// push constants block
-layout( push_constant ) uniform constants
-{
-	float time;
-	float roughness;
-	float metallic;
-	uint specConstants;
-	uint specConstantsCount;
-	uint index;
-	uint indexCount;
-} global;
 
 layout(set = 0, binding = 0) uniform uniformbuffer
 {
@@ -48,6 +37,6 @@ void main()
 	gl_Position = ubo.proj * ubo.view * ubo.model * vec4(position, 1.0);
 	outPosition = (ubo.model * vec4(position, 1.0)).rgb;
 	outNormal = (ubo.model * vec4(normalize(inNormal), 1.0)).rgb;
-	outColor = Hue2RGB(float(global.index) * 1.71f);
+	outColor = Hue2RGB(float(gl_VertexIndex) * 1.71f);
 	outTexCoord = inTexCoord;
 }

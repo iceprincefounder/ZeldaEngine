@@ -80,11 +80,11 @@ function(BuildEngine ENGINE_NAME)
 	add_custom_command(
     OUTPUT SHADER_COMPILE
 	COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADERS_PATH}
-    COMMAND glslc ARGS -g ${SHADERS_DIR}/SceneFS.frag -o ${SHADERS_PATH}/Scene_FS.spv
-    COMMAND glslc ARGS -g ${SHADERS_DIR}/SceneVS.vert -o ${SHADERS_PATH}/Scene_VS.spv
-    COMMAND glslc ARGS -g ${SHADERS_DIR}/SceneBaseFS.frag -o ${SHADERS_PATH}/SceneBase_FS.spv
-    COMMAND glslc ARGS -g ${SHADERS_DIR}/SceneBaseLightingFS.frag -o ${SHADERS_PATH}/SceneBaseLighting_FS.spv
-    COMMAND glslc ARGS -g ${SHADERS_DIR}/SceneInstancedVS.vert -o ${SHADERS_PATH}/SceneInstanced_VS.spv
+    COMMAND glslc ARGS -g ${SHADERS_DIR}/BaseFS.frag -o ${SHADERS_PATH}/Base_FS.spv
+    COMMAND glslc ARGS -g ${SHADERS_DIR}/BaseVS.vert -o ${SHADERS_PATH}/Base_VS.spv
+    COMMAND glslc ARGS -g ${SHADERS_DIR}/BaseInstancedVS.vert -o ${SHADERS_PATH}/BaseInstanced_VS.spv
+    COMMAND glslc ARGS -g ${SHADERS_DIR}/BaseSceneFS.frag -o ${SHADERS_PATH}/BaseScene_FS.spv
+    COMMAND glslc ARGS -g ${SHADERS_DIR}/BaseLightingFS.frag -o ${SHADERS_PATH}/BaseLighting_FS.spv
     COMMAND glslc ARGS -g ${SHADERS_DIR}/ShadowmapFS.frag -o ${SHADERS_PATH}/Shadowmap_FS.spv
     COMMAND glslc ARGS -g ${SHADERS_DIR}/ShadowmapVS.vert -o ${SHADERS_PATH}/Shadowmap_VS.spv
     COMMAND glslc ARGS -g ${SHADERS_DIR}/ShadowmapInstancedVS.vert -o ${SHADERS_PATH}/ShadowmapInstanced_VS.spv
@@ -105,12 +105,11 @@ function(BuildEngine ENGINE_NAME)
 
 	set(COMPILE_SHADER_TARGET ${ENGINE_NAME}Shaders)
 	set(SHADER_SOURCES 
-        ${SHADERS_DIR}/SceneFS.frag ${SHADERS_DIR}/SceneVS.vert ${SHADERS_DIR}/SceneInstancedVS.vert
-        ${SHADERS_DIR}/SceneBaseFS.frag ${SHADERS_DIR}/SceneBaseLightingFS.frag
+        ${SHADERS_DIR}/BaseFS.frag ${SHADERS_DIR}/BaseVS.vert ${SHADERS_DIR}/BaseInstancedVS.vert
+        ${SHADERS_DIR}/BaseSceneFS.frag ${SHADERS_DIR}/BaseLightingFS.frag
         ${SHADERS_DIR}/ShadowmapFS.frag ${SHADERS_DIR}/ShadowmapVS.vert ${SHADERS_DIR}/ShadowmapInstancedVS.vert
         ${SHADERS_DIR}/BackgroundFS.frag ${SHADERS_DIR}/BackgroundVS.vert
-        ${SHADERS_DIR}/SkydomeFS.frag ${SHADERS_DIR}/SkydomeVS.vert
-        )
+        ${SHADERS_DIR}/SkydomeFS.frag ${SHADERS_DIR}/SkydomeVS.vert)
 	add_custom_target(${COMPILE_SHADER_TARGET} ALL DEPENDS SHADER_COMPILE SOURCES ${SHADER_SOURCES})
 	add_dependencies (${ENGINE_NAME} ${COMPILE_SHADER_TARGET})
 	

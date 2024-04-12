@@ -1,14 +1,5 @@
 #version 450
 
-// push constants block
-layout( push_constant ) uniform constants
-{
-	float time;
-	float roughness;
-	float metallic;
-	uint specConstants;
-	uint specConstantsCount;
-} global;
 
 layout(set = 0, binding = 0) uniform uniformbuffer
 {

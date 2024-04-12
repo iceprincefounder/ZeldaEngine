@@ -49,6 +49,9 @@
 #define SKY_SAMPLER_NUMBER 1
 #define GBUFFER_SAMPLER_NUMBER 6
 #define POINT_LIGHTS_NUM 16
+#define MAX_DIRECTIONAL_LIGHTS_NUM 16
+#define MAX_POINT_LIGHTS_NUM 512
+#define MAX_SPOT_LIGHTS_NUM 16
 #define SHADOWMAP_DIM 1024
 #define VERTEX_BUFFER_BIND_ID 0
 #define INSTANCE_BUFFER_BIND_ID 1
@@ -605,9 +608,9 @@ struct FLight
 */
 struct FMap
 {
-	std::vector<FRenderObject> RenderObjects;
-	std::vector<FRenderInstancedObject> RenderInstancedObjects;
-
+	std::array<std::string, 6> CubeMap;
+	std::string Skydome;
+	std::string Background;
 };
 
 const std::vector<const char*> ValidationLayers = { "VK_LAYER_KHRONOS_validation" };
@@ -678,31 +681,33 @@ class FZeldaEngineApp
 	struct FGlobalInput {
 		glm::vec3 CameraPos;
 		glm::vec3 CameraLookat;
+		glm::vec3 CameraUp;
 		float CameraSpeed;
 		float CameraFOV;
 		float zNear;
 		float zFar;
-
-		float CameraArm;
-		float CameraYaw;
-		float CameraPitch;
-
-		bool bFocusCamera;
-		bool bUpdateCamera;
-
 		float CurrentTime;
 		float DeltaTime;
-		bool bFirstInit;
-		double LastMouseX, LastMouseY;
 		bool bPlayStageRoll;
 		float RollStage;
 		bool bPlayLightRoll;
 		float RollLight;
 
+		//~ Begin camera transactional members
+		float CameraArm;
+		float CameraYaw;
+		float CameraPitch;
+		bool bCameraFocus;
+		bool bCameraMoving;
+		bool bInitMouse;
+		double LastMouseX, LastMouseY;
+		//~ End camera transactional members
+
 		void ResetToFocus()
 		{
 			CameraPos = glm::vec3(2.0, 2.0, 2.0);
 			CameraLookat = glm::vec3(0.0, 0.0, 0.5);
+			CameraUp = glm::vec3(0.0, 0.0, 1.0);
 			CameraSpeed = 2.5;
 			CameraFOV = 45.0;
 			zNear = 0.1f;
@@ -714,8 +719,8 @@ class FZeldaEngineApp
 			CameraYaw = 30.0; //glm::degrees(glm::atan(Direction.x, Direction.y));
 			CameraPitch = 60.0; //glm::degrees(glm::asin(Direction.z));
 			CameraArm = 10.0;
-			bUpdateCamera = false;
-			bFocusCamera = true;
+			bCameraMoving = false;
+			bCameraFocus = true;
 
 			CameraPos.x = cos(glm::radians(CameraYaw)) * cos(glm::radians(CameraPitch)) * CameraArm;
 			CameraPos.y = sin(glm::radians(CameraYaw)) * cos(glm::radians(CameraPitch)) * CameraArm;
@@ -725,6 +730,8 @@ class FZeldaEngineApp
 		{
 			CameraPos = glm::vec3(2.0, 0.0, 0.0);
 			CameraLookat = glm::vec3(0.0, 0.0, 0.0);
+			CameraUp = glm::vec3(0.0, 0.0, 1.0);
+
 			CameraSpeed = 2.5;
 			CameraFOV = 45.0;
 			zNear = 0.1f;
@@ -735,8 +742,8 @@ class FZeldaEngineApp
 			glm::quat rotation(transform);
 			CameraYaw = -90.0f;;
 			CameraPitch = 0.0;
-			bUpdateCamera = false;
-			bFocusCamera = false;
+			bCameraMoving = false;
+			bCameraFocus = false;
 		}
 		void ResetAnimation()
 		{
@@ -749,22 +756,20 @@ class FZeldaEngineApp
 
 	/** Global constants*/
 	struct FGlobalConstants {
-		float Time;
-		float MetallicFactor;
-		float RoughnessFactor;
+		float BaseColorOverride;
+		float MetallicOverride;
+		float SpecularOverride;
+		float RoughnessOverride;
 		uint32_t SpecConstants;
 		uint32_t SpecConstantsCount;
-		uint32_t Index;
-		uint32_t IndexCount;
 		void ResetConstants()
 		{
-			Time = 0.0f;
-			MetallicFactor = 0.0f;
-			RoughnessFactor = 1.0;
+			BaseColorOverride = 1.0f;
+			MetallicOverride = 0.0;
+			SpecularOverride = 1.0;
+			RoughnessOverride = 1.0f;
 			SpecConstants = 0;
 			SpecConstantsCount = 10;
-			Index = 0;
-			IndexCount = 0;
 		}
 	} GlobalConstants;
 
@@ -774,11 +779,12 @@ class FZeldaEngineApp
 		glm::mat4 ShadowmapSpace;
 		glm::mat4 LocalToWorld;
 		glm::vec4 CameraInfo;
-		FLight DirectionalLights[16];
-		FLight PointLights[512];
-		FLight SpotLights[16];
+		FLight DirectionalLights[MAX_DIRECTIONAL_LIGHTS_NUM];
+		FLight PointLights[MAX_POINT_LIGHTS_NUM];
+		FLight SpotLights[MAX_SPOT_LIGHTS_NUM];
 		// LightsCount: [0] for number of DirectionalLights, [1] for number of PointLights, [2] for number of SpotLights, [3] for number of cube map max miplevels.
 		glm::ivec4 LightsCount;
+		glm::float32 Time;
 		glm::float32 zNear;
 		glm::float32 zFar;
 
@@ -788,9 +794,18 @@ class FZeldaEngineApp
 			ShadowmapSpace = rhs.ShadowmapSpace;
 			LocalToWorld = rhs.LocalToWorld;
 			CameraInfo = rhs.CameraInfo;
-			DirectionalLights[16] = rhs.DirectionalLights[16];
-			PointLights[512] = rhs.PointLights[512];
-			SpotLights[16] = rhs.SpotLights[16];
+			for (size_t i = 0; i < MAX_DIRECTIONAL_LIGHTS_NUM; i++)
+			{
+				DirectionalLights[i] = rhs.DirectionalLights[i];
+			}
+			for (size_t i = 0; i < MAX_POINT_LIGHTS_NUM; i++)
+			{
+				PointLights[i] = rhs.PointLights[i];
+			}
+			for (size_t i = 0; i < MAX_SPOT_LIGHTS_NUM; i++)
+			{
+				SpotLights[i] = rhs.SpotLights[i];
+			}
 			LightsCount = rhs.LightsCount;
 			zNear = rhs.zNear;
 			zFar = rhs.zFar;
@@ -946,26 +961,26 @@ class FZeldaEngineApp
 		std::vector<VkPipeline> Pipelines;
 	} SkydomePass;
 
-	/** 构建 BaseScenePass 需要的 Vulkan 资源*/
-	struct FBaseScenePass {
+	/** 构建 BasePass 需要的 Vulkan 资源*/
+	struct FBasePass {
 		std::vector<FRenderObject*> RenderObjects;
 		std::vector<FRenderInstancedObject*> RenderInstancedObjects;
 		VkDescriptorSetLayout DescriptorSetLayout;
 		VkPipelineLayout PipelineLayout;
 		std::vector<VkPipeline> Pipelines;
 		std::vector<VkPipeline> PipelinesInstanced;
-	} BaseScenePass;
+	} BasePass;
 
-	struct FBaseSceneIndirectPass {
+	struct FBaseIndirectPass {
 		std::vector<FRenderIndirectObject*> RenderIndirectObjects;
 		std::vector<FRenderIndirectInstancedObject*> RenderIndirectInstancedObjects;
 		VkDescriptorSetLayout DescriptorSetLayout;
 		VkPipelineLayout PipelineLayout;
 		std::vector<VkPipeline> Pipelines;
 		std::vector<VkPipeline> PipelinesInstanced;
-	} BaseSceneIndirectPass;
+	} BaseIndirectPass;
 
-	struct FBaseSceneDeferredRenderingPass {
+	struct FBaseDeferredRenderingPass {
 		std::vector<FRenderDeferredObject*> RenderDeferredObjects;
 		std::vector<FRenderDeferredInstancedObject*> RenderDeferredInstancedObjects;
 		VkDescriptorSetLayout SceneDescriptorSetLayout;
@@ -979,7 +994,7 @@ class FZeldaEngineApp
 		std::vector<VkDescriptorSet> LightingDescriptorSets;
 		VkPipelineLayout LightingPipelineLayout;
 		std::vector<VkPipeline> LightingPipelines;
-	} BaseSceneDeferredPass;
+	} BaseDeferredPass;
 
 	/* GLFW Window */
 	GLFWwindow* Window;
@@ -1125,10 +1140,10 @@ public:
 		CreateUniformBuffers(); // Create uniform buffers
 		CreateShadowmapPass(); // Create shadow depths render pass
 		CreateSkydomePass(); // Create sky dome sphere render pass
-		CreateBaseScenePass(); // Create base scene forward render pass
-		CreateBaseSceneIndirectPass(); // Create base scene indirect render pass
+		CreateBasePass(); // Create base scene forward render pass
+		CreateBaseIndirectPass(); // Create base scene indirect render pass
 #if ENABLE_DEFEERED_SHADING
-		CreateBaseSceneDeferredPass(); // Create base scene deferred render pass
+		CreateBaseDeferredPass(); // Create base scene deferred render pass
 #endif
 		CreateBackgroundPass(); // Create background rect render pass
 		CreateCommandBuffer(); // Create command buffer from command before submit
@@ -1237,14 +1252,14 @@ public:
 
 		if (action == GLFW_PRESS && button == GLFW_MOUSE_BUTTON_RIGHT)
 		{
-			input->bUpdateCamera = true;
-			input->bFirstInit = true;
+			input->bCameraMoving = true;
+			input->bInitMouse = true;
 			glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 		}
 		if (action == GLFW_RELEASE && button == GLFW_MOUSE_BUTTON_RIGHT)
 		{
-			input->bUpdateCamera = false;
-			input->bFirstInit = true;
+			input->bCameraMoving = false;
+			input->bInitMouse = true;
 			glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 		}
 	}
@@ -1254,16 +1269,16 @@ public:
 		FZeldaEngineApp* app = reinterpret_cast<FZeldaEngineApp*>(glfwGetWindowUserPointer(window));
 		FGlobalInput* input = &app->GlobalInput;
 
-		if (!input->bUpdateCamera)
+		if (!input->bCameraMoving)
 		{
 			return;
 		}
 
-		if (input->bFirstInit)
+		if (input->bInitMouse)
 		{
 			input->LastMouseX = xpos;
 			input->LastMouseY = ypos;
-			input->bFirstInit = false;
+			input->bInitMouse = false;
 		}
 
 		float CameraYaw = input->CameraYaw;
@@ -1286,7 +1301,7 @@ public:
 		if (CameraPitch < -89.0)
 			CameraPitch = -89.0;
 
-		if (input->bFocusCamera)
+		if (input->bCameraFocus)
 		{
 			glm::vec3 CameraPos = input->CameraPos;
 			float CameraArm = input->CameraArm;
@@ -1308,15 +1323,15 @@ public:
 		FZeldaEngineApp* app = reinterpret_cast<FZeldaEngineApp*>(glfwGetWindowUserPointer(window));
 		FGlobalInput* input = &app->GlobalInput;
 
-		if (input->bFocusCamera)
+		if (input->bCameraFocus)
 		{
 			glm::vec3 CameraPos = input->CameraPos;
 			glm::vec3 CameraLookat = input->CameraLookat;
 			glm::vec3 lookatToPos = CameraLookat - CameraPos;
 			glm::vec3 Direction = glm::normalize(lookatToPos);
-			float cameraDeltaMove = (float)yoffset * 0.5f;
+			float CameraDeltaMove = (float)yoffset * 0.5f;
 			float camerArm = input->CameraArm;
-			camerArm += cameraDeltaMove;
+			camerArm += CameraDeltaMove;
 			camerArm = glm::max(camerArm, 1.0f);
 			CameraPos = CameraLookat - camerArm * Direction;
 			input->CameraPos = CameraPos;
@@ -1327,61 +1342,61 @@ public:
 	void UpdateInputs()
 	{
 		float DeltaTime = (float)GlobalInput.DeltaTime;    // Time between current frame and last frame
-		float lastFrame = (float)GlobalInput.CurrentTime;  // Time of last frame
+		float LastFrame = (float)GlobalInput.CurrentTime;  // Time of last frame
 
 		float CurrentFrame = (float)glfwGetTime();
-		DeltaTime = CurrentFrame - lastFrame;
+		DeltaTime = CurrentFrame - LastFrame;
 
-		bool bFocusCamera = GlobalInput.bFocusCamera;
+		bool bCameraFocus = GlobalInput.bCameraFocus;
 		glm::vec3 CameraPos = GlobalInput.CameraPos;
 		glm::vec3 CameraLookat = GlobalInput.CameraLookat;
-		glm::vec3 cameraForward = glm::vec3(-1.0, 0.0, 0.0);
-		glm::vec3 cameraUp = glm::vec3(0.0, 0.0, 1.0);
+		glm::vec3 CameraForward = glm::vec3(-1.0, 0.0, 0.0);
+		glm::vec3 CameraUp = glm::vec3(0.0, 0.0, 1.0);
 		float CameraSpeed = GlobalInput.CameraSpeed;
 		float CameraYaw = GlobalInput.CameraYaw;
 		float CameraPitch = GlobalInput.CameraPitch;
-		glm::vec3 cameraDirection = glm::normalize(CameraLookat - CameraPos);
-		const float cameraDeltaMove = 2.5f * DeltaTime; // adjust accordingly
+		glm::vec3 CameraDirection = glm::normalize(CameraLookat - CameraPos);
+		const float CameraDeltaMove = 2.5f * DeltaTime; // adjust accordingly
 
 		if (glfwGetKey(Window, GLFW_KEY_W) == GLFW_PRESS)
 		{
-			if (bFocusCamera)
+			if (bCameraFocus)
 			{
 				float CameraArm = GlobalInput.CameraArm;
-				CameraArm -= cameraDeltaMove;
+				CameraArm -= CameraDeltaMove;
 				CameraArm = glm::max(CameraArm, 1.0f);
-				CameraPos = CameraLookat - CameraArm * cameraDirection;
+				CameraPos = CameraLookat - CameraArm * CameraDirection;
 				GlobalInput.CameraPos = CameraPos;
 				GlobalInput.CameraArm = CameraArm;
 			}
 			else
 			{
-				GlobalInput.CameraPos += cameraDeltaMove * cameraDirection;
+				GlobalInput.CameraPos += CameraDeltaMove * CameraDirection;
 			}
-			GlobalInput.CameraLookat = bFocusCamera ? CameraLookat : (CameraPos + cameraDirection);
+			GlobalInput.CameraLookat = bCameraFocus ? CameraLookat : (CameraPos + CameraDirection);
 		}
 		if (glfwGetKey(Window, GLFW_KEY_S) == GLFW_PRESS)
 		{
-			if (bFocusCamera)
+			if (bCameraFocus)
 			{
 				float CameraArm = GlobalInput.CameraArm;
-				CameraArm += cameraDeltaMove;
+				CameraArm += CameraDeltaMove;
 				CameraArm = glm::max(CameraArm, 1.0f);
-				CameraPos = CameraLookat - CameraArm * cameraDirection;
+				CameraPos = CameraLookat - CameraArm * CameraDirection;
 				GlobalInput.CameraPos = CameraPos;
 				GlobalInput.CameraArm = CameraArm;
 			}
 			else
 			{
-				GlobalInput.CameraPos -= cameraDeltaMove * cameraDirection;
+				GlobalInput.CameraPos -= CameraDeltaMove * CameraDirection;
 			}
-			GlobalInput.CameraLookat = bFocusCamera ? CameraLookat : (CameraPos + cameraDirection);
+			GlobalInput.CameraLookat = bCameraFocus ? CameraLookat : (CameraPos + CameraDirection);
 		}
 		if (glfwGetKey(Window, GLFW_KEY_A) == GLFW_PRESS)
 		{
-			if (bFocusCamera)
+			if (bCameraFocus)
 			{
-				CameraYaw += cameraDeltaMove * 45.0f;
+				CameraYaw += CameraDeltaMove * 45.0f;
 				float CameraArm = GlobalInput.CameraArm;
 				CameraPos.x = cos(glm::radians(CameraYaw)) * cos(glm::radians(CameraPitch)) * CameraArm;
 				CameraPos.y = sin(glm::radians(CameraYaw)) * cos(glm::radians(CameraPitch)) * CameraArm;
@@ -1389,17 +1404,17 @@ public:
 			}
 			else
 			{
-				CameraPos -= glm::normalize(glm::cross(cameraForward, cameraUp)) * cameraDeltaMove;
-				CameraLookat = CameraPos + cameraForward;
+				CameraPos -= glm::normalize(glm::cross(CameraForward, CameraUp)) * CameraDeltaMove;
+				CameraLookat = CameraPos + CameraForward;
 			}
 			GlobalInput.CameraPos = CameraPos;
 			GlobalInput.CameraLookat = CameraLookat;
 		}
 		if (glfwGetKey(Window, GLFW_KEY_D) == GLFW_PRESS)
 		{
-			if (bFocusCamera)
+			if (bCameraFocus)
 			{
-				CameraYaw -= cameraDeltaMove * 45.0f;
+				CameraYaw -= CameraDeltaMove * 45.0f;
 				float CameraArm = GlobalInput.CameraArm;
 				CameraPos.x = cos(glm::radians(CameraYaw)) * cos(glm::radians(CameraPitch)) * CameraArm;
 				CameraPos.y = sin(glm::radians(CameraYaw)) * cos(glm::radians(CameraPitch)) * CameraArm;
@@ -1407,28 +1422,28 @@ public:
 			}
 			else
 			{
-				CameraPos += glm::normalize(glm::cross(cameraForward, cameraUp)) * cameraDeltaMove;
-				CameraLookat = CameraPos + cameraForward;
+				CameraPos += glm::normalize(glm::cross(CameraForward, CameraUp)) * CameraDeltaMove;
+				CameraLookat = CameraPos + CameraForward;
 			}
 			GlobalInput.CameraPos = CameraPos;
 			GlobalInput.CameraLookat = CameraLookat;
 		}
 		if (glfwGetKey(Window, GLFW_KEY_Q) == GLFW_PRESS)
 		{
-			if (!bFocusCamera)
+			if (!bCameraFocus)
 			{
-				CameraPos.z -= cameraDeltaMove;
-				CameraLookat = CameraPos + cameraForward;
+				CameraPos.z -= CameraDeltaMove;
+				CameraLookat = CameraPos + CameraForward;
 				GlobalInput.CameraPos = CameraPos;
 				GlobalInput.CameraLookat = CameraLookat;
 			}
 		}
 		if (glfwGetKey(Window, GLFW_KEY_E) == GLFW_PRESS)
 		{
-			if (!bFocusCamera)
+			if (!bCameraFocus)
 			{
-				CameraPos.z += cameraDeltaMove;
-				CameraLookat = CameraPos + cameraForward;
+				CameraPos.z += CameraDeltaMove;
+				CameraLookat = CameraPos + CameraForward;
 				GlobalInput.CameraPos = CameraPos;
 				GlobalInput.CameraLookat = CameraLookat;
 			}
@@ -2223,57 +2238,57 @@ protected:
 			SkydomePass.SkydomeMesh.Indices);
 	}
 
-	void CreateBaseScenePass()
+	void CreateBasePass()
 	{
 		// 创建场景渲染流水线和着色器
 		uint32_t SpecConstantsCount = GlobalConstants.SpecConstantsCount;
-		CreateDescriptorSetLayout(BaseScenePass.DescriptorSetLayout);
-		BaseScenePass.Pipelines.resize(SpecConstantsCount);
-		BaseScenePass.PipelinesInstanced.resize(SpecConstantsCount);
-		CreatePipelineLayout(BaseScenePass.PipelineLayout, BaseScenePass.DescriptorSetLayout);
+		CreateDescriptorSetLayout(BasePass.DescriptorSetLayout);
+		BasePass.Pipelines.resize(SpecConstantsCount);
+		BasePass.PipelinesInstanced.resize(SpecConstantsCount);
+		CreatePipelineLayout(BasePass.PipelineLayout, BasePass.DescriptorSetLayout);
 		CreateGraphicsPipelines(
-			BaseScenePass.Pipelines,
-			BaseScenePass.PipelineLayout,
+			BasePass.Pipelines,
+			BasePass.PipelineLayout,
 			MainRenderPass,
-			"Resources/Shaders/Scene_VS.spv",
-			"Resources/Shaders/Scene_FS.spv",
+			"Resources/Shaders/Base_VS.spv",
+			"Resources/Shaders/Base_FS.spv",
 			ERenderFlags::VertexIndexed);
 		CreateGraphicsPipelines(
-			BaseScenePass.PipelinesInstanced,
-			BaseScenePass.PipelineLayout,
+			BasePass.PipelinesInstanced,
+			BasePass.PipelineLayout,
 			MainRenderPass,
-			"Resources/Shaders/SceneInstanced_VS.spv",
-			"Resources/Shaders/Scene_FS.spv",
+			"Resources/Shaders/BaseInstanced_VS.spv",
+			"Resources/Shaders/Base_FS.spv",
 			ERenderFlags::Instanced);
 		//~ 结束 创建场景，包括VBO，UBO，贴图等
 	}
 
-	void CreateBaseSceneIndirectPass()
+	void CreateBaseIndirectPass()
 	{
 		// 创建场景渲染流水线和着色器
-		CreateDescriptorSetLayout(BaseSceneIndirectPass.DescriptorSetLayout);
+		CreateDescriptorSetLayout(BaseIndirectPass.DescriptorSetLayout);
 		uint32_t SpecConstantsCount = GlobalConstants.SpecConstantsCount;
-		BaseSceneIndirectPass.Pipelines.resize(SpecConstantsCount);
-		BaseSceneIndirectPass.PipelinesInstanced.resize(SpecConstantsCount);
-		CreatePipelineLayout(BaseSceneIndirectPass.PipelineLayout, BaseSceneIndirectPass.DescriptorSetLayout);
+		BaseIndirectPass.Pipelines.resize(SpecConstantsCount);
+		BaseIndirectPass.PipelinesInstanced.resize(SpecConstantsCount);
+		CreatePipelineLayout(BaseIndirectPass.PipelineLayout, BaseIndirectPass.DescriptorSetLayout);
 		CreateGraphicsPipelines(
-			BaseSceneIndirectPass.Pipelines,
-			BaseSceneIndirectPass.PipelineLayout,
+			BaseIndirectPass.Pipelines,
+			BaseIndirectPass.PipelineLayout,
 			MainRenderPass,
-			"Resources/Shaders/Scene_VS.spv",
-			"Resources/Shaders/Scene_FS.spv",
+			"Resources/Shaders/Base_VS.spv",
+			"Resources/Shaders/Base_FS.spv",
 			ERenderFlags::VertexIndexed);
 		CreateGraphicsPipelines(
-			BaseSceneIndirectPass.PipelinesInstanced,
-			BaseSceneIndirectPass.PipelineLayout,
+			BaseIndirectPass.PipelinesInstanced,
+			BaseIndirectPass.PipelineLayout,
 			MainRenderPass,
-			"Resources/Shaders/SceneInstanced_VS.spv",
-			"Resources/Shaders/Scene_FS.spv",
+			"Resources/Shaders/BaseInstanced_VS.spv",
+			"Resources/Shaders/Base_FS.spv",
 			ERenderFlags::Instanced);
 	}
 
 	/** 创建GBuffer, 用于延迟渲染*/
-	void CreateBaseSceneDeferredPass()
+	void CreateBaseDeferredPass()
 	{
 		// Depth Stencil (Currently depth-only)
 		GBuffer.DepthStencilFormat = VK_FORMAT_D32_SFLOAT;
@@ -2399,7 +2414,7 @@ protected:
 		renderPassCI.dependencyCount = static_cast<uint32_t>(dependencies.size());
 		renderPassCI.pDependencies = dependencies.data();
 
-		if (vkCreateRenderPass(Device, &renderPassCI, nullptr, &BaseSceneDeferredPass.SceneRenderPass) != VK_SUCCESS) {
+		if (vkCreateRenderPass(Device, &renderPassCI, nullptr, &BaseDeferredPass.SceneRenderPass) != VK_SUCCESS) {
 			throw std::runtime_error("failed to Create render pass!");
 		}
 
@@ -2411,57 +2426,57 @@ protected:
 
 		VkFramebufferCreateInfo frameBufferCI{};
 		frameBufferCI.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-		frameBufferCI.renderPass = BaseSceneDeferredPass.SceneRenderPass;
+		frameBufferCI.renderPass = BaseDeferredPass.SceneRenderPass;
 		frameBufferCI.attachmentCount = static_cast<uint32_t>(attachments.size());
 		frameBufferCI.pAttachments = attachments.data();
 		frameBufferCI.width = SwapChainExtent.width;
 		frameBufferCI.height = SwapChainExtent.height;
 		frameBufferCI.layers = 1;
 
-		if (vkCreateFramebuffer(Device, &frameBufferCI, nullptr, &BaseSceneDeferredPass.SceneFrameBuffer) != VK_SUCCESS)
+		if (vkCreateFramebuffer(Device, &frameBufferCI, nullptr, &BaseDeferredPass.SceneFrameBuffer) != VK_SUCCESS)
 		{
 			throw std::runtime_error("failed to Create framebuffer!");
 		}
 
-		CreateDescriptorSetLayout(BaseSceneDeferredPass.SceneDescriptorSetLayout, ERenderFlags::DeferredScene);
-		BaseSceneDeferredPass.ScenePipelines.resize(GlobalConstants.SpecConstantsCount);
-		BaseSceneDeferredPass.ScenePipelinesInstanced.resize(GlobalConstants.SpecConstantsCount);
-		CreatePipelineLayout(BaseSceneDeferredPass.ScenePipelineLayout, BaseSceneDeferredPass.SceneDescriptorSetLayout);
+		CreateDescriptorSetLayout(BaseDeferredPass.SceneDescriptorSetLayout, ERenderFlags::DeferredScene);
+		BaseDeferredPass.ScenePipelines.resize(GlobalConstants.SpecConstantsCount);
+		BaseDeferredPass.ScenePipelinesInstanced.resize(GlobalConstants.SpecConstantsCount);
+		CreatePipelineLayout(BaseDeferredPass.ScenePipelineLayout, BaseDeferredPass.SceneDescriptorSetLayout);
 		CreateGraphicsPipelines(
-			BaseSceneDeferredPass.ScenePipelines,
-			BaseSceneDeferredPass.ScenePipelineLayout,
-			BaseSceneDeferredPass.SceneRenderPass,
-			"Resources/Shaders/Scene_VS.spv",
-			"Resources/Shaders/SceneBase_FS.spv",
+			BaseDeferredPass.ScenePipelines,
+			BaseDeferredPass.ScenePipelineLayout,
+			BaseDeferredPass.SceneRenderPass,
+			"Resources/Shaders/Base_VS.spv",
+			"Resources/Shaders/BaseScene_FS.spv",
 			ERenderFlags::VertexIndexed | ERenderFlags::DeferredScene);
 		CreateGraphicsPipelines(
-			BaseSceneDeferredPass.ScenePipelinesInstanced,
-			BaseSceneDeferredPass.ScenePipelineLayout,
-			BaseSceneDeferredPass.SceneRenderPass,
-			"Resources/Shaders/SceneInstanced_VS.spv",
-			"Resources/Shaders/SceneBase_FS.spv",
+			BaseDeferredPass.ScenePipelinesInstanced,
+			BaseDeferredPass.ScenePipelineLayout,
+			BaseDeferredPass.SceneRenderPass,
+			"Resources/Shaders/BaseInstanced_VS.spv",
+			"Resources/Shaders/BaseScene_FS.spv",
 			ERenderFlags::Instanced | ERenderFlags::DeferredScene);
 
 		/** Create DescriptorSetLayout for Lighting*/
-		CreateDescriptorSetLayout(BaseSceneDeferredPass.LightingDescriptorSetLayout, ERenderFlags::DeferredLighting);
+		CreateDescriptorSetLayout(BaseDeferredPass.LightingDescriptorSetLayout, ERenderFlags::DeferredLighting);
 
 		/** Create DescriptorPool and DescriptorSets for Lighting*/
 		CreateDescriptorSet(
-			BaseSceneDeferredPass.LightingDescriptorSets,
-			BaseSceneDeferredPass.LightingDescriptorPool,
-			BaseSceneDeferredPass.LightingDescriptorSetLayout,
+			BaseDeferredPass.LightingDescriptorSets,
+			BaseDeferredPass.LightingDescriptorPool,
+			BaseDeferredPass.LightingDescriptorSetLayout,
 			GBuffer.ImageViews(),
 			GBuffer.Samplers(),
 			ERenderFlags::DeferredLighting);
 
-		CreatePipelineLayout(BaseSceneDeferredPass.LightingPipelineLayout, BaseSceneDeferredPass.LightingDescriptorSetLayout);
-		BaseSceneDeferredPass.LightingPipelines.resize(GlobalConstants.SpecConstantsCount);
+		CreatePipelineLayout(BaseDeferredPass.LightingPipelineLayout, BaseDeferredPass.LightingDescriptorSetLayout);
+		BaseDeferredPass.LightingPipelines.resize(GlobalConstants.SpecConstantsCount);
 		CreateGraphicsPipelines(
-			BaseSceneDeferredPass.LightingPipelines,
-			BaseSceneDeferredPass.LightingPipelineLayout,
+			BaseDeferredPass.LightingPipelines,
+			BaseDeferredPass.LightingPipelineLayout,
 			MainRenderPass,
 			"Resources/Shaders/Background_VS.spv",
-			"Resources/Shaders/SceneBaseLighting_FS.spv",
+			"Resources/Shaders/BaseLighting_FS.spv",
 			ERenderFlags::ScreenRect | ERenderFlags::NoDepthTest | ERenderFlags::DeferredLighting);
 	}
 
@@ -2646,7 +2661,6 @@ protected:
 				vkCmdBindIndexBuffer(commandBuffer, renderObject->MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 				vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
 					ShadowmapPass.PipelineLayout, 0, 1, &ShadowmapPass.DescriptorSets[CurrentFrame], 0, nullptr);
-				vkCmdPushConstants(commandBuffer, ShadowmapPass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
 				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderObject->MeshData.Indices.size()), 1, 0, 0, 0);
 			}
 			// 【阴影】渲染 Instanced 场景
@@ -2662,14 +2676,12 @@ protected:
 				vkCmdBindIndexBuffer(commandBuffer, renderInstancedObject->MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 				vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
 					ShadowmapPass.PipelineLayout, 0, 1, &ShadowmapPass.DescriptorSets[CurrentFrame], 0, nullptr);
-				vkCmdPushConstants(commandBuffer, ShadowmapPass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
 				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderInstancedObject->MeshData.Indices.size()), renderInstancedObject->InstanceCount, 0, 0, 0);
 			}
 			// 【阴影】渲染Indirect场景
 			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ShadowmapPass.Pipelines[0]);
 			vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
 				ShadowmapPass.PipelineLayout, 0, 1, &ShadowmapPass.DescriptorSets[CurrentFrame], 0, nullptr);
-			vkCmdPushConstants(commandBuffer, ShadowmapPass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
 			for (size_t i = 0; i < ShadowmapPass.RenderIndirectObjects.size(); i++)
 			{
 				FRenderIndirectObject* RenderIndirectObject = ShadowmapPass.RenderIndirectObjects[i];
@@ -2705,7 +2717,6 @@ protected:
 			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ShadowmapPass.PipelinesInstanced[0]);
 			vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
 				ShadowmapPass.PipelineLayout, 0, 1, &ShadowmapPass.DescriptorSets[CurrentFrame], 0, nullptr);
-			vkCmdPushConstants(commandBuffer, ShadowmapPass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
 			for (size_t i = 0; i < ShadowmapPass.RenderIndirectInstancedObjects.size(); i++)
 			{
 				FRenderIndirectInstancedObject* RenderIndirectInstancedObject = ShadowmapPass.RenderIndirectInstancedObjects[i];
@@ -2763,8 +2774,8 @@ protected:
 		{
 			VkRenderPassBeginInfo renderPassInfo{};
 			renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-			renderPassInfo.renderPass = BaseSceneDeferredPass.SceneRenderPass;
-			renderPassInfo.framebuffer = BaseSceneDeferredPass.SceneFrameBuffer;
+			renderPassInfo.renderPass = BaseDeferredPass.SceneRenderPass;
+			renderPassInfo.framebuffer = BaseDeferredPass.SceneFrameBuffer;
 			renderPassInfo.renderArea.offset = { 0, 0 };
 			renderPassInfo.renderArea.extent = SwapChainExtent;
 
@@ -2785,12 +2796,12 @@ protected:
 			vkCmdSetScissor(commandBuffer, 0, 1, &mainScissor);
 
 			// 【延迟渲染】渲染场景
-			for (size_t i = 0; i < BaseSceneDeferredPass.RenderDeferredObjects.size(); i++)
+			for (size_t i = 0; i < BaseDeferredPass.RenderDeferredObjects.size(); i++)
 			{
 				uint32_t SpecConstants = GlobalConstants.SpecConstants;
-				VkPipeline baseScenePassPipeline = BaseSceneDeferredPass.ScenePipelines[SpecConstants];
+				VkPipeline baseScenePassPipeline = BaseDeferredPass.ScenePipelines[SpecConstants];
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, baseScenePassPipeline);
-				FRenderDeferredObject* renderObject = BaseSceneDeferredPass.RenderDeferredObjects[i];
+				FRenderDeferredObject* renderObject = BaseDeferredPass.RenderDeferredObjects[i];
 				VkBuffer objectVertexBuffers[] = { renderObject->MeshData.VertexBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
@@ -2798,18 +2809,17 @@ protected:
 				vkCmdBindDescriptorSets(
 					commandBuffer,
 					VK_PIPELINE_BIND_POINT_GRAPHICS,
-					BaseSceneDeferredPass.ScenePipelineLayout, 0, 1,
+					BaseDeferredPass.ScenePipelineLayout, 0, 1,
 					&renderObject->MateData.DescriptorSets[CurrentFrame], 0, nullptr);
-				vkCmdPushConstants(commandBuffer, BaseSceneDeferredPass.ScenePipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
 				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderObject->MeshData.Indices.size()), 1, 0, 0, 0);
 			}
 			// 【延迟渲染】渲染 Instanced 场景
-			for (size_t i = 0; i < BaseSceneDeferredPass.RenderDeferredInstancedObjects.size(); i++)
+			for (size_t i = 0; i < BaseDeferredPass.RenderDeferredInstancedObjects.size(); i++)
 			{
 				uint32_t SpecConstants = GlobalConstants.SpecConstants;
-				VkPipeline BaseScenePassPipelineInstanced = BaseSceneDeferredPass.ScenePipelinesInstanced[SpecConstants];
+				VkPipeline BaseScenePassPipelineInstanced = BaseDeferredPass.ScenePipelinesInstanced[SpecConstants];
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BaseScenePassPipelineInstanced);
-				FRenderDeferredInstancedObject* renderInstancedObject = BaseSceneDeferredPass.RenderDeferredInstancedObjects[i];
+				FRenderDeferredInstancedObject* renderInstancedObject = BaseDeferredPass.RenderDeferredInstancedObjects[i];
 				VkBuffer objectVertexBuffers[] = { renderInstancedObject->MeshData.VertexBuffer };
 				VkBuffer objectInstanceBuffers[] = { renderInstancedObject->MeshData.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
@@ -2819,9 +2829,8 @@ protected:
 				vkCmdBindDescriptorSets(
 					commandBuffer,
 					VK_PIPELINE_BIND_POINT_GRAPHICS,
-					BaseSceneDeferredPass.ScenePipelineLayout, 0, 1,
+					BaseDeferredPass.ScenePipelineLayout, 0, 1,
 					&renderInstancedObject->MateData.DescriptorSets[CurrentFrame], 0, nullptr);
-				vkCmdPushConstants(commandBuffer, BaseSceneDeferredPass.ScenePipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
 				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderInstancedObject->MeshData.Indices.size()), renderInstancedObject->InstanceCount, 0, 0, 0);
 			}
 
@@ -2883,18 +2892,18 @@ protected:
 
 #if ENABLE_DEFEERED_SHADING
 			// 【主场景】渲染延迟渲染灯光
-			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BaseSceneDeferredPass.LightingPipelines[GlobalConstants.SpecConstants]);
-			vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BaseSceneDeferredPass.LightingPipelineLayout, 0, 1, &BaseSceneDeferredPass.LightingDescriptorSets[CurrentFrame], 0, nullptr);
-			vkCmdPushConstants(commandBuffer, BaseSceneDeferredPass.LightingPipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
+			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BaseDeferredPass.LightingPipelines[GlobalConstants.SpecConstants]);
+			vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BaseDeferredPass.LightingPipelineLayout, 0, 1, &BaseDeferredPass.LightingDescriptorSets[CurrentFrame], 0, nullptr);
+			vkCmdPushConstants(commandBuffer, BaseDeferredPass.LightingPipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
 			vkCmdDraw(commandBuffer, 6, 1, 0, 0);
 #endif
 
 			// 【主场景】渲染场景
-			for (size_t i = 0; i < BaseScenePass.RenderObjects.size(); i++)
+			for (size_t i = 0; i < BasePass.RenderObjects.size(); i++)
 			{
-				VkPipeline baseScenePassPipeline = BaseScenePass.Pipelines[GlobalConstants.SpecConstants];
+				VkPipeline baseScenePassPipeline = BasePass.Pipelines[GlobalConstants.SpecConstants];
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, baseScenePassPipeline);
-				FRenderObject* renderObject = BaseScenePass.RenderObjects[i];
+				FRenderObject* renderObject = BasePass.RenderObjects[i];
 				VkBuffer objectVertexBuffers[] = { renderObject->MeshData.VertexBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
@@ -2902,17 +2911,17 @@ protected:
 				vkCmdBindDescriptorSets(
 					commandBuffer,
 					VK_PIPELINE_BIND_POINT_GRAPHICS,
-					BaseScenePass.PipelineLayout, 0, 1,
+					BasePass.PipelineLayout, 0, 1,
 					&renderObject->MateData.DescriptorSets[CurrentFrame], 0, nullptr);
-				vkCmdPushConstants(commandBuffer, BaseScenePass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
+				vkCmdPushConstants(commandBuffer, BasePass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
 				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderObject->MeshData.Indices.size()), 1, 0, 0, 0);
 			}
 			// 【主场景】渲染 Instanced 场景
-			for (size_t i = 0; i < BaseScenePass.RenderInstancedObjects.size(); i++)
+			for (size_t i = 0; i < BasePass.RenderInstancedObjects.size(); i++)
 			{
-				VkPipeline BaseScenePassPipelineInstanced = BaseScenePass.PipelinesInstanced[GlobalConstants.SpecConstants];
+				VkPipeline BaseScenePassPipelineInstanced = BasePass.PipelinesInstanced[GlobalConstants.SpecConstants];
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BaseScenePassPipelineInstanced);
-				FRenderInstancedObject* renderInstancedObject = BaseScenePass.RenderInstancedObjects[i];
+				FRenderInstancedObject* renderInstancedObject = BasePass.RenderInstancedObjects[i];
 				VkBuffer objectVertexBuffers[] = { renderInstancedObject->MeshData.VertexBuffer };
 				VkBuffer objectInstanceBuffers[] = { renderInstancedObject->MeshData.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
@@ -2922,17 +2931,17 @@ protected:
 				vkCmdBindDescriptorSets(
 					commandBuffer,
 					VK_PIPELINE_BIND_POINT_GRAPHICS,
-					BaseScenePass.PipelineLayout, 0, 1,
+					BasePass.PipelineLayout, 0, 1,
 					&renderInstancedObject->MateData.DescriptorSets[CurrentFrame], 0, nullptr);
-				vkCmdPushConstants(commandBuffer, BaseScenePass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
+				vkCmdPushConstants(commandBuffer, BasePass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
 				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderInstancedObject->MeshData.Indices.size()), renderInstancedObject->InstanceCount, 0, 0, 0);
 			}
 			// 【主场景】渲染 Indirect 场景
-			for (size_t i = 0; i < BaseSceneIndirectPass.RenderIndirectObjects.size(); i++)
+			for (size_t i = 0; i < BaseIndirectPass.RenderIndirectObjects.size(); i++)
 			{
-				VkPipeline indirectScenePassPipeline = BaseSceneIndirectPass.Pipelines[GlobalConstants.SpecConstants];
+				VkPipeline indirectScenePassPipeline = BaseIndirectPass.Pipelines[GlobalConstants.SpecConstants];
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, indirectScenePassPipeline);
-				FRenderIndirectObject* RenderIndirectObject = BaseSceneIndirectPass.RenderIndirectObjects[i];
+				FRenderIndirectObject* RenderIndirectObject = BaseIndirectPass.RenderIndirectObjects[i];
 				VkBuffer objectVertexBuffers[] = { RenderIndirectObject->MeshData.VertexBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
@@ -2940,9 +2949,9 @@ protected:
 				vkCmdBindDescriptorSets(
 					commandBuffer,
 					VK_PIPELINE_BIND_POINT_GRAPHICS,
-					BaseSceneIndirectPass.PipelineLayout, 0, 1,
+					BaseIndirectPass.PipelineLayout, 0, 1,
 					&RenderIndirectObject->MateData.DescriptorSets[CurrentFrame], 0, nullptr);
-				vkCmdPushConstants(commandBuffer, BaseSceneIndirectPass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
+				vkCmdPushConstants(commandBuffer, BaseIndirectPass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
 				uint32_t indirectDrawCount = static_cast<uint32_t>(RenderIndirectObject->IndirectCommands.size());
 				if (IsSupportMultiDrawIndirect(PhysicalDevice))
 				{
@@ -2985,11 +2994,11 @@ protected:
 				}
 			}
 			// 【主场景】渲染 Indirect Instanced 场景
-			for (size_t i = 0; i < BaseSceneIndirectPass.RenderIndirectInstancedObjects.size(); i++)
+			for (size_t i = 0; i < BaseIndirectPass.RenderIndirectInstancedObjects.size(); i++)
 			{
-				VkPipeline indirectScenePassPipelineInstanced = BaseSceneIndirectPass.PipelinesInstanced[GlobalConstants.SpecConstants];
+				VkPipeline indirectScenePassPipelineInstanced = BaseIndirectPass.PipelinesInstanced[GlobalConstants.SpecConstants];
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, indirectScenePassPipelineInstanced);
-				FRenderIndirectInstancedObject* RenderIndirectInstancedObject = BaseSceneIndirectPass.RenderIndirectInstancedObjects[i];
+				FRenderIndirectInstancedObject* RenderIndirectInstancedObject = BaseIndirectPass.RenderIndirectInstancedObjects[i];
 				VkBuffer objectVertexBuffers[] = { RenderIndirectInstancedObject->MeshData.VertexBuffer };
 				VkBuffer objectInstanceBuffers[] = { RenderIndirectInstancedObject->MeshData.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
@@ -3001,9 +3010,9 @@ protected:
 				vkCmdBindDescriptorSets(
 					commandBuffer,
 					VK_PIPELINE_BIND_POINT_GRAPHICS,
-					BaseSceneIndirectPass.PipelineLayout, 0, 1,
+					BaseIndirectPass.PipelineLayout, 0, 1,
 					&RenderIndirectInstancedObject->MateData.DescriptorSets[CurrentFrame], 0, nullptr);
-				vkCmdPushConstants(commandBuffer, BaseSceneIndirectPass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
+				vkCmdPushConstants(commandBuffer, BaseIndirectPass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
 				uint32_t indirectDrawCount = static_cast<uint32_t>(RenderIndirectInstancedObject->IndirectCommands.size());
 				if (IsSupportMultiDrawIndirect(PhysicalDevice))
 				{
@@ -3046,7 +3055,6 @@ protected:
 				// 【主场景】渲染背景面片
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BackgroundPass.Pipelines[0]);
 				vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BackgroundPass.PipelineLayout, 0, 1, &BackgroundPass.DescriptorSets[CurrentFrame], 0, nullptr);
-				vkCmdPushConstants(commandBuffer, BackgroundPass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
 				vkCmdDraw(commandBuffer, 6, 1, 0, 0);
 			}
 
@@ -3207,44 +3215,44 @@ protected:
 			vkFreeMemory(Device, BackgroundPass.ImageMemorys[i], nullptr);
 		}
 
-		// 清理 BaseScenePass
-		vkDestroyDescriptorSetLayout(Device, BaseScenePass.DescriptorSetLayout, nullptr);
-		vkDestroyPipelineLayout(Device, BaseScenePass.PipelineLayout, nullptr);
-		for (size_t i = 0; i < BaseScenePass.Pipelines.size(); i++)
+		// 清理 BasePass
+		vkDestroyDescriptorSetLayout(Device, BasePass.DescriptorSetLayout, nullptr);
+		vkDestroyPipelineLayout(Device, BasePass.PipelineLayout, nullptr);
+		for (size_t i = 0; i < BasePass.Pipelines.size(); i++)
 		{
-			assert(BaseScenePass.Pipelines.size() == BaseScenePass.PipelinesInstanced.size());
-			vkDestroyPipeline(Device, BaseScenePass.Pipelines[i], nullptr);
-			vkDestroyPipeline(Device, BaseScenePass.PipelinesInstanced[i], nullptr);
+			assert(BasePass.Pipelines.size() == BasePass.PipelinesInstanced.size());
+			vkDestroyPipeline(Device, BasePass.Pipelines[i], nullptr);
+			vkDestroyPipeline(Device, BasePass.PipelinesInstanced[i], nullptr);
 		}
 
-		// 清理 BaseSceneIndirectPass
-		vkDestroyDescriptorSetLayout(Device, BaseSceneIndirectPass.DescriptorSetLayout, nullptr);
-		vkDestroyPipelineLayout(Device, BaseSceneIndirectPass.PipelineLayout, nullptr);
-		for (size_t i = 0; i < BaseSceneIndirectPass.Pipelines.size(); i++)
+		// 清理 BaseIndirectPass
+		vkDestroyDescriptorSetLayout(Device, BaseIndirectPass.DescriptorSetLayout, nullptr);
+		vkDestroyPipelineLayout(Device, BaseIndirectPass.PipelineLayout, nullptr);
+		for (size_t i = 0; i < BaseIndirectPass.Pipelines.size(); i++)
 		{
-			assert(BaseSceneIndirectPass.Pipelines.size() == BaseSceneIndirectPass.PipelinesInstanced.size());
-			vkDestroyPipeline(Device, BaseSceneIndirectPass.Pipelines[i], nullptr);
-			vkDestroyPipeline(Device, BaseSceneIndirectPass.PipelinesInstanced[i], nullptr);
+			assert(BaseIndirectPass.Pipelines.size() == BaseIndirectPass.PipelinesInstanced.size());
+			vkDestroyPipeline(Device, BaseIndirectPass.Pipelines[i], nullptr);
+			vkDestroyPipeline(Device, BaseIndirectPass.PipelinesInstanced[i], nullptr);
 		}
 
-		// 清理 BaseSceneDeferredPass
+		// 清理 BaseDeferredPass
 #if ENABLE_DEFEERED_SHADING
-		vkDestroyDescriptorSetLayout(Device, BaseSceneDeferredPass.LightingDescriptorSetLayout, nullptr);
-		vkDestroyDescriptorPool(Device, BaseSceneDeferredPass.LightingDescriptorPool, nullptr);
-		vkDestroyPipelineLayout(Device, BaseSceneDeferredPass.LightingPipelineLayout, nullptr);
-		for (size_t i = 0; i < BaseSceneDeferredPass.LightingPipelines.size(); i++)
+		vkDestroyDescriptorSetLayout(Device, BaseDeferredPass.LightingDescriptorSetLayout, nullptr);
+		vkDestroyDescriptorPool(Device, BaseDeferredPass.LightingDescriptorPool, nullptr);
+		vkDestroyPipelineLayout(Device, BaseDeferredPass.LightingPipelineLayout, nullptr);
+		for (size_t i = 0; i < BaseDeferredPass.LightingPipelines.size(); i++)
 		{
-			vkDestroyPipeline(Device, BaseSceneDeferredPass.LightingPipelines[i], nullptr);
+			vkDestroyPipeline(Device, BaseDeferredPass.LightingPipelines[i], nullptr);
 		}
-		vkDestroyRenderPass(Device, BaseSceneDeferredPass.SceneRenderPass, nullptr);
-		vkDestroyFramebuffer(Device, BaseSceneDeferredPass.SceneFrameBuffer, nullptr);
-		vkDestroyDescriptorSetLayout(Device, BaseSceneDeferredPass.SceneDescriptorSetLayout, nullptr);
-		vkDestroyPipelineLayout(Device, BaseSceneDeferredPass.ScenePipelineLayout, nullptr);
-		for (size_t i = 0; i < BaseSceneDeferredPass.ScenePipelines.size(); i++)
+		vkDestroyRenderPass(Device, BaseDeferredPass.SceneRenderPass, nullptr);
+		vkDestroyFramebuffer(Device, BaseDeferredPass.SceneFrameBuffer, nullptr);
+		vkDestroyDescriptorSetLayout(Device, BaseDeferredPass.SceneDescriptorSetLayout, nullptr);
+		vkDestroyPipelineLayout(Device, BaseDeferredPass.ScenePipelineLayout, nullptr);
+		for (size_t i = 0; i < BaseDeferredPass.ScenePipelines.size(); i++)
 		{
-			assert(BaseSceneDeferredPass.ScenePipelines.size() == BaseSceneDeferredPass.ScenePipelinesInstanced.size());
-			vkDestroyPipeline(Device, BaseSceneDeferredPass.ScenePipelines[i], nullptr);
-			vkDestroyPipeline(Device, BaseSceneDeferredPass.ScenePipelinesInstanced[i], nullptr);
+			assert(BaseDeferredPass.ScenePipelines.size() == BaseDeferredPass.ScenePipelinesInstanced.size());
+			vkDestroyPipeline(Device, BaseDeferredPass.ScenePipelines[i], nullptr);
+			vkDestroyPipeline(Device, BaseDeferredPass.ScenePipelinesInstanced[i], nullptr);
 		}
 
 		vkDestroyImageView(Device, GBuffer.DepthStencilImageView, nullptr);
@@ -3289,10 +3297,10 @@ protected:
 public:
 	void CreateEngineScene()
 	{
-		Scene.DescriptorSetLayout = &BaseScenePass.DescriptorSetLayout;
-		Scene.IndirectDescriptorSetLayout = &BaseSceneIndirectPass.DescriptorSetLayout;
-		Scene.DeferredSceneDescriptorSetLayout = &BaseSceneDeferredPass.SceneDescriptorSetLayout;
-		Scene.DeferredLightingDescriptorSetLayout = &BaseSceneDeferredPass.LightingDescriptorSetLayout;
+		Scene.DescriptorSetLayout = &BasePass.DescriptorSetLayout;
+		Scene.IndirectDescriptorSetLayout = &BaseIndirectPass.DescriptorSetLayout;
+		Scene.DeferredSceneDescriptorSetLayout = &BaseDeferredPass.SceneDescriptorSetLayout;
+		Scene.DeferredLightingDescriptorSetLayout = &BaseDeferredPass.LightingDescriptorSetLayout;
 
 		/* (1) Override skydome and background */
 		vkDestroyImageView(Device, CubemapImageView, nullptr);
@@ -3449,18 +3457,19 @@ public:
 		CreateRenderObjectsFromProfabs(Scene.RenderDeferredInstancedObjects, *Scene.DeferredSceneDescriptorSetLayout, "rock_02", rock_InstanceData);
 		CreateRenderObjectsFromProfabs(Scene.RenderDeferredInstancedObjects, *Scene.DeferredSceneDescriptorSetLayout, "grass_01", grass_01_InstanceData);
 		CreateRenderObjectsFromProfabs(Scene.RenderDeferredInstancedObjects, *Scene.DeferredSceneDescriptorSetLayout, "grass_02", grass_02_InstanceData);
-		UpdateDescriptorSet(BaseSceneDeferredPass.LightingDescriptorSets, GBuffer.ImageViews(), GBuffer.Samplers(), ERenderFlags::DeferredLighting);
+		UpdateDescriptorSet(BaseDeferredPass.LightingDescriptorSets, GBuffer.ImageViews(), GBuffer.Samplers(), ERenderFlags::DeferredLighting);
 #endif
 		/* 
 		* (3) Create light here
 		*/
+		uint32_t DirectionalLightNum = 1;
 		FLight Moonlight;
 		Moonlight.Position = glm::vec4(20.0f, 0.0f, 20.0f, 0.0);
 		Moonlight.Color = glm::vec4(0.0, 0.1, 0.6, 15.0);
 		Moonlight.Direction = glm::vec4(glm::normalize(glm::vec3(Moonlight.Position.x, Moonlight.Position.y, Moonlight.Position.z)), 0.0);
 		Moonlight.LightInfo = glm::vec4(0.0, 0.0, 0.0, 0.0);
 		View.DirectionalLights[0] = Moonlight;
-		uint32_t PointLightNum = POINT_LIGHTS_NUM;
+		uint32_t PointLightNum = 16;
 		for (uint32_t i = 0; i < PointLightNum; i++)
 		{
 			FLight PointLight;
@@ -3478,7 +3487,7 @@ public:
 			PointLight.LightInfo = glm::vec4(0.0, 0.0, 0.0, 0.0);
 			View.PointLights[i] = PointLight;
 		}
-		View.LightsCount = glm::ivec4(1, PointLightNum, 0, CubemapMaxMips);
+		View.LightsCount = glm::ivec4(DirectionalLightNum, PointLightNum, 0, CubemapMaxMips);
 	}
 
 	/** 更新统一缓存区（UBO）*/
@@ -3486,15 +3495,14 @@ public:
 	{
 		glm::vec3 CameraPos = GlobalInput.CameraPos;
 		glm::vec3 CameraLookat = GlobalInput.CameraLookat;
-		glm::vec3 cameraUp = glm::vec3(0.0, 0.0, 1.0);
+		glm::vec3 CameraUp = GlobalInput.CameraUp;
 		float CameraFOV = GlobalInput.CameraFOV;
 		float zNear = GlobalInput.zNear;
 		float zFar = GlobalInput.zFar;
 
-		static auto startTime = std::chrono::high_resolution_clock::now();
+		static auto StartTime = std::chrono::high_resolution_clock::now();
 		auto CurrentTime = std::chrono::high_resolution_clock::now();
-		float Time = std::chrono::duration<float, std::chrono::seconds::period>(CurrentTime - startTime).count();
-		GlobalConstants.Time = Time;
+		float Time = std::chrono::duration<float, std::chrono::seconds::period>(CurrentTime - StartTime).count();
 
 		ShadowmapPass.zNear = zNear;
 		ShadowmapPass.zFar = zFar;
@@ -3515,7 +3523,7 @@ public:
 		glm::mat4 shadowProjection = glm::perspective(glm::radians(CameraFOV), 1.0f, ShadowmapPass.zNear, ShadowmapPass.zFar);
 		shadowProjection[1][1] *= -1;
 
-		glm::mat4 cameraView = glm::lookAt(CameraPos, CameraLookat, cameraUp);
+		glm::mat4 cameraView = glm::lookAt(CameraPos, CameraLookat, CameraUp);
 		glm::mat4 cameraProj = glm::perspective(glm::radians(CameraFOV), SwapChainExtent.width / (float)SwapChainExtent.height, zNear, zFar);
 
 		FUniformBufferBase BaseData{};
@@ -3534,7 +3542,7 @@ public:
 		View.ShadowmapSpace = shadowProjection * shadowView;
 		View.LocalToWorld = localToWorld;
 		View.CameraInfo = glm::vec4(CameraPos, CameraFOV);
-		uint32_t PointLightNum = POINT_LIGHTS_NUM;
+		uint32_t PointLightNum = View.LightsCount[1];
 		for (uint32_t i = 0; i < PointLightNum; i++)
 		{
 			float radians = ((float)i / (float)PointLightNum) * 360.0f - RollLight * 100.0f;
@@ -3544,7 +3552,7 @@ public:
 			float Z = 1.5;
 			View.PointLights[i].Position = glm::vec4(X, Y, Z, 1.0);
 		}
-		View.LightsCount = glm::ivec4(1, PointLightNum, 0, CubemapMaxMips);
+		View.Time = Time;
 		View.zNear = ShadowmapPass.zNear;
 		View.zFar = ShadowmapPass.zFar;
 
@@ -3567,17 +3575,17 @@ public:
 		ShadowmapPass.RenderInstancedObjects.clear();
 		ShadowmapPass.RenderIndirectObjects.clear();
 		ShadowmapPass.RenderIndirectInstancedObjects.clear();
-		BaseScenePass.RenderObjects.clear();
-		BaseScenePass.RenderInstancedObjects.clear();
-		BaseSceneIndirectPass.RenderIndirectObjects.clear();
-		BaseSceneIndirectPass.RenderIndirectInstancedObjects.clear();
-		BaseSceneDeferredPass.RenderDeferredObjects.clear();
-		BaseSceneDeferredPass.RenderDeferredInstancedObjects.clear();
+		BasePass.RenderObjects.clear();
+		BasePass.RenderInstancedObjects.clear();
+		BaseIndirectPass.RenderIndirectObjects.clear();
+		BaseIndirectPass.RenderIndirectInstancedObjects.clear();
+		BaseDeferredPass.RenderDeferredObjects.clear();
+		BaseDeferredPass.RenderDeferredInstancedObjects.clear();
 
 		for (size_t i = 0; i < Scene.RenderObjects.size(); i++)
 		{
 			FRenderObject* RenderObject = &Scene.RenderObjects[i];
-			BaseScenePass.RenderObjects.push_back(RenderObject);
+			BasePass.RenderObjects.push_back(RenderObject);
 			ShadowmapPass.RenderObjects.push_back(RenderObject);
 #if ENABLE_BINDLESS
 			UpdateDescriptorSet(RenderObject->MateData.DescriptorSets, RenderObject->MateData.TextureImageViews, RenderObject->MateData.TextureImageSamplers);
@@ -3586,7 +3594,7 @@ public:
 		for (size_t i = 0; i < Scene.RenderInstancedObjects.size(); i++)
 		{
 			FRenderInstancedObject* RenderInstancedObject = &Scene.RenderInstancedObjects[i];
-			BaseScenePass.RenderInstancedObjects.push_back(RenderInstancedObject);
+			BasePass.RenderInstancedObjects.push_back(RenderInstancedObject);
 				ShadowmapPass.RenderInstancedObjects.push_back(RenderInstancedObject);
 #if ENABLE_BINDLESS
 			UpdateDescriptorSet(RenderInstancedObject->MateData.DescriptorSets,
@@ -3596,7 +3604,7 @@ public:
 		for (size_t i = 0; i < Scene.RenderIndirectObjects.size(); i++)
 		{
 			FRenderIndirectObject* RenderIndirectObject = &Scene.RenderIndirectObjects[i];
-			BaseSceneIndirectPass.RenderIndirectObjects.push_back(RenderIndirectObject);
+			BaseIndirectPass.RenderIndirectObjects.push_back(RenderIndirectObject);
 			ShadowmapPass.RenderIndirectObjects.push_back(RenderIndirectObject);
 #if ENABLE_BINDLESS
 			UpdateDescriptorSet(RenderIndirectObject->MateData.DescriptorSets,
@@ -3606,7 +3614,7 @@ public:
 		for (size_t i = 0; i < Scene.RenderIndirectInstancedObjects.size(); i++)
 		{
 			FRenderIndirectInstancedObject* RenderIndirectInstancedObject = &Scene.RenderIndirectInstancedObjects[i];
-			BaseSceneIndirectPass.RenderIndirectInstancedObjects.push_back(RenderIndirectInstancedObject);
+			BaseIndirectPass.RenderIndirectInstancedObjects.push_back(RenderIndirectInstancedObject);
 			ShadowmapPass.RenderIndirectInstancedObjects.push_back(RenderIndirectInstancedObject);
 #if ENABLE_BINDLESS
 			UpdateDescriptorSet(RenderIndirectInstancedObject->MateData.DescriptorSets,
@@ -3617,7 +3625,7 @@ public:
 		for (size_t i = 0; i < Scene.RenderDeferredObjects.size(); i++)
 		{
 			FRenderDeferredObject* RenderDeferredObject = &Scene.RenderDeferredObjects[i];
-			BaseSceneDeferredPass.RenderDeferredObjects.push_back(RenderDeferredObject);
+			BaseDeferredPass.RenderDeferredObjects.push_back(RenderDeferredObject);
 			ShadowmapPass.RenderObjects.push_back(RenderDeferredObject);
 #if ENABLE_BINDLESS
 			UpdateDescriptorSet(RenderDeferredObject->MateData.DescriptorSets,
@@ -3627,7 +3635,7 @@ public:
 		for (size_t i = 0; i < Scene.RenderDeferredInstancedObjects.size(); i++)
 		{
 			FRenderDeferredInstancedObject* RenderDeferredInstancedObject = &Scene.RenderDeferredInstancedObjects[i];
-			BaseSceneDeferredPass.RenderDeferredInstancedObjects.push_back(RenderDeferredInstancedObject);
+			BaseDeferredPass.RenderDeferredInstancedObjects.push_back(RenderDeferredInstancedObject);
 			ShadowmapPass.RenderInstancedObjects.push_back(RenderDeferredInstancedObject);
 #if ENABLE_BINDLESS
 			UpdateDescriptorSet(RenderDeferredInstancedObject->MateData.DescriptorSets,
@@ -4373,7 +4381,7 @@ public:
 				std::vector<VkWriteDescriptorSet> descriptorWrites{};
 				descriptorWrites.resize(samplerNumber + bindingOffset);
 
-				// 绑定 UnifromBuffer
+				// binding transform uniform buffer
 				VkDescriptorBufferInfo baseBufferInfo{};
 				baseBufferInfo.buffer = BaseUniformBuffers[i];
 				baseBufferInfo.offset = 0;
@@ -4387,7 +4395,7 @@ public:
 				descriptorWrites[0].descriptorCount = 1;
 				descriptorWrites[0].pBufferInfo = &baseBufferInfo;
 
-				// 绑定 UnifromBuffer
+				// binding view uniform buffer
 				VkDescriptorBufferInfo viewBufferInfo{};
 				viewBufferInfo.buffer = ViewUniformBuffers[i];
 				viewBufferInfo.offset = 0;
@@ -4401,6 +4409,7 @@ public:
 				descriptorWrites[1].descriptorCount = 1;
 				descriptorWrites[1].pBufferInfo = &viewBufferInfo;
 
+				// binding cube map sampler
 				VkDescriptorImageInfo imageInfo{};
 				imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 				imageInfo.imageView = CubemapImageView;
@@ -4414,6 +4423,7 @@ public:
 				descriptorWrites[2].descriptorCount = 1;
 				descriptorWrites[2].pImageInfo = &imageInfo;
 
+				// binding shadow map sampler
 				VkDescriptorImageInfo shadowmapImageInfo{};
 				shadowmapImageInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 				shadowmapImageInfo.imageView = ShadowmapPass.ImageView;
@@ -4975,7 +4985,7 @@ public:
 		CreateDescriptorSet(
 			outObject.MateData.DescriptorSets,
 			outObject.MateData.DescriptorPool,
-			BaseScenePass.DescriptorSetLayout,
+			BasePass.DescriptorSetLayout,
 			outObject.MateData.TextureImageViews,
 			outObject.MateData.TextureImageSamplers);
 	};

@@ -71,6 +71,6 @@ void main()
 	gl_Position = ubo.proj * ubo.view * ubo.model * vec4(position, 1.0);
 	outPosition = (ubo.model * vec4(position, 1.0)).rgb;
 	outNormal = (ubo.model * vec4(normalize(inNormal), 1.0)).rgb * mat3(rotMat);
-	outColor = Hue2RGB(inInstanceTexIndex / 256.0f);
+	outColor = Hue2RGB(float(inInstanceTexIndex) * 1.71f);
 	outTexCoord = inTexCoord;
 }

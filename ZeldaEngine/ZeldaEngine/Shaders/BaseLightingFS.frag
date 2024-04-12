@@ -20,9 +20,12 @@ layout(constant_id = 0) const int SPEC_CONSTANTS = 0;
 // push constants block
 layout(push_constant) uniform constants
 {
-	float time;
-	float roughness;
-	float metallic;
+	float basecolorOverride;
+	float metallicOverride;
+	float specularOverride;
+	float roughnessOverride;
+	uint specConstants;
+	uint specConstantsCount;
 } global;
 
 layout(set = 0, binding = 0) uniform uniformbuffer
@@ -36,6 +39,7 @@ layout(set = 0, binding = 0) uniform uniformbuffer
 	light spotLights [16];
 	/* [0] for directionalLights, [1] for pointLights, [2] for spotLights, [3] for cubemap max mip num*/
 	ivec4 lightsCount;
+	float Time;
 	float zNear;
 	float zFar;
 } view;
