@@ -903,6 +903,10 @@ class FZeldaEngineApp
 				GBufferDFormat
 			};
 		}
+		void CleanUp()
+		{
+		
+		}
 	} GBuffer;
 
 	/** ShadowmapPass vulkan resources*/
@@ -1793,27 +1797,16 @@ protected:
 		vkDeviceWaitIdle(Device);
 
 		CleanupSwapChain();
+#if ENABLE_DEFEERED_SHADING
+		CleanupBaseDeferredPass();
+#endif
 
 		CreateSwapChain();
 		CreateSwapChainImageViews();
 		CreateFramebuffers();
-	}
-
-	/** 清理旧的SwapChain*/
-	void CleanupSwapChain() {
-		vkDestroyImageView(Device, DepthImageView, nullptr);
-		vkDestroyImage(Device, DepthImage, nullptr);
-		vkFreeMemory(Device, DepthImageMemory, nullptr);
-
-		for (auto framebuffer : SwapChainFramebuffers) {
-			vkDestroyFramebuffer(Device, framebuffer, nullptr);
-		}
-
-		for (auto imageView : SwapChainImageViews) {
-			vkDestroyImageView(Device, imageView, nullptr);
-		}
-
-		vkDestroySwapchainKHR(Device, SwapChain, nullptr);
+#if ENABLE_DEFEERED_SHADING
+		CreateBaseDeferredPass();
+#endif
 	}
 
 	/** 图像视图 Image View
@@ -3237,6 +3230,41 @@ protected:
 
 		// 清理 BaseDeferredPass
 #if ENABLE_DEFEERED_SHADING
+		CleanupBaseDeferredPass();
+#endif
+
+		vkDestroyCommandPool(Device, CommandPool, nullptr);
+
+		vkDestroyDevice(Device, nullptr);
+
+		if (bEnableValidationLayers)
+		{
+			DestroyDebugUtilsMessengerEXT(Instance, DebugMessenger, nullptr);
+		}
+
+		vkDestroySurfaceKHR(Instance, Surface, nullptr);
+		vkDestroyInstance(Instance, nullptr);
+	}
+
+	/** 清理旧的SwapChain*/
+	void CleanupSwapChain() {
+		vkDestroyImageView(Device, DepthImageView, nullptr);
+		vkDestroyImage(Device, DepthImage, nullptr);
+		vkFreeMemory(Device, DepthImageMemory, nullptr);
+
+		for (auto framebuffer : SwapChainFramebuffers) {
+			vkDestroyFramebuffer(Device, framebuffer, nullptr);
+		}
+
+		for (auto imageView : SwapChainImageViews) {
+			vkDestroyImageView(Device, imageView, nullptr);
+		}
+
+		vkDestroySwapchainKHR(Device, SwapChain, nullptr);
+	}
+
+	void CleanupBaseDeferredPass()
+	{
 		vkDestroyDescriptorSetLayout(Device, BaseDeferredPass.LightingDescriptorSetLayout, nullptr);
 		vkDestroyDescriptorPool(Device, BaseDeferredPass.LightingDescriptorPool, nullptr);
 		vkDestroyPipelineLayout(Device, BaseDeferredPass.LightingPipelineLayout, nullptr);
@@ -3279,21 +3307,7 @@ protected:
 		vkDestroySampler(Device, GBuffer.GBufferDSampler, nullptr);
 		vkDestroyImage(Device, GBuffer.GBufferDImage, nullptr);
 		vkFreeMemory(Device, GBuffer.GBufferDMemory, nullptr);
-#endif
-
-		vkDestroyCommandPool(Device, CommandPool, nullptr);
-
-		vkDestroyDevice(Device, nullptr);
-
-		if (bEnableValidationLayers)
-		{
-			DestroyDebugUtilsMessengerEXT(Instance, DebugMessenger, nullptr);
-		}
-
-		vkDestroySurfaceKHR(Instance, Surface, nullptr);
-		vkDestroyInstance(Instance, nullptr);
 	}
-
 public:
 	void CreateEngineScene()
 	{
@@ -5436,7 +5450,7 @@ protected:
 		// 根据Vertices大小创建VertexBuffer
 		VkDeviceSize bufferSize = sizeof(inVertices[0]) * inVertices.size();
 
-		// 为什么需要stagingBuffer，因为直接创建VertexBuffer，CPU端可以直接通过VertexBufferMemory范围GPU使用的内存，这样太危险了，
+		// 为什么需要stagingBuffer，因为直接创建VertexBuffer，CPU端可以直接通过VertexBufferMemory访问GPU使用的内存，这样太危险了，
 		// 所以我们先创建一个临时的Buffer写入数据，然后将这个Buffer拷贝给最终的VertexBuffer，
 		// VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT标签，使得最终的VertexBuffer位于硬件本地内存中，比如显卡的显存。
 		VkBuffer stagingBuffer;
