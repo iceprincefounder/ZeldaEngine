@@ -35,3 +35,5 @@
 *.DS_Store
 build/
 buildProj/
+!ZeldaEngine/**/*.obj
+!ZeldaEngine/**/*.png

@@ -1112,8 +1112,8 @@ public:
 		glfwSetWindowUserPointer(Window, this);
 		glfwSetFramebufferSizeCallback(Window, FramebufferResizeCallback);
 		GLFWimage iconImages[2];
-		iconImages[0].pixels = stbi_load("Resources/Appicons/vulkan_renderer.png", &iconImages[0].width, &iconImages[0].height, 0, STBI_rgb_alpha);
-		iconImages[1].pixels = stbi_load("Resources/Appicons/vulkan_renderer_small.png", &iconImages[1].width, &iconImages[1].height, 0, STBI_rgb_alpha);
+		iconImages[0].pixels = stbi_load("Content/Appicons/vulkan_renderer.png", &iconImages[0].width, &iconImages[0].height, 0, STBI_rgb_alpha);
+		iconImages[1].pixels = stbi_load("Content/Appicons/vulkan_renderer_small.png", &iconImages[1].width, &iconImages[1].height, 0, STBI_rgb_alpha);
 		glfwSetWindowIcon(Window, 2, iconImages);
 		stbi_image_free(iconImages[0].pixels);
 		stbi_image_free(iconImages[1].pixels);
@@ -1954,12 +1954,12 @@ protected:
 		std::string dir_path = file_path.substr(0, file_path.rfind("\\"));
 		// @TODO: compile shaders with glslang
 		std::vector<uint8_t> Source; VkShaderStageFlagBits ShaderStage;
-		FShaderCompiler::ReadShaderFile(Source, ShaderStage, "Resources/meshshader.mesh");
+		FShaderCompiler::ReadShaderFile(Source, ShaderStage, "Content/meshshader.mesh");
 		std::vector<uint32_t> spirv;
 		std::string info_log;
 		FShaderCompiler ShaderCompiler;
 		ShaderCompiler.CompileToSpirv(ShaderStage, Source, "main", "", {}, spirv, info_log);
-		FShaderCompiler::SaveShaderFile("Resources/Meshshader.spv", spirv);
+		FShaderCompiler::SaveShaderFile("Content/Meshshader.spv", spirv);
 	}
 
 	/** 创建统一缓存区（UBO）*/
@@ -2123,16 +2123,16 @@ protected:
 			ShadowmapPass.Pipelines,
 			ShadowmapPass.PipelineLayout,
 			ShadowmapPass.RenderPass,
-			"Resources/Shaders/Shadowmap_VS.spv",
-			"Resources/Shaders/Shadowmap_FS.spv", 
+			"Shaders/Shadowmap_VS.spv",
+			"Shaders/Shadowmap_FS.spv", 
 			ERenderFlags::Shadow);
 
 		CreateGraphicsPipelines(
 			ShadowmapPass.PipelinesInstanced,
 			ShadowmapPass.PipelineLayout,
 			ShadowmapPass.RenderPass,
-			"Resources/Shaders/ShadowmapInstanced_VS.spv",
-			"Resources/Shaders/Shadowmap_FS.spv",
+			"Shaders/ShadowmapInstanced_VS.spv",
+			"Shaders/Shadowmap_FS.spv",
 		ERenderFlags::Instanced | ERenderFlags::Shadow);
 	}
 
@@ -2148,7 +2148,7 @@ protected:
 			BackgroundPass.ImageMemorys[0],
 			BackgroundPass.ImageViews[0],
 			BackgroundPass.ImageSamplers[0],
-			"Resources/Contents/Textures/background.png");
+			"Content/Textures/background.png");
 		CreateDescriptorSetLayout(BackgroundPass.DescriptorSetLayout, ERenderFlags::Background);
 		CreateDescriptorSet(
 			BackgroundPass.DescriptorSets,
@@ -2163,8 +2163,8 @@ protected:
 			BackgroundPass.Pipelines,
 			BackgroundPass.PipelineLayout,
 			MainRenderPass,
-			"Resources/Shaders/Background_VS.spv",
-			"Resources/Shaders/Background_FS.spv",
+			"Shaders/Background_VS.spv",
+			"Shaders/Background_FS.spv",
 			ERenderFlags::Background | ERenderFlags::ScreenRect);
 	}
 
@@ -2181,12 +2181,12 @@ protected:
 		 * |    90   |   -90   |    0    |   180   |    0    |   180  |
 		 */
 		CreateImageCubeContext(CubemapImage, CubemapImageMemory, CubemapImageView, CubemapSampler, CubemapMaxMips, {
-			"Resources/Contents/Textures/cubemap_X0.png",
-			"Resources/Contents/Textures/cubemap_X1.png",
-			"Resources/Contents/Textures/cubemap_Y2.png",
-			"Resources/Contents/Textures/cubemap_Y3.png",
-			"Resources/Contents/Textures/cubemap_Z4.png",
-			"Resources/Contents/Textures/cubemap_Z5.png" });
+			"Content/Textures/cubemap_X0.png",
+			"Content/Textures/cubemap_X1.png",
+			"Content/Textures/cubemap_Y2.png",
+			"Content/Textures/cubemap_Y3.png",
+			"Content/Textures/cubemap_Z4.png",
+			"Content/Textures/cubemap_Z5.png" });
 
 		uint32_t ImageNum = SKY_SAMPLER_NUMBER;
 		SkydomePass.Images.resize(ImageNum);
@@ -2200,7 +2200,7 @@ protected:
 			SkydomePass.ImageMemorys[0],
 			SkydomePass.ImageViews[0],
 			SkydomePass.ImageSamplers[0],
-			"Resources/Contents/Textures/skydome.png");
+			"Content/Textures/skydome.png");
 		CreateDescriptorSetLayout(SkydomePass.DescriptorSetLayout, ERenderFlags::Skydome);
 		CreateDescriptorSet(
 			SkydomePass.DescriptorSets,
@@ -2216,10 +2216,10 @@ protected:
 			SkydomePass.Pipelines,
 			SkydomePass.PipelineLayout,
 			MainRenderPass,
-			"Resources/Shaders/Skydome_VS.spv",
-			"Resources/Shaders/Skydome_FS.spv",
+			"Shaders/Skydome_VS.spv",
+			"Shaders/Skydome_FS.spv",
 			ERenderFlags::VertexIndexed | ERenderFlags::Skydome);
-		std::string skydome_obj = "Resources/Contents/Meshes/skydome.obj";
+		std::string skydome_obj = "Content/Meshes/skydome.obj";
 		CreateMesh(SkydomePass.SkydomeMesh.Vertices, SkydomePass.SkydomeMesh.Indices, skydome_obj);
 		CreateVertexBuffer(
 			SkydomePass.SkydomeMesh.VertexBuffer,
@@ -2243,15 +2243,15 @@ protected:
 			BasePass.Pipelines,
 			BasePass.PipelineLayout,
 			MainRenderPass,
-			"Resources/Shaders/Base_VS.spv",
-			"Resources/Shaders/Base_FS.spv",
+			"Shaders/Base_VS.spv",
+			"Shaders/Base_FS.spv",
 			ERenderFlags::VertexIndexed);
 		CreateGraphicsPipelines(
 			BasePass.PipelinesInstanced,
 			BasePass.PipelineLayout,
 			MainRenderPass,
-			"Resources/Shaders/BaseInstanced_VS.spv",
-			"Resources/Shaders/Base_FS.spv",
+			"Shaders/BaseInstanced_VS.spv",
+			"Shaders/Base_FS.spv",
 			ERenderFlags::Instanced);
 		//~ 结束 创建场景，包括VBO，UBO，贴图等
 	}
@@ -2268,15 +2268,15 @@ protected:
 			BaseIndirectPass.Pipelines,
 			BaseIndirectPass.PipelineLayout,
 			MainRenderPass,
-			"Resources/Shaders/Base_VS.spv",
-			"Resources/Shaders/Base_FS.spv",
+			"Shaders/Base_VS.spv",
+			"Shaders/Base_FS.spv",
 			ERenderFlags::VertexIndexed);
 		CreateGraphicsPipelines(
 			BaseIndirectPass.PipelinesInstanced,
 			BaseIndirectPass.PipelineLayout,
 			MainRenderPass,
-			"Resources/Shaders/BaseInstanced_VS.spv",
-			"Resources/Shaders/Base_FS.spv",
+			"Shaders/BaseInstanced_VS.spv",
+			"Shaders/Base_FS.spv",
 			ERenderFlags::Instanced);
 	}
 
@@ -2439,15 +2439,15 @@ protected:
 			BaseDeferredPass.ScenePipelines,
 			BaseDeferredPass.ScenePipelineLayout,
 			BaseDeferredPass.SceneRenderPass,
-			"Resources/Shaders/Base_VS.spv",
-			"Resources/Shaders/BaseScene_FS.spv",
+			"Shaders/Base_VS.spv",
+			"Shaders/BaseScene_FS.spv",
 			ERenderFlags::VertexIndexed | ERenderFlags::DeferredScene);
 		CreateGraphicsPipelines(
 			BaseDeferredPass.ScenePipelinesInstanced,
 			BaseDeferredPass.ScenePipelineLayout,
 			BaseDeferredPass.SceneRenderPass,
-			"Resources/Shaders/BaseInstanced_VS.spv",
-			"Resources/Shaders/BaseScene_FS.spv",
+			"Shaders/BaseInstanced_VS.spv",
+			"Shaders/BaseScene_FS.spv",
 			ERenderFlags::Instanced | ERenderFlags::DeferredScene);
 
 		/** Create DescriptorSetLayout for Lighting*/
@@ -2468,8 +2468,8 @@ protected:
 			BaseDeferredPass.LightingPipelines,
 			BaseDeferredPass.LightingPipelineLayout,
 			MainRenderPass,
-			"Resources/Shaders/Background_VS.spv",
-			"Resources/Shaders/BaseLighting_FS.spv",
+			"Shaders/Background_VS.spv",
+			"Shaders/BaseLighting_FS.spv",
 			ERenderFlags::ScreenRect | ERenderFlags::NoDepthTest | ERenderFlags::DeferredLighting);
 	}
 
@@ -3365,15 +3365,15 @@ public:
 		if (ENABLE_INDIRECT_DRAW)
 		{
 			FRenderIndirectObject object;
-			std::string object_obj = "Resources/Contents/Meshes/dragon.meshlet";
+			std::string object_obj = "Content/Meshes/dragon.meshlet";
 			std::vector<std::string> object_imgs = {
-				"Resources/Contents/Textures/default_grey.png",		// BaseColor
-				"Resources/Contents/Textures/default_black.png",	// Metallic
-				"Resources/Contents/Textures/default_white.png",	// Roughness
-				"Resources/Contents/Textures/default_normal.png",	// Normal
-				"Resources/Contents/Textures/default_white.png",	// AmbientOcclution
-				"Resources/Contents/Textures/default_black.png",	// Emissive
-				"Resources/Contents/Textures/default_white.png" };	// Mask
+				"Content/Textures/default_grey.png",	// BaseColor
+				"Content/Textures/default_black.png",	// Metallic
+				"Content/Textures/default_white.png",	// Roughness
+				"Content/Textures/default_normal.png",	// Normal
+				"Content/Textures/default_white.png",	// AmbientOcclution
+				"Content/Textures/default_black.png",	// Emissive
+				"Content/Textures/default_white.png" };	// Mask
 
 			CreateRenderIndirectObject<FRenderIndirectObject>(object, object_obj, object_imgs);
 
@@ -5068,7 +5068,7 @@ public:
 	template <typename T>
 	void CreateRenderObjectsFromProfabs(std::vector<T>& outRenderObjects, const VkDescriptorSetLayout& inLayout, const std::string& inAssetName, const std::vector<FInstanceData>& inInstanceData = {})
 	{
-		std::string asset_set_dir = "Resources/Profabs";
+		std::string asset_set_dir = "Profabs";
 		for (const auto& folder : std::filesystem::directory_iterator(asset_set_dir))
 		{
 			std::string asset_name = folder.path().filename().generic_string();
@@ -5096,31 +5096,31 @@ public:
 				}
 				std::string texture_bc = textures_dir + model_name + std::string("_bc.png");
 				if (!std::filesystem::exists(texture_bc)) {
-					texture_bc = std::string("Resources/Contents/Textures/default_grey.png");
+					texture_bc = std::string("Content/Textures/default_grey.png");
 				}
 				std::string texture_m = textures_dir + model_name + std::string("_m.png");
 				if (!std::filesystem::exists(texture_m)) {
-					texture_m = std::string("Resources/Contents/Textures/default_black.png");
+					texture_m = std::string("Content/Textures/default_black.png");
 				}
 				std::string texture_r = textures_dir + model_name + std::string("_r.png");
 				if (!std::filesystem::exists(texture_r)) {
-					texture_r = std::string("Resources/Contents/Textures/default_white.png");
+					texture_r = std::string("Content/Textures/default_white.png");
 				}
 				std::string texture_n = textures_dir + model_name + std::string("_n.png");
 				if (!std::filesystem::exists(texture_n)) {
-					texture_n = std::string("Resources/Contents/Textures/default_normal.png");
+					texture_n = std::string("Content/Textures/default_normal.png");
 				}
 				std::string texture_ao = textures_dir + model_name + std::string("_ao.png");
 				if (!std::filesystem::exists(texture_ao)) {
-					texture_ao = std::string("Resources/Contents/Textures/default_white.png");
+					texture_ao = std::string("Content/Textures/default_white.png");
 				}
 				std::string texture_ev = textures_dir + model_name + std::string("_ev.png");
 				if (!std::filesystem::exists(texture_ev)) {
-					texture_ev = std::string("Resources/Contents/Textures/default_black.png");
+					texture_ev = std::string("Content/Textures/default_black.png");
 				}
 				std::string texture_ms = textures_dir + model_name + std::string("_ms.png");
 				if (!std::filesystem::exists(texture_ms)) {
-					texture_ms = std::string("Resources/Contents/Textures/default_white.png");
+					texture_ms = std::string("Content/Textures/default_white.png");
 				}
 
 				T asset;
@@ -5994,7 +5994,7 @@ private:
 		std::string::size_type const p(file_name_with_suffix.find_last_of('.'));
 		std::string file_name = file_name_with_suffix.substr(0, p);
 
-		std::string asset_set_dir = "Resources/Profabs";
+		std::string asset_set_dir = "Profabs";
 		for (const auto& folder : std::filesystem::directory_iterator(asset_set_dir))
 		{
 			std::string asset_name = folder.path().filename().generic_string();
