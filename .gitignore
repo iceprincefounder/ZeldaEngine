@@ -33,6 +33,7 @@
 
 # Cmake build
 *.DS_Store
+*.vscode
 build/
 buildProj/
 !ZeldaEngine/**/*.obj
