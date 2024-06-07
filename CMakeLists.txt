@@ -9,10 +9,10 @@ project(${PROJNAME})
 include_directories(Third_Party)
 include_directories(Third_Party/glfw)
 include_directories(Third_Party/glm)
+include_directories(Third_Party/imgui)
 include_directories(Third_Party/stb)
 include_directories(Third_Party/tinyobjloader)
 include_directories(Third_Party/meshoptimizer)
-include_directories(Third_Party/imgui)
 include_directories(Third_Party/glslang)
 
 # Use FindVulkan module added with CMAKE 3.7
@@ -121,6 +121,15 @@ endif(WIN32)
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+
+set(IMGUI_SOURCES
+    ${CMAKE_SOURCE_DIR}/Third_Party/imgui/imgui.cpp
+    ${CMAKE_SOURCE_DIR}/Third_Party/imgui/imgui_draw.cpp
+    ${CMAKE_SOURCE_DIR}/Third_Party/imgui/imgui_widgets.cpp
+    ${CMAKE_SOURCE_DIR}/Third_Party/imgui/imgui_tables.cpp
+    ${CMAKE_SOURCE_DIR}/Third_Party/imgui/backends/imgui_impl_glfw.cpp
+    ${CMAKE_SOURCE_DIR}/Third_Party/imgui/backends/imgui_impl_vulkan.cpp
+)
 
 # glslang
 option(ENABLE_SPVREMAPPER OFF)
