@@ -66,6 +66,8 @@
 // @see https://dev.to/gasim/implementing-bindless-design-in-vulkan-34no
 #define ENABLE_BINDLESS false
 
+#define ASSETS(x) ProfabsAsset(x)
+
 /**
 * Helper class to generate SPIRV code from GLSL source
 * A very simple version of the glslValidator application
@@ -1151,7 +1153,6 @@ public:
 	{
 		while (!glfwWindowShouldClose(Window))
 		{
-			glfwSwapBuffers(Window);
 			glfwPollEvents();
 			DrawFrame(); // Draw a frame
 		}
@@ -3373,12 +3374,12 @@ public:
 		vkDestroyImage(Device, CubemapImage, nullptr);
 		vkFreeMemory(Device, CubemapImageMemory, nullptr);
 		CreateImageCubeContext(CubemapImage, CubemapImageMemory, CubemapImageView, CubemapSampler, CubemapMaxMips, {
-		ProfabsAsset("grassland_night_X0.png"),
-		ProfabsAsset("grassland_night_X1.png"),
-		ProfabsAsset("grassland_night_Y2.png"),
-		ProfabsAsset("grassland_night_Y3.png"),
-		ProfabsAsset("grassland_night_Z4.png"),
-		ProfabsAsset("grassland_night_Z5.png") });
+		ASSETS("grassland_night_X0.png"),
+		ASSETS("grassland_night_X1.png"),
+		ASSETS("grassland_night_Y2.png"),
+		ASSETS("grassland_night_Y3.png"),
+		ASSETS("grassland_night_Z4.png"),
+		ASSETS("grassland_night_Z5.png") });
 
 		for (size_t i = 0; i < SkydomePass.ImageViews.size(); i++)
 		{
@@ -3392,7 +3393,7 @@ public:
 			SkydomePass.ImageMemorys[0],
 			SkydomePass.ImageViews[0],
 			SkydomePass.ImageSamplers[0],
-			ProfabsAsset("grassland_night.png"));
+			ASSETS("grassland_night.png"));
 		UpdateDescriptorSet(SkydomePass.DescriptorSets, SkydomePass.ImageViews, SkydomePass.ImageSamplers, ERenderFlags::Skydome);
 		SkydomePass.EnableSkydome = true;
 
@@ -3408,7 +3409,7 @@ public:
 			BackgroundPass.ImageMemorys[0],
 			BackgroundPass.ImageViews[0],
 			BackgroundPass.ImageSamplers[0],
-			ProfabsAsset("background.png"));
+			ASSETS("background.png"));
 		UpdateDescriptorSet(BackgroundPass.DescriptorSets, BackgroundPass.ImageViews, BackgroundPass.ImageSamplers, ERenderFlags::Background);
 		BackgroundPass.EnableBackground = true;
 
