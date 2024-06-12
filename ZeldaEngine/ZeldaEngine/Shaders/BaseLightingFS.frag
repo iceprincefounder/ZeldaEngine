@@ -34,6 +34,7 @@ layout(set = 0, binding = 0) uniform uniformbuffer
 	mat4 shadowmapSpace;
 	mat4 localToWorld;
 	vec4 cameraInfo;
+	vec4 viewportInfo;
 	light directionalLights [16];
 	light pointLights [512];
 	light spotLights [16];
@@ -378,7 +379,9 @@ float ComputePCF(vec4 sc /*shadow croodinate*/, int r /*filtering range*/)
 
 vec3 GBufferVis(vec3 FinalColor)
 {
-	vec2 UV = fragTexCoord * 3.0f;
+	// empty space for imgui, ratio that imgui widget occupies
+	vec2 EmptyRatio = view.viewportInfo.zw / view.viewportInfo.xy;
+	vec2 UV = fragTexCoord * 3.0f / (1.0f - EmptyRatio);
 	vec4 ShadowMap = texture(ShadowMapSampler, UV);
 	vec4 DepthStencil = texture(DepthStencilSampler, UV);
 	vec4 SceneColor = texture(SceneColorSampler, UV);
@@ -403,46 +406,78 @@ vec3 GBufferVis(vec3 FinalColor)
 	vec3 V = normalize(view.cameraInfo.xyz - P);
 	float NdotV = saturate(dot(N, V));
 
-	const float Step = 1.0f / 3.0f;
+	const vec2 Step = (1.0f - EmptyRatio) / 3.0f;
 
 	vec3 Result = FinalColor;
-	if (fragTexCoord.x < Step && fragTexCoord.y < Step)
+	if (fragTexCoord.x < Step.x && fragTexCoord.y < Step.y)
 	{
 		Result = pow(BaseColor, vec3(0.4545));
+		if (fragTexCoord.x > Step.x * (1.0f - EmptyRatio.x) || fragTexCoord.y > Step.y * (1.0f - EmptyRatio.y))
+		{
+			Result = vec3(1.0f);
+		}
 	}
-	else if (fragTexCoord.x < Step * 2.0f && fragTexCoord.y < Step)
+	else if (fragTexCoord.x < Step.x * 2.0f && fragTexCoord.y < Step.y)
 	{
 		Result = vec3(Metallic);
+		if (fragTexCoord.x > Step.x * (2.0f - EmptyRatio.x) || fragTexCoord.y > Step.y * (1.0f - EmptyRatio.y))
+		{
+			Result = vec3(1.0f);
+		}
 	}
-	else if (fragTexCoord.x < 1.0f && fragTexCoord.y < Step)
+	else if (fragTexCoord.x < Step.x * 3.0f && fragTexCoord.y < Step.y)
 	{
 		Result = vec3(Roughness);
+		if (fragTexCoord.x > Step.x * (3.0f - EmptyRatio.x) || fragTexCoord.y > Step.y * (1.0f - EmptyRatio.y))
+		{
+			Result = vec3(1.0f);
+		}
 	}
-	else if (fragTexCoord.x < Step && fragTexCoord.y < Step * 2.0f)
+	else if (fragTexCoord.x < Step.x && fragTexCoord.y < Step.y * 2.0f)
 	{
 		Result = vec3(N);
+		if (fragTexCoord.x > Step.x * (1.0f - EmptyRatio.x) || fragTexCoord.y > Step.y * (2.0f - EmptyRatio.y))
+		{
+			Result = vec3(1.0f);
+		}
 	}
-	else if (fragTexCoord.x < 1.0f && fragTexCoord.y < Step * 2.0f && fragTexCoord.x > Step * 2.0f)
+	else if (fragTexCoord.x < 1.0f && fragTexCoord.y < Step.y * 2.0f && fragTexCoord.x > Step.x * 2.0f)
 	{
 		Result = vec3(AO);
+		if ((fragTexCoord.x > Step.x * (3.0f - EmptyRatio.x)) || fragTexCoord.y > Step.y * (2.0f - EmptyRatio.y))
+		{
+			Result = vec3(1.0f);
+		}
 	}
-	else if (fragTexCoord.x < Step && fragTexCoord.y < 1.0f)
+	else if (fragTexCoord.x < Step.x && fragTexCoord.y < Step.x * 3.0f)
 	{
 		Result = vec3(0.0f);
+		if (fragTexCoord.x > Step.x * (1.0f - EmptyRatio.x) || fragTexCoord.y > Step.y * (3.0f - EmptyRatio.y))
+		{
+			Result = vec3(1.0f);
+		}
 	}
-	else if (fragTexCoord.x < Step * 2.0f && fragTexCoord.x > Step && fragTexCoord.y < 1.0f && fragTexCoord.y > Step * 2.0f)
+	else if (fragTexCoord.x < Step.x * 2.0f && fragTexCoord.x > Step.x && fragTexCoord.y < Step.y * 3.0f && fragTexCoord.y > Step.y * 2.0f)
 	{
 		float ratio = 1.00 / 1.52;
 		vec3 I = V;
 		vec3 R = refract(I, normalize(N), ratio);
 		vec3 Reflection_L = textureLod(CubeMapSampler, R, 0).rgb * 10.0;
 		Result = vec3(Reflection_L);
+		if ((fragTexCoord.x > Step.x * (2.0f - EmptyRatio.x)) || fragTexCoord.y > Step.y * (3.0f - EmptyRatio.y))
+		{
+			Result = vec3(1.0f);
+		}
 	}
-	else if (fragTexCoord.x < 1.0f && fragTexCoord.x > Step * 2.0f && fragTexCoord.y < 1.0f && fragTexCoord.y > Step * 2.0f)
+	else if (fragTexCoord.x < Step.x * 3.0f && fragTexCoord.x > Step.x * 2.0f && fragTexCoord.y < Step.y * 3.0f && fragTexCoord.y > Step.y * 2.0f)
 	{
 		vec4 ShadowCoord = ComputeShadowCoord(P);
 		float ShadowFactor = ComputePCF(ShadowCoord / ShadowCoord.w, 2);
 		Result = vec3(ShadowFactor);
+		if ((fragTexCoord.x > Step.x * (3.0f - EmptyRatio.x)) || fragTexCoord.y > Step.y * (3.0f - EmptyRatio.y))
+		{
+			Result = vec3(1.0f);
+		}
 	}
 	return Result;
 }

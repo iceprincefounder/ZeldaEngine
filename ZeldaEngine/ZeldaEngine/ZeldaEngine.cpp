@@ -768,6 +768,7 @@ class FZeldaEngineApp
 		glm::mat4 ShadowmapSpace;
 		glm::mat4 LocalToWorld;
 		glm::vec4 CameraInfo;
+		glm::vec4 ViewportInfo;
 		FLight DirectionalLights[MAX_DIRECTIONAL_LIGHTS_NUM];
 		FLight PointLights[MAX_POINT_LIGHTS_NUM];
 		FLight SpotLights[MAX_SPOT_LIGHTS_NUM];
@@ -783,6 +784,7 @@ class FZeldaEngineApp
 			ShadowmapSpace = rhs.ShadowmapSpace;
 			LocalToWorld = rhs.LocalToWorld;
 			CameraInfo = rhs.CameraInfo;
+			ViewportInfo = rhs.ViewportInfo;
 			for (size_t i = 0; i < MAX_DIRECTIONAL_LIGHTS_NUM; i++)
 			{
 				DirectionalLights[i] = rhs.DirectionalLights[i];
@@ -989,10 +991,13 @@ class FZeldaEngineApp
 		std::vector<VkPipeline> LightingPipelines;
 	} BaseDeferredPass;
 
-	struct FImguiPass {
+	struct FImGuiPass {
 		VkRenderPass RenderPass;
 		VkDescriptorPool DescriptorPool;
-	} ImguiPass;
+
+		float RightBarSpace;
+		float BottomBarSpace;
+	} ImGuiPass;
 
 	/* GLFW Window */
 	GLFWwindow* Window;
@@ -1144,7 +1149,7 @@ public:
 		CreateCommandBuffer(); // Create command buffer from command before submit
 		CreateSyncObjects(); // Create sync fence to ensure next frame render after the last frame finished
 
-		CreateImguiForVulkan(); // Create Imgui for Vulkan
+		CreateImGuiForVulkan(); // Create ImGui for Vulkan
 		CreateEngineScene(); // Create main rendering scene
 	}
 
@@ -1364,7 +1369,7 @@ public:
 		VkResult result = vkAcquireNextImageKHR(Device, SwapChain, UINT64_MAX, ImageAvailableSemaphores[CurrentFrame], VK_NULL_HANDLE, &imageIndex);
 
 		// If the window is out of date (window size changed or window minimized and then restored), recreate the SwapChain and stop rendering for this frame
-		if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+		if (result == VK_ERROR_OUT_OF_DATE_KHR || bFramebufferResized) {
 			RecreateSwapChain();
 			return;
 		}
@@ -1375,7 +1380,7 @@ public:
 		// update os inputs
 		UpdateInputs();
 		// update imgui	widgets
-		UpdateImguiWidgets();
+		UpdateImGuiWidgets();
 		// update uniform buffer（UBO）
 		UpdateUniformBuffer(CurrentFrame);
 
@@ -1710,6 +1715,8 @@ protected:
 #if ENABLE_DEFEERED_SHADING
 		CreateBaseDeferredPass();
 #endif
+
+		bFramebufferResized = false;
 	}
 
 	/** Image View
@@ -2417,7 +2424,7 @@ protected:
 	}
 
 	/** Create ImGui Vulkan args*/
-	void CreateImguiForVulkan()
+	void CreateImGuiForVulkan()
 	{
 		VkAttachmentDescription ColorAttachment{};
 		ColorAttachment.format = SwapChainImageFormat;
@@ -2470,7 +2477,7 @@ protected:
 		renderPassCI.pSubpasses = &subpass;
 		renderPassCI.dependencyCount = 1;
 		renderPassCI.pDependencies = &dependency;
-		if (vkCreateRenderPass(Device, &renderPassCI, nullptr, &ImguiPass.RenderPass) != VK_SUCCESS) {
+		if (vkCreateRenderPass(Device, &renderPassCI, nullptr, &ImGuiPass.RenderPass) != VK_SUCCESS) {
 			throw std::runtime_error("failed to Create render pass!");
 		}
 
@@ -2482,11 +2489,11 @@ protected:
 		VkDescriptorPoolCreateInfo pool_info{};
 		pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
 		pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-		pool_info.maxSets = 1000 * IM_ARRAYSIZE(pool_sizes);
+		pool_info.maxSets = IM_ARRAYSIZE(pool_sizes);
 		pool_info.poolSizeCount = (uint32_t)IM_ARRAYSIZE(pool_sizes);
 		pool_info.pPoolSizes = pool_sizes;
 
-		if (vkCreateDescriptorPool(Device, &pool_info, Allocator, &ImguiPass.DescriptorPool) != VK_SUCCESS) {
+		if (vkCreateDescriptorPool(Device, &pool_info, Allocator, &ImGuiPass.DescriptorPool) != VK_SUCCESS) {
 			throw std::runtime_error("failed to create descriptor pool!");
 		}
 
@@ -2511,11 +2518,11 @@ protected:
 		init_info.QueueFamily = QueueFamilyIndices.GraphicsFamily.value();
 		init_info.Queue = GraphicsQueue;
 		init_info.PipelineCache = PipelineCache;
-		init_info.DescriptorPool = ImguiPass.DescriptorPool;
+		init_info.DescriptorPool = ImGuiPass.DescriptorPool;
 		init_info.Allocator = Allocator;
 		init_info.MinImageCount = 2;
 		init_info.ImageCount = 2;
-		init_info.RenderPass = ImguiPass.RenderPass;
+		init_info.RenderPass = ImGuiPass.RenderPass;
 		init_info.CheckVkResultFn = [](VkResult err)
 			{
 				if (err != 0)
@@ -2766,10 +2773,18 @@ protected:
 		VkViewport mainViewport{};
 		mainViewport.x = 0.0f;
 		mainViewport.y = 0.0f;
-		mainViewport.width = (float)SwapChainExtent.width;
-		mainViewport.height = (float)SwapChainExtent.height;
+		mainViewport.width = (float)SwapChainExtent.width - ImGuiPass.RightBarSpace;
+		mainViewport.height = (float)SwapChainExtent.height - ImGuiPass.BottomBarSpace;
 		mainViewport.minDepth = 0.0f;
 		mainViewport.maxDepth = 1.0f;
+
+		VkViewport mainWindow{};
+		mainWindow.x = 0.0f;
+		mainWindow.y = 0.0f;
+		mainWindow.width = (float)SwapChainExtent.width;
+		mainWindow.height = (float)SwapChainExtent.height;
+		mainWindow.minDepth = 0.0f;
+		mainWindow.maxDepth = 1.0f;
 
 		// 视口剪切信息
 		VkRect2D mainScissor{};
@@ -2891,19 +2906,21 @@ protected:
 			// 【主场景】开始 RenderPass
 			vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-			// 【主场景】设置渲染视口
-			vkCmdSetViewport(commandBuffer, 0, 1, &mainViewport);
-
-			// 【主场景】设置视口剪切，是否可以通过这个函数来实现 Tiled-Based Rendering ？
+			// 【主场景】设置视口剪切
 			vkCmdSetScissor(commandBuffer, 0, 1, &mainScissor);
 
 #if ENABLE_DEFEERED_SHADING
+			// 【主场景】设置延迟渲染视口
+			vkCmdSetViewport(commandBuffer, 0, 1, &mainWindow);
+
 			// 【主场景】渲染延迟渲染灯光
 			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BaseDeferredPass.LightingPipelines[GlobalConstants.SpecConstants]);
 			vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BaseDeferredPass.LightingPipelineLayout, 0, 1, &BaseDeferredPass.LightingDescriptorSets[CurrentFrame], 0, nullptr);
 			vkCmdPushConstants(commandBuffer, BaseDeferredPass.LightingPipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
 			vkCmdDraw(commandBuffer, 6, 1, 0, 0);
 #endif
+			// 【主场景】设置前向渲染视口
+			vkCmdSetViewport(commandBuffer, 0, 1, &mainViewport);
 
 			// 【主场景】渲染场景
 			for (size_t i = 0; i < BasePass.RenderObjects.size(); i++)
@@ -3073,16 +3090,24 @@ protected:
 		{
 			VkRenderPassBeginInfo renderPassInfo{};
 			renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-			renderPassInfo.renderPass = ImguiPass.RenderPass;
+			renderPassInfo.renderPass = ImGuiPass.RenderPass;
 			renderPassInfo.framebuffer = SwapChainFramebuffers[imageIndex];
 			renderPassInfo.renderArea.offset = { 0, 0 };
 			renderPassInfo.renderArea.extent = SwapChainExtent;
+
+			VkViewport mainWindow{};
+			mainWindow.x = 0.0f;
+			mainWindow.y = 0.0f;
+			mainWindow.width = (float)SwapChainExtent.width;
+			mainWindow.height = (float)SwapChainExtent.height;
+			mainWindow.minDepth = 0.0f;
+			mainWindow.maxDepth = 1.0f;
 
 			// 【主界面】开始 RenderPass
 			vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
 			// 【主界面】设置渲染视口
-			vkCmdSetViewport(commandBuffer, 0, 1, &mainViewport);
+			vkCmdSetViewport(commandBuffer, 0, 1, &mainWindow);
 
 			// 【【主界面】设置视口剪切
 			vkCmdSetScissor(commandBuffer, 0, 1, &mainScissor);
@@ -3355,9 +3380,9 @@ protected:
 		ImGui_ImplVulkan_Shutdown();
 		ImGui_ImplGlfw_Shutdown();
 		ImGui::DestroyContext();
-		// cleanup ImguiPass
-		vkDestroyDescriptorPool(Device, ImguiPass.DescriptorPool, nullptr);
-		vkDestroyRenderPass(Device, ImguiPass.RenderPass, nullptr);
+		// cleanup ImGuiPass
+		vkDestroyDescriptorPool(Device, ImGuiPass.DescriptorPool, nullptr);
+		vkDestroyRenderPass(Device, ImGuiPass.RenderPass, nullptr);
 	}
 
 public:
@@ -3583,7 +3608,7 @@ public:
 	}
 
 	/** Update ImGui widgets*/
-	void UpdateImguiWidgets()
+	void UpdateImGuiWidgets()
 	{
 		ImGui_ImplVulkan_NewFrame();
 		ImGui_ImplGlfw_NewFrame();
@@ -3596,7 +3621,10 @@ public:
 			glfwGetWindowSize(Window, &windowWidth, &windowHeight);
 
 			const float rightBarWidth = windowWidth * 0.2f;
-			const float buttomBarWidth = windowHeight * 0.2f;
+			const float bottomBarWidth = windowHeight * 0.2f;
+
+			ImGuiPass.RightBarSpace = rightBarWidth;
+			ImGuiPass.BottomBarSpace = bottomBarWidth;
 
 			ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
 			ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.05f, 0.05f, 0.05f, 1.0f));
@@ -3667,7 +3695,7 @@ public:
 			}
 			ImGui::PopStyleColor();
 
-			ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.05f, 0.05f, 0.05f, 0.85f));
+			ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.05f, 0.05f, 0.05f, 1.0f));
 			// create tree outliner
 			float menuHeight = ImGui::GetFrameHeight();
 			ImGui::SetNextWindowPos(ImVec2(windowWidth - rightBarWidth, menuHeight));
@@ -3742,8 +3770,8 @@ public:
 			ImGui::End();
 
 			// create a python IDE window
-			ImGui::SetNextWindowPos(ImVec2(0, windowHeight - buttomBarWidth));
-			ImGui::SetNextWindowSize(ImVec2(windowWidth - rightBarWidth, buttomBarWidth));
+			ImGui::SetNextWindowPos(ImVec2(0, windowHeight - bottomBarWidth));
+			ImGui::SetNextWindowSize(ImVec2(windowWidth - rightBarWidth, bottomBarWidth));
 			ImGui::Begin("Python IDE", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);
 			static char code[1024 * 16] =
 				"# This is a Python code example\n"
@@ -3760,6 +3788,11 @@ public:
 
 			ImGui::PopStyleColor();
 			ImGui::PopStyleColor();
+		}
+		else
+		{
+			ImGuiPass.RightBarSpace = 0.0f;
+			ImGuiPass.BottomBarSpace = 0.0f;
 		}
 		ImGui::Render();
 	}
@@ -3816,6 +3849,7 @@ public:
 		View.ShadowmapSpace = shadowProjection * shadowView;
 		View.LocalToWorld = localToWorld;
 		View.CameraInfo = glm::vec4(CameraPos, CameraFOV);
+		View.ViewportInfo = glm::vec4(SwapChainExtent.width, SwapChainExtent.height, ImGuiPass.RightBarSpace, ImGuiPass.BottomBarSpace);
 		uint32_t PointLightNum = View.LightsCount[1];
 		for (uint32_t i = 0; i < PointLightNum; i++)
 		{
