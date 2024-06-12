@@ -1,7 +1,7 @@
 ![zelda_engine_logo](https://github.com/iceprincefounder/ZeldaEngine/assets/16664056/120ab100-87a1-4801-b66f-966816b93a5f)
 
 # Why to do this
-*At my beginning of learning vulkan, I found it to hard too read and run the examples, there are too many headers and modules and functions to search the definition and try to understand, for my own sanity, I decide to create a tiny engine with all implementations in one file, make it as simple as possible, as clean as possible. So here we are, named with my favorite game: ZeldaEngine.*
+*At my beginning of learning vulkan, I found it to0 hard to read and run the examples, there are too many headers / modules / functions to search the definition and try to understand, for my own sanity, I decide to create a tiny engine with all implementations in one file, make it as simple as possible, as clean as possible. So here we are, named with my favorite game: ZeldaEngine.*
 
 # Zelda Engine ©XUKAI
 A tiny realtime vulkan based 3D engine with modern graphics, all implementations in the [📄ZeldaEngine.cpp](ZeldaEngine/ZeldaEngine/ZeldaEngine.cpp) file.
@@ -10,7 +10,7 @@ A tiny realtime vulkan based 3D engine with modern graphics, all implementations
 | :----: | :----: | :----: |:----:|
 | master |✅|✅|⛔️|
 
-## ✨Feature: Dear Imgui Editor
+## ✨Feature: Dear ImGui Editor
 <img width="1192" alt="Dear Imgui Window" src="https://github.com/iceprincefounder/ZeldaEngine/assets/16664056/c7b04122-96dd-4b9a-a5d6-63d1d2d5e906">
 
 ## ✨Feature: GPU-driven & Mesh Shader
