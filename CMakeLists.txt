@@ -14,6 +14,7 @@ include_directories(Third_Party/stb)
 include_directories(Third_Party/tinyobjloader)
 include_directories(Third_Party/meshoptimizer)
 include_directories(Third_Party/glslang)
+include_directories(third_party/rapidjson/include)
 
 # Use FindVulkan module added with CMAKE 3.7
 if(NOT CMAKE_VERSION VERSION_LESS 3.7.0)

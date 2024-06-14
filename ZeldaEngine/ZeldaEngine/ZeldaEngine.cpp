@@ -39,10 +39,18 @@
 #include <array>
 #include <chrono>
 #include <unordered_map>
+#include <random>
 
 #include "imgui.h"
 #include "backends/imgui_impl_glfw.h"
 #include "backends/imgui_impl_vulkan.h"
+
+#include "rapidjson/document.h"
+#include "rapidjson/writer.h"
+#include "rapidjson/stringbuffer.h"
+#include "rapidjson/filereadstream.h"
+#include "rapidjson/filewritestream.h"
+#include "rapidjson/prettywriter.h"
 
 #define MAX_FRAMES_IN_FLIGHT 2
 #define VIEWPORT_WIDTH 1920
@@ -58,7 +66,6 @@
 #define SHADOWMAP_DIM 1024
 #define VERTEX_BUFFER_BIND_ID 0
 #define INSTANCE_BUFFER_BIND_ID 1
-#define INSTANCE_COUNT 8192
 #define ENABLE_WIREFRAME false
 #define ENABLE_INDIRECT_DRAW false
 #define ENABLE_DEFEERED_SHADING true
@@ -525,12 +532,12 @@ struct FMeshletSet {
 	std::vector<uint8_t> MeshletTriangles;
 };
 
-struct FIndirectMesh : public FMesh
+struct FMeshIndirect : public FMesh
 {
 	FMeshletSet MeshletSet;
 };
 
-typedef FIndirectMesh FIndirectInstancedMesh;
+typedef FMeshIndirect FInstancedMeshIndirect;
 
 struct FMaterial {
 	std::vector<VkImage> TextureImages;
@@ -548,7 +555,7 @@ struct FMaterial {
 struct FRenderBase
 {
 	FMaterial MateData;
-	uint32_t InstanceCount;
+	uint32_t InstCount;
 	
 	// @TODO: use model's own transform
 	/* uniform buffers contain model transform */
@@ -568,21 +575,21 @@ struct FRenderInstancedObject : public FRenderBase
 	FInstancedMesh MeshData;
 };
 
-struct FRenderIndirectObjectBase : public FRenderBase
+struct FRenderObjectIndirectBase : public FRenderBase
 {
 	VkBuffer IndirectCommandsBuffer;
 	VkDeviceMemory IndirectCommandsBufferMemory;
 	std::vector<VkDrawIndexedIndirectCommand> IndirectCommands;
 };
 
-struct FRenderIndirectObject : public FRenderIndirectObjectBase
+struct FRenderObjectIndirect : public FRenderObjectIndirectBase
 {
-	FIndirectMesh MeshData;
+	FMeshIndirect MeshData;
 };
 
-struct FRenderIndirectInstancedObject : public FRenderIndirectObjectBase
+struct FRenderInstancedObjectIndirect : public FRenderObjectIndirectBase
 {
-	FIndirectInstancedMesh MeshData;
+	FInstancedMeshIndirect MeshData;
 };
 
 typedef FRenderObject FRenderDeferredObject;
@@ -608,15 +615,17 @@ struct FLight
 };
 
 
-/**
-* The map keep all rendering data and engine settings inside.
-*/
-struct FMap
+/** Camera data struct.*/
+struct FCamera
 {
-	std::array<std::string, 6> CubeMap;
-	std::string Skydome;
-	std::string Background;
+	glm::vec3 Position;
+	glm::vec3 LookAt;
+	glm::vec3 Up;
+	float FOV;
+	float zNear;
+	float zFar;
 };
+
 
 const std::vector<const char*> ValidationLayers = { "VK_LAYER_KHRONOS_validation" };
 #if ENABLE_BINDLESS
@@ -807,16 +816,268 @@ class FZeldaEngineApp
 	struct FScene {
 		std::vector<FRenderObject> RenderObjects;
 		std::vector<FRenderInstancedObject> RenderInstancedObjects;
-		std::vector<FRenderIndirectObject> RenderIndirectObjects;
-		std::vector<FRenderIndirectInstancedObject> RenderIndirectInstancedObjects;
+		std::vector<FRenderObjectIndirect> RenderIndirectObjects;
+		std::vector<FRenderInstancedObjectIndirect> RenderIndirectInstancedObjects;
 		std::vector<FRenderDeferredObject> RenderDeferredObjects;
 		std::vector<FRenderDeferredInstancedObject> RenderDeferredInstancedObjects;
 
-		VkDescriptorSetLayout* DescriptorSetLayout;
-		VkDescriptorSetLayout* IndirectDescriptorSetLayout;
-		VkDescriptorSetLayout* DeferredSceneDescriptorSetLayout;
-		VkDescriptorSetLayout* DeferredLightingDescriptorSetLayout;
+		VkDescriptorSetLayout* DescriptorSetLayout = nullptr;
+		VkDescriptorSetLayout* IndirectDescriptorSetLayout = nullptr;
+		VkDescriptorSetLayout* DeferredSceneDescriptorSetLayout = nullptr;
+		VkDescriptorSetLayout* DeferredLightingDescriptorSetLayout = nullptr;
+
+		bool bReload = false;
+
+		void Reset()
+		{
+			RenderObjects.clear();
+			RenderInstancedObjects.clear();
+			RenderIndirectObjects.clear();
+			RenderIndirectInstancedObjects.clear();
+			RenderDeferredObjects.clear();
+			RenderDeferredInstancedObjects.clear();
+
+			DescriptorSetLayout = nullptr;
+			IndirectDescriptorSetLayout = nullptr;
+			DeferredSceneDescriptorSetLayout = nullptr;
+			DeferredLightingDescriptorSetLayout = nullptr;
+
+			bReload = false;
+		}
 	} Scene;
+
+	struct FObject
+	{
+		std::string ProfabName = "";
+		uint32_t InstCount = 0; 
+		float InstMinRadius = 0.0f;
+		float InstMaxRadius = 0.0f;
+		float InstMinScale = 0.0f;
+		float InstMaxScale = 0.0f;
+		float InstMinYaw = 0.0f;
+		float InstMaxYaw = 0.0f;
+		float InstMinRoll = 0.0f;
+		float InstMaxRoll = 0.0f;
+		float InstMinPitch = 0.0f;
+		float InstMaxPitch = 0.0f;
+	};
+
+	struct FWorld
+	{
+		std::string FilePath = "Content/World.json";
+
+		bool EnableSkydome;
+		bool OverrideSkydome;
+		std::string SkydomeFileName;
+
+		bool OverrideCubeMap;
+		std::array<std::string, 6> CubeMapFileNames;
+
+		bool EnableBackground;
+		bool OverrideBackground;
+		std::string BackgroundFileName;
+
+		std::vector<FLight> DirectionalLights;
+		std::vector<FLight> PointLights;
+		std::vector<FLight> SpotLights;
+		//std::vector<FLight> QuadLights;
+
+		std::vector<FObject> Objects;
+
+		void Load()
+		{
+			FILE* fp = fopen(FilePath.c_str(), "rb");
+			if (fp == nullptr) {
+				perror("Failed to open file");
+				return;
+			}
+			std::vector<char> readBuffer(65720);
+			rapidjson::FileReadStream is(fp, readBuffer.data(), sizeof(readBuffer));
+			rapidjson::Document JsonDocument;
+			JsonDocument.ParseStream(is);
+			fclose(fp);
+
+			EnableSkydome = JsonDocument["EnableSkydome"].GetBool();
+			OverrideSkydome = JsonDocument["OverrideSkydome"].GetBool();
+			SkydomeFileName = JsonDocument["SkydomeFileName"].GetString();
+
+			OverrideCubeMap = JsonDocument["OverrideCubeMap"].GetBool();
+			const auto& CubeMapFileNamesArray = JsonDocument["CubeMapFileNames"].GetArray();
+			for (uint32_t i = 0; i < CubeMapFileNamesArray.Size(); i++) {
+				CubeMapFileNames[i] = CubeMapFileNamesArray[i].GetString();
+			}
+
+			EnableBackground = JsonDocument["EnableBackground"].GetBool();
+			OverrideBackground = JsonDocument["OverrideBackground"].GetBool();
+			BackgroundFileName = JsonDocument["BackgroundFileName"].GetString();
+
+			auto PushLightsFromJson = [](std::vector<FLight>& OutLights, const auto& JsonArray)
+				{
+					for (uint32_t i = 0; i < JsonArray.Size(); i++) {
+						const auto& JsonObject = JsonArray[i];
+						FLight LocalLight;
+						const auto& PositionArray = JsonObject["Position"].GetArray();
+						LocalLight.Position = glm::vec4(PositionArray[0].GetFloat(), PositionArray[1].GetFloat(), PositionArray[2].GetFloat(), 1.0f);
+						const auto& ColorArray = JsonObject["Color"].GetArray();
+						LocalLight.Color = glm::vec4(ColorArray[0].GetFloat(), ColorArray[1].GetFloat(), ColorArray[2].GetFloat(), ColorArray[3].GetFloat());
+						const auto& DirectionArray = JsonObject["Direction"].GetArray();
+						LocalLight.Direction = glm::vec4(DirectionArray[0].GetFloat(), DirectionArray[1].GetFloat(), DirectionArray[2].GetFloat(), 1.0f);
+						const auto& LightInfoArray = JsonObject["LightInfo"].GetArray();
+						LocalLight.LightInfo = glm::vec4(LightInfoArray[0].GetFloat(), LightInfoArray[1].GetFloat(), LightInfoArray[2].GetFloat(), LightInfoArray[3].GetFloat());
+						OutLights.push_back(LocalLight);
+					}
+				};
+			const auto& DirectionalLightsArray = JsonDocument["DirectionalLights"].GetArray();
+			PushLightsFromJson(DirectionalLights, DirectionalLightsArray);
+			
+			const auto& PointLightsArray = JsonDocument["PointLights"].GetArray();
+			PushLightsFromJson(PointLights, PointLightsArray);
+
+			const auto& SpotLightsArray = JsonDocument["SpotLights"].GetArray();
+			PushLightsFromJson(SpotLights, SpotLightsArray);
+
+			const auto& ObjectsArray = JsonDocument["Objects"];
+			//const auto& ObjectsArray = JsonDocument["Objects"].GetArray();
+			for (uint32_t i = 0; i < ObjectsArray.Size(); i++) {
+				const auto& JsonObject = ObjectsArray[i];
+				FObject LocalObject;
+				LocalObject.ProfabName = JsonObject["ProfabName"].GetString();
+				LocalObject.InstCount = JsonObject["InstCount"].GetUint();
+				LocalObject.InstMinRadius = JsonObject["InstMinRadius"].GetFloat();
+				LocalObject.InstMaxRadius = JsonObject["InstMaxRadius"].GetFloat();
+				LocalObject.InstMinScale = JsonObject["InstMinScale"].GetFloat();
+				LocalObject.InstMaxScale = JsonObject["InstMaxScale"].GetFloat();
+				LocalObject.InstMinYaw = JsonObject["InstMinYaw"].GetFloat();
+				LocalObject.InstMaxYaw = JsonObject["InstMaxYaw"].GetFloat();
+				LocalObject.InstMinRoll = JsonObject["InstMinRoll"].GetFloat();
+				LocalObject.InstMaxRoll = JsonObject["InstMaxRoll"].GetFloat();
+				LocalObject.InstMinPitch = JsonObject["InstMinPitch"].GetFloat();
+				LocalObject.InstMaxPitch = JsonObject["InstMaxPitch"].GetFloat();
+				Objects.push_back(LocalObject);
+			}
+		}
+
+		void Save()
+		{
+			rapidjson::Document JsonDocument;
+			JsonDocument.SetObject();
+			rapidjson::Document::AllocatorType& JsonAllocator = JsonDocument.GetAllocator();
+
+			JsonDocument.AddMember("EnableSkydome", rapidjson::Value(EnableSkydome), JsonAllocator);
+			JsonDocument.AddMember("OverrideSkydome", rapidjson::Value(OverrideSkydome), JsonAllocator);
+			JsonDocument.AddMember("SkydomeFileName", rapidjson::Value(SkydomeFileName.c_str(), JsonAllocator), JsonAllocator);
+
+			JsonDocument.AddMember("OverrideCubeMap", rapidjson::Value(EnableSkydome), JsonAllocator);
+			rapidjson::Value CubeMapFileNamesArray(rapidjson::kArrayType);
+			for (const auto& fileName : CubeMapFileNames) {
+				rapidjson::Value strVal(fileName.c_str(), JsonAllocator);
+				CubeMapFileNamesArray.PushBack(strVal, JsonAllocator);
+			}
+			JsonDocument.AddMember("CubeMapFileNames", CubeMapFileNamesArray, JsonAllocator);
+
+			JsonDocument.AddMember("EnableBackground", rapidjson::Value(EnableBackground), JsonAllocator);
+			JsonDocument.AddMember("OverrideBackground", rapidjson::Value(OverrideBackground), JsonAllocator);
+			JsonDocument.AddMember("BackgroundFileName", rapidjson::Value(BackgroundFileName.c_str(), JsonAllocator), JsonAllocator);
+
+			auto PushLightsToJsonArray = [&JsonDocument, &JsonAllocator](rapidjson::Value& OutArray, const std::vector<FLight>& Lights) {
+				for (const auto& light : Lights) {
+					rapidjson::Value lightObj(rapidjson::kObjectType);
+					lightObj.AddMember("Position", rapidjson::Value(rapidjson::kArrayType), JsonAllocator);
+					lightObj["Position"].PushBack(light.Position.x, JsonAllocator);
+					lightObj["Position"].PushBack(light.Position.y, JsonAllocator);
+					lightObj["Position"].PushBack(light.Position.z, JsonAllocator);
+
+					lightObj.AddMember("Color", rapidjson::Value(rapidjson::kArrayType), JsonAllocator);
+					lightObj["Color"].PushBack(light.Color.x, JsonAllocator);
+					lightObj["Color"].PushBack(light.Color.y, JsonAllocator);
+					lightObj["Color"].PushBack(light.Color.z, JsonAllocator);
+					lightObj["Color"].PushBack(light.Color.w, JsonAllocator);
+
+					lightObj.AddMember("Direction", rapidjson::Value(rapidjson::kArrayType), JsonAllocator);
+					lightObj["Direction"].PushBack(light.Direction.x, JsonAllocator);
+					lightObj["Direction"].PushBack(light.Direction.y, JsonAllocator);
+					lightObj["Direction"].PushBack(light.Direction.z, JsonAllocator);
+
+					lightObj.AddMember("LightInfo", rapidjson::Value(rapidjson::kArrayType), JsonAllocator);
+					lightObj["LightInfo"].PushBack(light.LightInfo.x, JsonAllocator);
+					lightObj["LightInfo"].PushBack(light.LightInfo.y, JsonAllocator);
+					lightObj["LightInfo"].PushBack(light.LightInfo.z, JsonAllocator);
+					lightObj["LightInfo"].PushBack(light.LightInfo.w, JsonAllocator);
+
+					OutArray.PushBack(lightObj, JsonAllocator);
+				}
+			};
+			rapidjson::Value DirectionalLightsArray(rapidjson::kArrayType);
+			PushLightsToJsonArray(DirectionalLightsArray, DirectionalLights);
+			JsonDocument.AddMember("DirectionalLights", DirectionalLightsArray, JsonAllocator);
+			rapidjson::Value PointLightsArray(rapidjson::kArrayType);
+			PushLightsToJsonArray(PointLightsArray, PointLights);
+			JsonDocument.AddMember("PointLights", PointLightsArray, JsonAllocator);
+			rapidjson::Value SpotLightsArray(rapidjson::kArrayType);
+			PushLightsToJsonArray(SpotLightsArray, SpotLights);
+			JsonDocument.AddMember("SpotLights", SpotLightsArray, JsonAllocator);
+
+			rapidjson::Value ObjectsArray(rapidjson::kArrayType);
+			for (const auto& obj : Objects) {
+				rapidjson::Value JsonObject(rapidjson::kObjectType);
+				JsonObject.AddMember("ProfabName", rapidjson::Value(obj.ProfabName.c_str(), JsonAllocator), JsonAllocator);
+				JsonObject.AddMember("InstCount", rapidjson::Value(obj.InstCount), JsonAllocator);
+				JsonObject.AddMember("InstMinRadius", rapidjson::Value(obj.InstMinRadius), JsonAllocator);
+				JsonObject.AddMember("InstMaxRadius", rapidjson::Value(obj.InstMaxRadius), JsonAllocator);
+				JsonObject.AddMember("InstMinScale", rapidjson::Value(obj.InstMinScale), JsonAllocator);
+				JsonObject.AddMember("InstMaxScale", rapidjson::Value(obj.InstMaxScale), JsonAllocator);
+				JsonObject.AddMember("InstMinYaw", rapidjson::Value(obj.InstMinYaw), JsonAllocator);
+				JsonObject.AddMember("InstMaxYaw", rapidjson::Value(obj.InstMaxYaw), JsonAllocator);
+				JsonObject.AddMember("InstMinRoll", rapidjson::Value(obj.InstMinRoll), JsonAllocator);
+				JsonObject.AddMember("InstMaxRoll", rapidjson::Value(obj.InstMaxRoll), JsonAllocator);
+				JsonObject.AddMember("InstMinPitch", rapidjson::Value(obj.InstMinPitch), JsonAllocator);
+				JsonObject.AddMember("InstMaxPitch", rapidjson::Value(obj.InstMaxPitch), JsonAllocator);
+				ObjectsArray.PushBack(JsonObject, JsonAllocator);
+			}
+			JsonDocument.AddMember("Objects", ObjectsArray, JsonAllocator);
+			
+			std::vector<FObject> Objects;
+			rapidjson::StringBuffer buffer;
+			rapidjson::PrettyWriter<rapidjson::StringBuffer> writer(buffer);
+			JsonDocument.Accept(writer);
+
+			FILE* fp = fopen(FilePath.c_str(), "w");
+			if (!fp) {
+				perror("Failed to open file for writing");
+				return;
+			}
+
+			fputs(buffer.GetString(), fp);
+			fclose(fp);
+		}
+
+		void Reset()
+		{
+			EnableSkydome = true;
+			OverrideSkydome = true;
+			SkydomeFileName = "Content/Textures/skydome.png";
+
+			OverrideCubeMap = true;
+			CubeMapFileNames = {
+			"Content/Textures/cubemap_X0.png",
+			"Content/Textures/cubemap_X1.png",
+			"Content/Textures/cubemap_Y2.png",
+			"Content/Textures/cubemap_Y3.png",
+			"Content/Textures/cubemap_Z4.png",
+			"Content/Textures/cubemap_Z5.png"};
+			
+			EnableBackground = true;
+			OverrideBackground = true;
+			BackgroundFileName = "Content/Textures/background.png";
+
+			DirectionalLights.clear();
+			PointLights.clear();
+			SpotLights.clear();
+			//QuadLights.clear();
+
+			Objects.clear();
+		}
+	} World;
 
 	/** GBuffer for Deferred shading*/
 	struct FGBuffer {
@@ -894,18 +1155,14 @@ class FZeldaEngineApp
 				GBufferDFormat
 			};
 		}
-		void CleanUp()
-		{
-		
-		}
 	} GBuffer;
 
 	/** ShadowmapPass vulkan resources*/
 	struct FShadowmapPass {
 		std::vector<FRenderObject*> RenderObjects;
 		std::vector<FRenderInstancedObject*> RenderInstancedObjects;
-		std::vector<FRenderIndirectObject*> RenderIndirectObjects;
-		std::vector<FRenderIndirectInstancedObject*> RenderIndirectInstancedObjects;
+		std::vector<FRenderObjectIndirect*> RenderIndirectObjects;
+		std::vector<FRenderInstancedObjectIndirect*> RenderIndirectInstancedObjects;
 		float zNear, zFar;
 		int32_t Width, Height;
 		VkFormat Format;
@@ -967,8 +1224,8 @@ class FZeldaEngineApp
 	} BasePass;
 
 	struct FBaseIndirectPass {
-		std::vector<FRenderIndirectObject*> RenderIndirectObjects;
-		std::vector<FRenderIndirectInstancedObject*> RenderIndirectInstancedObjects;
+		std::vector<FRenderObjectIndirect*> RenderIndirectObjects;
+		std::vector<FRenderInstancedObjectIndirect*> RenderIndirectInstancedObjects;
 		VkDescriptorSetLayout DescriptorSetLayout;
 		VkPipelineLayout PipelineLayout;
 		std::vector<VkPipeline> Pipelines;
@@ -997,6 +1254,8 @@ class FZeldaEngineApp
 
 		float RightBarSpace;
 		float BottomBarSpace;
+
+		uint8_t SelectNodeIndex = 0;
 	} ImGuiPass;
 
 	/* GLFW Window */
@@ -1150,6 +1409,8 @@ public:
 		CreateSyncObjects(); // Create sync fence to ensure next frame render after the last frame finished
 
 		CreateImGuiForVulkan(); // Create ImGui for Vulkan
+
+		CreateEngineWorld(); // Create main world
 		CreateEngineScene(); // Create main rendering scene
 	}
 
@@ -1362,6 +1623,17 @@ public:
 	/** Draw a frame */
 	void DrawFrame()
 	{
+		// if scene reload, wait for all frame finish rendering
+		if (Scene.bReload)
+		{
+			for (size_t i = 0; i < InFlightFences.size(); i++)
+			{
+				vkWaitForFences(Device, 1, &InFlightFences[i], VK_TRUE, UINT64_MAX);
+			}
+			CreateEngineScene();
+			Scene.bReload = false;
+		}
+
 		// Wait for the previous frame to finish rendering
 		vkWaitForFences(Device, 1, &InFlightFences[CurrentFrame], VK_TRUE, UINT64_MAX);
 
@@ -2690,7 +2962,7 @@ protected:
 				vkCmdBindIndexBuffer(commandBuffer, renderInstancedObject->MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 				vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
 					ShadowmapPass.PipelineLayout, 0, 1, &ShadowmapPass.DescriptorSets[CurrentFrame], 0, nullptr);
-				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderInstancedObject->MeshData.Indices.size()), renderInstancedObject->InstanceCount, 0, 0, 0);
+				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderInstancedObject->MeshData.Indices.size()), renderInstancedObject->InstCount, 0, 0, 0);
 			}
 			// 【阴影】渲染Indirect场景
 			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ShadowmapPass.Pipelines[0]);
@@ -2698,7 +2970,7 @@ protected:
 				ShadowmapPass.PipelineLayout, 0, 1, &ShadowmapPass.DescriptorSets[CurrentFrame], 0, nullptr);
 			for (size_t i = 0; i < ShadowmapPass.RenderIndirectObjects.size(); i++)
 			{
-				FRenderIndirectObject* RenderIndirectObject = ShadowmapPass.RenderIndirectObjects[i];
+				FRenderObjectIndirect* RenderIndirectObject = ShadowmapPass.RenderIndirectObjects[i];
 				VkBuffer objectVertexBuffers[] = { RenderIndirectObject->MeshData.VertexBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
@@ -2733,7 +3005,7 @@ protected:
 				ShadowmapPass.PipelineLayout, 0, 1, &ShadowmapPass.DescriptorSets[CurrentFrame], 0, nullptr);
 			for (size_t i = 0; i < ShadowmapPass.RenderIndirectInstancedObjects.size(); i++)
 			{
-				FRenderIndirectInstancedObject* RenderIndirectInstancedObject = ShadowmapPass.RenderIndirectInstancedObjects[i];
+				FRenderInstancedObjectIndirect* RenderIndirectInstancedObject = ShadowmapPass.RenderIndirectInstancedObjects[i];
 				VkBuffer objectVertexBuffers[] = { RenderIndirectInstancedObject->MeshData.VertexBuffer };
 				VkBuffer objectInstanceBuffers[] = { RenderIndirectInstancedObject->MeshData.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
@@ -2853,7 +3125,7 @@ protected:
 					VK_PIPELINE_BIND_POINT_GRAPHICS,
 					BaseDeferredPass.ScenePipelineLayout, 0, 1,
 					&renderInstancedObject->MateData.DescriptorSets[CurrentFrame], 0, nullptr);
-				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderInstancedObject->MeshData.Indices.size()), renderInstancedObject->InstanceCount, 0, 0, 0);
+				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderInstancedObject->MeshData.Indices.size()), renderInstancedObject->InstCount, 0, 0, 0);
 			}
 
 			// 【延迟渲染】结束RenderPass
@@ -2958,14 +3230,14 @@ protected:
 					BasePass.PipelineLayout, 0, 1,
 					&renderInstancedObject->MateData.DescriptorSets[CurrentFrame], 0, nullptr);
 				vkCmdPushConstants(commandBuffer, BasePass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
-				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderInstancedObject->MeshData.Indices.size()), renderInstancedObject->InstanceCount, 0, 0, 0);
+				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderInstancedObject->MeshData.Indices.size()), renderInstancedObject->InstCount, 0, 0, 0);
 			}
 			// 【主场景】渲染 Indirect 场景
 			for (size_t i = 0; i < BaseIndirectPass.RenderIndirectObjects.size(); i++)
 			{
 				VkPipeline indirectScenePassPipeline = BaseIndirectPass.Pipelines[GlobalConstants.SpecConstants];
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, indirectScenePassPipeline);
-				FRenderIndirectObject* RenderIndirectObject = BaseIndirectPass.RenderIndirectObjects[i];
+				FRenderObjectIndirect* RenderIndirectObject = BaseIndirectPass.RenderIndirectObjects[i];
 				VkBuffer objectVertexBuffers[] = { RenderIndirectObject->MeshData.VertexBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
@@ -3022,7 +3294,7 @@ protected:
 			{
 				VkPipeline indirectScenePassPipelineInstanced = BaseIndirectPass.PipelinesInstanced[GlobalConstants.SpecConstants];
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, indirectScenePassPipelineInstanced);
-				FRenderIndirectInstancedObject* RenderIndirectInstancedObject = BaseIndirectPass.RenderIndirectInstancedObjects[i];
+				FRenderInstancedObjectIndirect* RenderIndirectInstancedObject = BaseIndirectPass.RenderIndirectInstancedObjects[i];
 				VkBuffer objectVertexBuffers[] = { RenderIndirectInstancedObject->MeshData.VertexBuffer };
 				VkBuffer objectInstanceBuffers[] = { RenderIndirectInstancedObject->MeshData.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
@@ -3079,7 +3351,7 @@ protected:
 				// 【主场景】渲染背景面片
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BackgroundPass.Pipelines[0]);
 				vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BackgroundPass.PipelineLayout, 0, 1, &BackgroundPass.DescriptorSets[CurrentFrame], 0, nullptr);
-				vkCmdDraw(commandBuffer, 6, 1, 0, 0);
+				//vkCmdDraw(commandBuffer, 6, 1, 0, 0);
 			}
 
 			// 【主场景】结束RenderPass
@@ -3154,64 +3426,7 @@ protected:
 			vkFreeMemory(Device, ViewUniformBuffersMemory[i], nullptr);
 		}
 
-		vkDestroyImageView(Device, CubemapImageView, nullptr);
-		vkDestroySampler(Device, CubemapSampler, nullptr);
-		vkDestroyImage(Device, CubemapImage, nullptr);
-		vkFreeMemory(Device, CubemapImageMemory, nullptr);
-
-		// Clean up Scene
-		for (size_t i = 0; i < Scene.RenderObjects.size(); i++)
-		{
-			FRenderObject& renderObject = Scene.RenderObjects[i];
-			DestroyRenderObject(renderObject);
-		}
-		for (size_t i = 0; i < Scene.RenderInstancedObjects.size(); i++)
-		{
-			FRenderInstancedObject& renderInstancedObject = Scene.RenderInstancedObjects[i];
-
-			DestroyRenderObject(renderInstancedObject);
-
-			vkDestroyBuffer(Device, renderInstancedObject.MeshData.InstancedBuffer, nullptr);
-			vkFreeMemory(Device, renderInstancedObject.MeshData.InstancedBufferMemory, nullptr);
-		}
-		for (size_t i = 0; i < Scene.RenderIndirectObjects.size(); i++)
-		{
-			FRenderIndirectObject& RenderIndirectObject = Scene.RenderIndirectObjects[i];
-
-			DestroyRenderObject(RenderIndirectObject);
-
-			vkDestroyBuffer(Device, RenderIndirectObject.IndirectCommandsBuffer, nullptr);
-			vkFreeMemory(Device, RenderIndirectObject.IndirectCommandsBufferMemory, nullptr);
-		}
-		for (size_t i = 0; i < Scene.RenderIndirectInstancedObjects.size(); i++)
-		{
-			FRenderIndirectInstancedObject& RenderIndirectInstancedObject = Scene.RenderIndirectInstancedObjects[i];
-
-			DestroyRenderObject(RenderIndirectInstancedObject);
-
-			vkDestroyBuffer(Device, RenderIndirectInstancedObject.MeshData.InstancedBuffer, nullptr);
-			vkFreeMemory(Device, RenderIndirectInstancedObject.MeshData.InstancedBufferMemory, nullptr);
-
-			vkDestroyBuffer(Device, RenderIndirectInstancedObject.IndirectCommandsBuffer, nullptr);
-			vkFreeMemory(Device, RenderIndirectInstancedObject.IndirectCommandsBufferMemory, nullptr);
-		}
-#if ENABLE_DEFEERED_SHADING
-		for (size_t i = 0; i < Scene.RenderDeferredObjects.size(); i++)
-		{
-			FRenderDeferredObject& renderObject = Scene.RenderDeferredObjects[i];
-
-			DestroyRenderObject(renderObject);
-		}
-		for (size_t i = 0; i < Scene.RenderDeferredInstancedObjects.size(); i++)
-		{
-			FRenderDeferredInstancedObject& renderInstancedObject = Scene.RenderDeferredInstancedObjects[i];
-
-			DestroyRenderObject(renderInstancedObject);
-
-			vkDestroyBuffer(Device, renderInstancedObject.MeshData.InstancedBuffer, nullptr);
-			vkFreeMemory(Device, renderInstancedObject.MeshData.InstancedBufferMemory, nullptr);
-		}
-#endif
+		CleanupCubeMaps();
 
 		// Clean up ShadowmapPass
 		vkDestroyRenderPass(Device, ShadowmapPass.RenderPass, nullptr);
@@ -3245,17 +3460,11 @@ protected:
 			vkDestroyPipeline(Device, SkydomePass.Pipelines[i], nullptr);
 		}
 		vkDestroyDescriptorPool(Device, SkydomePass.DescriptorPool, nullptr);
-		for (size_t i = 0; i < SkydomePass.ImageViews.size(); i++)
-		{
-			vkDestroyImageView(Device, SkydomePass.ImageViews[i], nullptr);
-			vkDestroySampler(Device, SkydomePass.ImageSamplers[i], nullptr);
-			vkDestroyImage(Device, SkydomePass.Images[i], nullptr);
-			vkFreeMemory(Device, SkydomePass.ImageMemorys[i], nullptr);
-		}
 		vkDestroyBuffer(Device, SkydomePass.SkydomeMesh.VertexBuffer, nullptr);
 		vkFreeMemory(Device, SkydomePass.SkydomeMesh.VertexBufferMemory, nullptr);
 		vkDestroyBuffer(Device, SkydomePass.SkydomeMesh.IndexBuffer, nullptr);
 		vkFreeMemory(Device, SkydomePass.SkydomeMesh.IndexBufferMemory, nullptr);
+		CleanupSkydome();
 
 		// Clean up BackgroundPass
 		vkDestroyDescriptorSetLayout(Device, BackgroundPass.DescriptorSetLayout, nullptr);
@@ -3265,13 +3474,7 @@ protected:
 			vkDestroyPipeline(Device, BackgroundPass.Pipelines[i], nullptr);
 		}
 		vkDestroyDescriptorPool(Device, BackgroundPass.DescriptorPool, nullptr);
-		for (size_t i = 0; i < BackgroundPass.ImageViews.size(); i++)
-		{
-			vkDestroyImageView(Device, BackgroundPass.ImageViews[i], nullptr);
-			vkDestroySampler(Device, BackgroundPass.ImageSamplers[i], nullptr);
-			vkDestroyImage(Device, BackgroundPass.Images[i], nullptr);
-			vkFreeMemory(Device, BackgroundPass.ImageMemorys[i], nullptr);
-		}
+		CleanupBackground();
 
 		// Clean up BasePass
 		vkDestroyDescriptorSetLayout(Device, BasePass.DescriptorSetLayout, nullptr);
@@ -3297,6 +3500,8 @@ protected:
 #if ENABLE_DEFEERED_SHADING
 		CleanupBaseDeferredPass();
 #endif
+
+		CleanupScene();
 
 		vkFreeCommandBuffers(Device, CommandPool, static_cast<uint32_t>(CommandBuffers.size()), CommandBuffers.data());
 		vkDestroyCommandPool(Device, CommandPool, nullptr);
@@ -3327,6 +3532,94 @@ protected:
 		}
 
 		vkDestroySwapchainKHR(Device, SwapChain, nullptr);
+	}
+
+	void CleanupScene()
+	{
+		// Clean up Scene
+		for (size_t i = 0; i < Scene.RenderObjects.size(); i++)
+		{
+			FRenderObject& renderObject = Scene.RenderObjects[i];
+			DestroyRenderObject(renderObject);
+		}
+		for (size_t i = 0; i < Scene.RenderInstancedObjects.size(); i++)
+		{
+			FRenderInstancedObject& renderInstancedObject = Scene.RenderInstancedObjects[i];
+
+			DestroyRenderObject(renderInstancedObject);
+
+			vkDestroyBuffer(Device, renderInstancedObject.MeshData.InstancedBuffer, nullptr);
+			vkFreeMemory(Device, renderInstancedObject.MeshData.InstancedBufferMemory, nullptr);
+		}
+		for (size_t i = 0; i < Scene.RenderIndirectObjects.size(); i++)
+		{
+			FRenderObjectIndirect& RenderIndirectObject = Scene.RenderIndirectObjects[i];
+
+			DestroyRenderObject(RenderIndirectObject);
+
+			vkDestroyBuffer(Device, RenderIndirectObject.IndirectCommandsBuffer, nullptr);
+			vkFreeMemory(Device, RenderIndirectObject.IndirectCommandsBufferMemory, nullptr);
+		}
+		for (size_t i = 0; i < Scene.RenderIndirectInstancedObjects.size(); i++)
+		{
+			FRenderInstancedObjectIndirect& RenderIndirectInstancedObject = Scene.RenderIndirectInstancedObjects[i];
+
+			DestroyRenderObject(RenderIndirectInstancedObject);
+
+			vkDestroyBuffer(Device, RenderIndirectInstancedObject.MeshData.InstancedBuffer, nullptr);
+			vkFreeMemory(Device, RenderIndirectInstancedObject.MeshData.InstancedBufferMemory, nullptr);
+
+			vkDestroyBuffer(Device, RenderIndirectInstancedObject.IndirectCommandsBuffer, nullptr);
+			vkFreeMemory(Device, RenderIndirectInstancedObject.IndirectCommandsBufferMemory, nullptr);
+		}
+#if ENABLE_DEFEERED_SHADING
+		for (size_t i = 0; i < Scene.RenderDeferredObjects.size(); i++)
+		{
+			FRenderDeferredObject& renderObject = Scene.RenderDeferredObjects[i];
+
+			DestroyRenderObject(renderObject);
+		}
+		for (size_t i = 0; i < Scene.RenderDeferredInstancedObjects.size(); i++)
+		{
+			FRenderDeferredInstancedObject& renderInstancedObject = Scene.RenderDeferredInstancedObjects[i];
+
+			DestroyRenderObject(renderInstancedObject);
+
+			vkDestroyBuffer(Device, renderInstancedObject.MeshData.InstancedBuffer, nullptr);
+			vkFreeMemory(Device, renderInstancedObject.MeshData.InstancedBufferMemory, nullptr);
+		}
+#endif
+		Scene.Reset();
+	}
+
+	void CleanupCubeMaps()
+	{
+		vkDestroyImageView(Device, CubemapImageView, nullptr);
+		vkDestroySampler(Device, CubemapSampler, nullptr);
+		vkDestroyImage(Device, CubemapImage, nullptr);
+		vkFreeMemory(Device, CubemapImageMemory, nullptr);
+	}
+
+	void CleanupSkydome()
+	{
+		for (size_t i = 0; i < SkydomePass.ImageViews.size(); i++)
+		{
+			vkDestroyImageView(Device, SkydomePass.ImageViews[i], nullptr);
+			vkDestroySampler(Device, SkydomePass.ImageSamplers[i], nullptr);
+			vkDestroyImage(Device, SkydomePass.Images[i], nullptr);
+			vkFreeMemory(Device, SkydomePass.ImageMemorys[i], nullptr);
+		}
+	}
+
+	void CleanupBackground()
+	{
+		for (size_t i = 0; i < BackgroundPass.ImageViews.size(); i++)
+		{
+			vkDestroyImageView(Device, BackgroundPass.ImageViews[i], nullptr);
+			vkDestroySampler(Device, BackgroundPass.ImageSamplers[i], nullptr);
+			vkDestroyImage(Device, BackgroundPass.Images[i], nullptr);
+			vkFreeMemory(Device, BackgroundPass.ImageMemorys[i], nullptr);
+		}
 	}
 
 	void CleanupBaseDeferredPass()
@@ -3386,62 +3679,142 @@ protected:
 	}
 
 public:
+	void CreateEngineWorld()
+	{
+		World.EnableSkydome = true;
+		World.OverrideSkydome = true;
+		World.SkydomeFileName = "grassland_night.png";
+
+		World.OverrideCubeMap = true;
+		World.CubeMapFileNames = {
+			"grassland_night_X0.png",
+			"grassland_night_X1.png",
+			"grassland_night_Y2.png",
+			"grassland_night_Y3.png",
+			"grassland_night_Z4.png",
+			"grassland_night_Z5.png"
+		};
+
+		World.EnableBackground = true;
+		World.OverrideBackground = true;
+		World.BackgroundFileName = "background.png";
+
+		FObject terrain;
+		terrain.ProfabName = "terrain";
+		terrain.InstCount = 1;
+		World.Objects.push_back(terrain);
+
+		FObject rock_01;
+		rock_01.ProfabName = "rock_01";
+		rock_01.InstCount = 1;
+		World.Objects.push_back(rock_01);
+
+		FObject rock_02;
+		rock_02.ProfabName = "rock_02";
+		rock_02.InstCount = 64;
+		rock_02.InstMinRadius = 1.0f;
+		rock_02.InstMaxRadius = 5.0f;
+		rock_02.InstMinScale = 0.2f;
+		rock_02.InstMaxScale = 0.5f;
+		World.Objects.push_back(rock_02);
+
+		FObject grass_01;
+		grass_01.ProfabName = "grass_01";
+		grass_01.InstCount = 10000;
+		grass_01.InstMinRadius = 2.0f;
+		grass_01.InstMaxRadius = 8.0f;
+		grass_01.InstMinScale = 0.1f;
+		grass_01.InstMaxScale = 0.5f;
+		World.Objects.push_back(grass_01);
+
+		FObject grass_02;
+		grass_02.ProfabName = "grass_02";
+		grass_02.InstCount = 10000;
+		grass_02.InstMinRadius = 1.0f;
+		grass_02.InstMaxRadius = 9.0f;
+		grass_02.InstMinScale = 0.1f;
+		grass_02.InstMaxScale = 0.5f;
+		World.Objects.push_back(grass_02);
+
+		uint32_t DirectionalLightNum = 1;
+		FLight Moonlight;
+		Moonlight.Position = glm::vec4(20.0f, 0.0f, 20.0f, 0.0);
+		Moonlight.Color = glm::vec4(0.0, 0.1, 0.6, 15.0);
+		Moonlight.Direction = glm::vec4(glm::normalize(glm::vec3(Moonlight.Position.x, Moonlight.Position.y, Moonlight.Position.z)), 0.0);
+		Moonlight.LightInfo = glm::vec4(0.0, 0.0, 0.0, 0.0);
+		World.DirectionalLights.push_back(Moonlight);
+
+		uint32_t PointLightNum = 16;
+		for (uint32_t i = 0; i < PointLightNum; i++)
+		{
+			FLight PointLight;
+			float radians = RandRange(0.0f, 360.0f, i);
+			float distance = RandRange(0.1f, 0.6f, i);
+			float X = sin(glm::radians(radians)) * distance;
+			float Y = cos(glm::radians(radians)) * distance;
+			float Z = 1.0;
+			PointLight.Position = glm::vec4(glm::vec3(X, Y, Z), 0.0);
+			float R = (((float)RandRange(50, 75, i) / 100.0f));
+			float G = (((float)RandRange(25, 50, i) / 100.0f));
+			float B = 0.0;
+			PointLight.Color = glm::vec4(R, G, B, 10.0);
+			PointLight.Direction = glm::vec4(0.0, 0.0, 1.0, 1.5);
+			PointLight.LightInfo = glm::vec4(0.0, 0.0, 0.0, 0.0);
+			World.PointLights.push_back(PointLight);
+		}
+	}
 	void CreateEngineScene()
 	{
+		CleanupScene();
+
+		SkydomePass.EnableSkydome = World.EnableSkydome;
+		/* (1) Override skydome and background */
+		if (World.OverrideCubeMap)
+		{
+			// @TODO: Fix crash here when select new menu
+			CleanupCubeMaps();
+			CreateImageCubeContext(CubemapImage, CubemapImageMemory, CubemapImageView, CubemapSampler, CubemapMaxMips, {
+			ASSETS(World.CubeMapFileNames[0]),
+			ASSETS(World.CubeMapFileNames[1]),
+			ASSETS(World.CubeMapFileNames[2]),
+			ASSETS(World.CubeMapFileNames[3]),
+			ASSETS(World.CubeMapFileNames[4]),
+			ASSETS(World.CubeMapFileNames[5]) });
+		}
+		if (World.OverrideSkydome)
+		{
+			CleanupSkydome();
+			CreateImageContext(
+				SkydomePass.Images[0],
+				SkydomePass.ImageMemorys[0],
+				SkydomePass.ImageViews[0],
+				SkydomePass.ImageSamplers[0],
+				ASSETS(World.SkydomeFileName));
+			UpdateDescriptorSet(SkydomePass.DescriptorSets, SkydomePass.ImageViews, SkydomePass.ImageSamplers, ERenderFlags::Skydome);
+		}
+
+		BackgroundPass.EnableBackground = World.EnableBackground;
+		if (World.OverrideBackground)
+		{
+			CleanupBackground();
+			CreateImageContext(
+				BackgroundPass.Images[0],
+				BackgroundPass.ImageMemorys[0],
+				BackgroundPass.ImageViews[0],
+				BackgroundPass.ImageSamplers[0],
+				ASSETS(World.BackgroundFileName));
+			UpdateDescriptorSet(BackgroundPass.DescriptorSets, BackgroundPass.ImageViews, BackgroundPass.ImageSamplers, ERenderFlags::Background);
+		}
+
 		Scene.DescriptorSetLayout = &BasePass.DescriptorSetLayout;
 		Scene.IndirectDescriptorSetLayout = &BaseIndirectPass.DescriptorSetLayout;
 		Scene.DeferredSceneDescriptorSetLayout = &BaseDeferredPass.SceneDescriptorSetLayout;
 		Scene.DeferredLightingDescriptorSetLayout = &BaseDeferredPass.LightingDescriptorSetLayout;
 
-		/* (1) Override skydome and background */
-		vkDestroyImageView(Device, CubemapImageView, nullptr);
-		vkDestroySampler(Device, CubemapSampler, nullptr);
-		vkDestroyImage(Device, CubemapImage, nullptr);
-		vkFreeMemory(Device, CubemapImageMemory, nullptr);
-		CreateImageCubeContext(CubemapImage, CubemapImageMemory, CubemapImageView, CubemapSampler, CubemapMaxMips, {
-		ASSETS("grassland_night_X0.png"),
-		ASSETS("grassland_night_X1.png"),
-		ASSETS("grassland_night_Y2.png"),
-		ASSETS("grassland_night_Y3.png"),
-		ASSETS("grassland_night_Z4.png"),
-		ASSETS("grassland_night_Z5.png") });
-
-		for (size_t i = 0; i < SkydomePass.ImageViews.size(); i++)
-		{
-			vkDestroyImageView(Device, SkydomePass.ImageViews[i], nullptr);
-			vkDestroySampler(Device, SkydomePass.ImageSamplers[i], nullptr);
-			vkDestroyImage(Device, SkydomePass.Images[i], nullptr);
-			vkFreeMemory(Device, SkydomePass.ImageMemorys[i], nullptr);
-		}
-		CreateImageContext(
-			SkydomePass.Images[0],
-			SkydomePass.ImageMemorys[0],
-			SkydomePass.ImageViews[0],
-			SkydomePass.ImageSamplers[0],
-			ASSETS("grassland_night.png"));
-		UpdateDescriptorSet(SkydomePass.DescriptorSets, SkydomePass.ImageViews, SkydomePass.ImageSamplers, ERenderFlags::Skydome);
-		SkydomePass.EnableSkydome = true;
-
-		for (size_t i = 0; i < BackgroundPass.ImageViews.size(); i++)
-		{
-			vkDestroyImageView(Device, BackgroundPass.ImageViews[i], nullptr);
-			vkDestroySampler(Device, BackgroundPass.ImageSamplers[i], nullptr);
-			vkDestroyImage(Device, BackgroundPass.Images[i], nullptr);
-			vkFreeMemory(Device, BackgroundPass.ImageMemorys[i], nullptr);
-		}
-		CreateImageContext(
-			BackgroundPass.Images[0],
-			BackgroundPass.ImageMemorys[0],
-			BackgroundPass.ImageViews[0],
-			BackgroundPass.ImageSamplers[0],
-			ASSETS("background.png"));
-		UpdateDescriptorSet(BackgroundPass.DescriptorSets, BackgroundPass.ImageViews, BackgroundPass.ImageSamplers, ERenderFlags::Background);
-		BackgroundPass.EnableBackground = true;
-
 		/* (2) Create base scene */
 		if (ENABLE_INDIRECT_DRAW)
 		{
-			FRenderIndirectObject object;
+			FRenderObjectIndirect object;
 			std::string object_obj = "Content/Meshes/dragon.meshlet";
 			std::vector<std::string> object_imgs = {
 				"Content/Textures/default_grey.png",	// BaseColor
@@ -3452,7 +3825,7 @@ public:
 				"Content/Textures/default_black.png",	// Emissive
 				"Content/Textures/default_white.png" };	// Mask
 
-			CreateRenderIndirectObject<FRenderIndirectObject>(object, object_obj, object_imgs);
+			CreateRenderIndirectObject<FRenderObjectIndirect>(object, object_obj, object_imgs);
 
 			object.IndirectCommands.clear();
 
@@ -3486,99 +3859,57 @@ public:
 			//indirectCmd.firstInstance = 0; /*firstInstance*/
 			//object.IndirectCommands.push_back(indirectCmd);
 
-			CreateRenderIndirectBuffer<FRenderIndirectObject>(object);
+			CreateRenderIndirectBuffer<FRenderObjectIndirect>(object);
 			Scene.RenderIndirectObjects.push_back(object);
 		}
 
-		float rock_safe_zone = 1.0f;
-		std::vector<FInstanceData> rock_InstanceData;
-		uint32_t rock_InstanceCount = 64;
-		rock_InstanceData.resize(rock_InstanceCount);
-		for (uint32_t i = 0; i < rock_InstanceCount; i++) {
-			float radians = (((float)RandRange(0, 3600) / 10.0f));
-			float distance = (((float)RandRange(0, 500) / 100.0f)) + rock_safe_zone;
-			float X = sin(glm::radians(radians)) * distance;
-			float Y = cos(glm::radians(radians)) * distance;
-			float Z = 0.0;
-			rock_InstanceData[i].InstancePosition = glm::vec3(X, Y, Z);
-			// Y(Pitch), Z(Yaw), X(Roll)
-			float Yaw = float(M_PI) * RandRange(0, 99) / 100.0f;
-			rock_InstanceData[i].InstanceRotation = glm::vec3(0.0, Yaw, 0.0);
-			rock_InstanceData[i].InstancePScale = RandRange(2, 5) / 10.0f;
-			rock_InstanceData[i].InstanceTexIndex = RandRange(0, 255);
-		}
-
-		std::vector<FInstanceData> grass_01_InstanceData;
-		uint32_t grass_01_InstanceCount = INSTANCE_COUNT;
-		grass_01_InstanceData.resize(grass_01_InstanceCount);
-		for (uint32_t i = 0; i < grass_01_InstanceCount; i++) {
-			float radians = (((float)RandRange(0, 3600) / 10.0f));
-			float distance = (((float)RandRange(0, 800) / 100.0f)) + rock_safe_zone * 2.0f;
-			float X = sin(glm::radians(radians)) * distance;
-			float Y = cos(glm::radians(radians)) * distance;
-			float Z = 0.0;
-			grass_01_InstanceData[i].InstancePosition = glm::vec3(X, Y, Z);
-			// Y(Pitch), Z(Yaw), X(Roll)
-			float Yaw = float(M_PI) * RandRange(0, 99) / 100.0f;
-			grass_01_InstanceData[i].InstanceRotation = glm::vec3(0.0, Yaw, 0.0);
-			grass_01_InstanceData[i].InstancePScale = RandRange(1, 5) / 10.0f;
-			grass_01_InstanceData[i].InstanceTexIndex = RandRange(0, 255);
-		}
-
-		std::vector<FInstanceData> grass_02_InstanceData;
-		uint32_t grass_02_InstanceCount = INSTANCE_COUNT;
-		grass_02_InstanceData.resize(grass_02_InstanceCount);
-		for (uint32_t i = 0; i < grass_02_InstanceCount; i++) {
-			float radians = (((float)RandRange(0, 3600) / 10.0f));
-			float distance = (((float)RandRange(0, 900) / 100.0f)) + rock_safe_zone;
-			float X = sin(glm::radians(radians)) * distance;
-			float Y = cos(glm::radians(radians)) * distance;
-			float Z = 0.0;
-			grass_02_InstanceData[i].InstancePosition = glm::vec3(X, Y, Z);
-			// Y(Pitch), Z(Yaw), X(Roll)
-			float Yaw = float(M_PI) * RandRange(0, 99) / 100.0f;
-			grass_02_InstanceData[i].InstanceRotation = glm::vec3(0.0, Yaw, 0.0);
-			grass_02_InstanceData[i].InstancePScale = RandRange(1, 5) / 10.0f;
-			grass_02_InstanceData[i].InstanceTexIndex = RandRange(0, 255);
-		}
-
+		for (const FObject& Object : World.Objects)
+		{
+			if (Object.InstCount > 1)
+			{
+				std::vector<FInstanceData> Data;
+				GenerateInstance(Data, Object);
 #if ENABLE_DEFEERED_SHADING
-		CreateRenderObjectsFromProfabs(Scene.RenderDeferredObjects, *Scene.DeferredSceneDescriptorSetLayout, "terrain");
-		CreateRenderObjectsFromProfabs(Scene.RenderDeferredObjects, *Scene.DeferredSceneDescriptorSetLayout, "rock_01");
-		CreateRenderObjectsFromProfabs(Scene.RenderDeferredInstancedObjects, *Scene.DeferredSceneDescriptorSetLayout, "rock_02", rock_InstanceData);
-		CreateRenderObjectsFromProfabs(Scene.RenderDeferredInstancedObjects, *Scene.DeferredSceneDescriptorSetLayout, "grass_01", grass_01_InstanceData);
-		CreateRenderObjectsFromProfabs(Scene.RenderDeferredInstancedObjects, *Scene.DeferredSceneDescriptorSetLayout, "grass_02", grass_02_InstanceData);
-		UpdateDescriptorSet(BaseDeferredPass.LightingDescriptorSets, GBuffer.ImageViews(), GBuffer.Samplers(), ERenderFlags::DeferredLighting);
+				CreateRenderObjectsFromProfabs(
+					Scene.RenderDeferredInstancedObjects,
+					*Scene.DeferredSceneDescriptorSetLayout, Object.ProfabName, Data);
+			}
+			else
+			{
+				CreateRenderObjectsFromProfabs(Scene.RenderDeferredObjects,
+					*Scene.DeferredSceneDescriptorSetLayout, Object.ProfabName);
+			}
+
+			UpdateDescriptorSet(BaseDeferredPass.LightingDescriptorSets, GBuffer.ImageViews(), GBuffer.Samplers(), ERenderFlags::DeferredLighting);
+#else
+				CreateRenderObjectsFromProfabs(
+					Scene.RenderInstancedObjects,
+					*Scene.SceneDescriptorSetLayout, Object.ProfabName, Data);
+		}
+			else
+			{
+				CreateRenderObjectsFromProfabs(Scene.RenderDeferredObjects,
+					*Scene.SceneDescriptorSetLayout, Object.ProfabName);
+			}
 #endif
+		}
+
 		/* 
 		* (3) Create light here
 		*/
-		uint32_t DirectionalLightNum = 1;
-		FLight Moonlight;
-		Moonlight.Position = glm::vec4(20.0f, 0.0f, 20.0f, 0.0);
-		Moonlight.Color = glm::vec4(0.0, 0.1, 0.6, 15.0);
-		Moonlight.Direction = glm::vec4(glm::normalize(glm::vec3(Moonlight.Position.x, Moonlight.Position.y, Moonlight.Position.z)), 0.0);
-		Moonlight.LightInfo = glm::vec4(0.0, 0.0, 0.0, 0.0);
-		View.DirectionalLights[0] = Moonlight;
-		uint32_t PointLightNum = 16;
-		for (uint32_t i = 0; i < PointLightNum; i++)
+		for (uint32_t i = 0; i < World.DirectionalLights.size(); i++)
 		{
-			FLight PointLight;
-			float radians = (((float)RandRange(0, 3600) / 10.0f));
-			float distance = (((float)RandRange(0, 500) / 100.0f)) + 1.0f;
-			float X = sin(glm::radians(radians)) * distance;
-			float Y = cos(glm::radians(radians)) * distance;
-			float Z = 1.0;
-			PointLight.Position = glm::vec4(glm::vec3(X, Y, Z), 0.0);
-			float R = (((float)RandRange(50, 75) / 100.0f));
-			float G = (((float)RandRange(25, 50) / 100.0f));
-			float B = 0.0;
-			PointLight.Color = glm::vec4(R, G, B, 10.0);
-			PointLight.Direction = glm::vec4(0.0, 0.0, 1.0, 1.5);
-			PointLight.LightInfo = glm::vec4(0.0, 0.0, 0.0, 0.0);
-			View.PointLights[i] = PointLight;
+			View.DirectionalLights[i] = World.DirectionalLights[i];
 		}
-		View.LightsCount = glm::ivec4(DirectionalLightNum, PointLightNum, 0, CubemapMaxMips);
+		for (uint32_t i = 0; i < World.PointLights.size(); i++)
+		{
+			View.PointLights[i] = World.PointLights[i];
+		}
+		for (uint32_t i = 0; i < World.SpotLights.size(); i++)
+		{
+			View.SpotLights[i] = World.SpotLights[i];
+		}
+		View.LightsCount = glm::ivec4(World.DirectionalLights.size(), World.PointLights.size(), World.SpotLights.size(), CubemapMaxMips);
 	}
 
 	/** Update player inputs*/
@@ -3635,9 +3966,21 @@ public:
 			{
 				if (ImGui::BeginMenu("File"))
 				{
-					if (ImGui::MenuItem("New")) { /* 执行"New"操作 */ }
-					if (ImGui::MenuItem("Open")) { /* 执行"Open"操作 */ }
-					if (ImGui::MenuItem("Save")) { /* 执行"Save"操作 */ }
+					if (ImGui::MenuItem("New")) 
+					{
+						World.Reset();
+						Scene.bReload = true;
+					}
+					if (ImGui::MenuItem("Save"))
+					{
+						World.Save();
+					}
+					if (ImGui::MenuItem("Reload")) 
+					{
+						World.Load();
+						Scene.bReload = true;
+					}
+
 					if (ImGui::MenuItem("Exit")) { glfwSetWindowShouldClose(Window, true); }
 
 					ImGui::EndMenu();
@@ -3707,13 +4050,26 @@ public:
 			{
 				if (ImGui::TreeNodeEx("Main Camera", ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_Selected))
 				{
+					ImGuiPass.SelectNodeIndex = 1;
 					ImGui::TreePop();
 				}
 				ImGui::TreePop();
 			}
 			if (ImGui::TreeNode("Lights"))
 			{
-				if (ImGui::TreeNodeEx("Directional Light", ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_Selected))
+				if (ImGui::TreeNode("Directional Lights"))
+				{
+					ImGui::TreePop();
+				}
+				if (ImGui::TreeNode("Point Lights"))
+				{
+					ImGui::TreePop();
+				}
+				if (ImGui::TreeNode("Point Lights"))
+				{
+					ImGui::TreePop();
+				}
+				if (ImGui::TreeNode("Mesh Lights"))
 				{
 					ImGui::TreePop();
 				}
@@ -3776,7 +4132,15 @@ public:
 			static char code[1024 * 16] =
 				"# This is a Python code example\n"
 				"print('Hello, world!')\n";
+			ImGui::Spacing();
 			ImGui::InputTextMultiline("Code", code, IM_ARRAYSIZE(code), ImVec2(-FLT_MIN, ImGui::GetTextLineHeight() * 16), ImGuiInputTextFlags_AllowTabInput);
+			static char filePath[1024 * 16] = "Content/World/Untitled.json";
+			std::strncpy(filePath, World.FilePath.c_str(), sizeof(filePath) - 1);
+			if (ImGui::InputText("##FilePath", filePath, IM_ARRAYSIZE(filePath), ImGuiInputTextFlags_AllowTabInput))
+			{
+				World.FilePath = filePath;
+			}
+			ImGui::SameLine();
 			// create run button
 			if (ImGui::Button("Run"))
 			{
@@ -3911,7 +4275,7 @@ public:
 		}
 		for (size_t i = 0; i < Scene.RenderIndirectObjects.size(); i++)
 		{
-			FRenderIndirectObject* RenderIndirectObject = &Scene.RenderIndirectObjects[i];
+			FRenderObjectIndirect* RenderIndirectObject = &Scene.RenderIndirectObjects[i];
 			BaseIndirectPass.RenderIndirectObjects.push_back(RenderIndirectObject);
 			ShadowmapPass.RenderIndirectObjects.push_back(RenderIndirectObject);
 #if ENABLE_BINDLESS
@@ -3921,7 +4285,7 @@ public:
 		}
 		for (size_t i = 0; i < Scene.RenderIndirectInstancedObjects.size(); i++)
 		{
-			FRenderIndirectInstancedObject* RenderIndirectInstancedObject = &Scene.RenderIndirectInstancedObjects[i];
+			FRenderInstancedObjectIndirect* RenderIndirectInstancedObject = &Scene.RenderIndirectInstancedObjects[i];
 			BaseIndirectPass.RenderIndirectInstancedObjects.push_back(RenderIndirectInstancedObject);
 			ShadowmapPass.RenderIndirectInstancedObjects.push_back(RenderIndirectInstancedObject);
 #if ENABLE_BINDLESS
@@ -4771,96 +5135,6 @@ public:
 		}
 	}
 
-	template<typename T>
-	void UpdateRenderObjectDescriptorSet(T* outObject, const FUniformBufferBase& MVP)
-	{
-
-		uint32_t samplerNumber = PBR_SAMPLER_NUMBER;
-		uint32_t bindingOffset = 4;
-		std::vector<VkDescriptorSet>& DescriptorSets = outObject->MateData.DescriptorSets;
-		std::vector<VkImageView>& ImageViews = outObject->MateData.TextureImageViews;
-		std::vector<VkSampler>& Samplers = outObject->MateData.TextureImageSamplers;
-		std::vector<VkBuffer>& UniformBuffers = outObject->TransfromUniformBuffers;
-		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
-		{
-			std::vector<VkWriteDescriptorSet> descriptorWrites{};
-			descriptorWrites.resize(samplerNumber + bindingOffset);
-
-			VkDescriptorBufferInfo baseBufferInfo{};
-			baseBufferInfo.buffer = UniformBuffers[i];
-			baseBufferInfo.offset = 0;
-			baseBufferInfo.range = sizeof(FUniformBufferBase);
-
-			descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-			descriptorWrites[0].dstSet = DescriptorSets[i];
-			descriptorWrites[0].dstBinding = 0;
-			descriptorWrites[0].dstArrayElement = 0;
-			descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-			descriptorWrites[0].descriptorCount = 1;
-			descriptorWrites[0].pBufferInfo = &baseBufferInfo;
-
-			VkDescriptorBufferInfo viewBufferInfo{};
-			viewBufferInfo.buffer = ViewUniformBuffers[i];
-			viewBufferInfo.offset = 0;
-			viewBufferInfo.range = sizeof(FUniformBufferView);
-
-			descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-			descriptorWrites[1].dstSet = DescriptorSets[i];
-			descriptorWrites[1].dstBinding = 1;
-			descriptorWrites[1].dstArrayElement = 0;
-			descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-			descriptorWrites[1].descriptorCount = 1;
-			descriptorWrites[1].pBufferInfo = &viewBufferInfo;
-
-			VkDescriptorImageInfo imageInfo{};
-			imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-			imageInfo.imageView = CubemapImageView;
-			imageInfo.sampler = CubemapSampler;
-
-			descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-			descriptorWrites[2].dstSet = DescriptorSets[i];
-			descriptorWrites[2].dstBinding = 2;
-			descriptorWrites[2].dstArrayElement = 0;
-			descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-			descriptorWrites[2].descriptorCount = 1;
-			descriptorWrites[2].pImageInfo = &imageInfo;
-
-			VkDescriptorImageInfo shadowmapImageInfo{};
-			shadowmapImageInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-			shadowmapImageInfo.imageView = ShadowmapPass.ImageView;
-			shadowmapImageInfo.sampler = ShadowmapPass.Sampler;
-
-			descriptorWrites[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-			descriptorWrites[3].dstSet = DescriptorSets[i];
-			descriptorWrites[3].dstBinding = 3;
-			descriptorWrites[3].dstArrayElement = 0;
-			descriptorWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-			descriptorWrites[3].descriptorCount = 1;
-			descriptorWrites[3].pImageInfo = &shadowmapImageInfo;
-
-			std::vector<VkDescriptorImageInfo> imageInfos;
-			imageInfos.resize(samplerNumber);
-			for (size_t j = 0; j < samplerNumber; j++)
-			{
-				VkDescriptorImageInfo imageInfo{};
-				imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-				imageInfo.imageView = ImageViews[j];
-				imageInfo.sampler = Samplers[j];
-				imageInfos[j] = imageInfo;
-
-				descriptorWrites[j + bindingOffset].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-				descriptorWrites[j + bindingOffset].dstSet = DescriptorSets[i];
-				descriptorWrites[j + bindingOffset].dstBinding = static_cast<uint32_t>(j + bindingOffset);
-				descriptorWrites[j + bindingOffset].dstArrayElement = 0;
-				descriptorWrites[j + bindingOffset].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-				descriptorWrites[j + bindingOffset].descriptorCount = 1;
-				descriptorWrites[j + bindingOffset].pImageInfo = &imageInfos[j];
-			}
-
-			vkUpdateDescriptorSets(Device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
-		}
-	}
-
 	/** Read a path to a texture and create image, image view, and sampler resources */
 	void CreateImageContext(
 		VkImage& outImage,
@@ -5299,7 +5573,7 @@ public:
 	template <typename T>
 	void CreateInstancedBuffer(T& outObject, const std::vector<FInstanceData>& inInstanceData)
 	{
-		outObject.InstanceCount = static_cast<uint32_t>(inInstanceData.size());
+		outObject.InstCount = static_cast<uint32_t>(inInstanceData.size());
 		VkDeviceSize bufferSize = inInstanceData.size() * sizeof(FInstanceData);
 		VkBuffer stagingBuffer;
 		VkDeviceMemory stagingBufferMemory;
@@ -5356,85 +5630,6 @@ public:
 		vkDestroyBuffer(Device, stagingBuffer, nullptr);
 		vkFreeMemory(Device, stagingBufferMemory, nullptr);
 	};
-
-	template <typename T>
-	void CreateRenderObjectsFromProfabs(std::vector<T>& outRenderObjects, const VkDescriptorSetLayout& inLayout, const std::string& inAssetName, const std::vector<FInstanceData>& inInstanceData = {})
-	{
-		std::string asset_set_dir = "Profabs";
-		for (const auto& folder : std::filesystem::directory_iterator(asset_set_dir))
-		{
-			std::string asset_name = folder.path().filename().generic_string();
-			std::string asset_set = folder.path().generic_string();
-			if (inAssetName != asset_name)
-			{
-				continue;
-			}
-			std::string models_dir = asset_set + std::string("/models/");
-			std::string textures_dir = asset_set + std::string("/textures/");
-			if (!std::filesystem::is_directory(models_dir) ||
-				!std::filesystem::is_directory(textures_dir))
-			{
-				continue;
-			}
-			for (const auto& Model : std::filesystem::directory_iterator(models_dir))
-			{
-				std::string model_file = Model.path().generic_string();
-				std::string model_file_name = model_file.substr(model_file.find_last_of("/\\") + 1);
-				std::string::size_type const p(model_file_name.find_last_of('.'));
-				std::string model_name = model_file_name.substr(0, p);
-				std::string model_suffix = model_file_name.substr(p + 1);
-				if (model_suffix != "obj") {
-					continue;
-				}
-				std::string texture_bc = textures_dir + model_name + std::string("_bc.png");
-				if (!std::filesystem::exists(texture_bc)) {
-					texture_bc = std::string("Content/Textures/default_grey.png");
-				}
-				std::string texture_m = textures_dir + model_name + std::string("_m.png");
-				if (!std::filesystem::exists(texture_m)) {
-					texture_m = std::string("Content/Textures/default_black.png");
-				}
-				std::string texture_r = textures_dir + model_name + std::string("_r.png");
-				if (!std::filesystem::exists(texture_r)) {
-					texture_r = std::string("Content/Textures/default_white.png");
-				}
-				std::string texture_n = textures_dir + model_name + std::string("_n.png");
-				if (!std::filesystem::exists(texture_n)) {
-					texture_n = std::string("Content/Textures/default_normal.png");
-				}
-				std::string texture_ao = textures_dir + model_name + std::string("_ao.png");
-				if (!std::filesystem::exists(texture_ao)) {
-					texture_ao = std::string("Content/Textures/default_white.png");
-				}
-				std::string texture_ev = textures_dir + model_name + std::string("_ev.png");
-				if (!std::filesystem::exists(texture_ev)) {
-					texture_ev = std::string("Content/Textures/default_black.png");
-				}
-				std::string texture_ms = textures_dir + model_name + std::string("_ms.png");
-				if (!std::filesystem::exists(texture_ms)) {
-					texture_ms = std::string("Content/Textures/default_white.png");
-				}
-
-				T asset;
-				std::string asset_obj = model_file;
-				std::vector<std::string> asset_imgs = {
-					texture_bc,
-					texture_m,
-					texture_r,
-					texture_n,
-					texture_ao,
-					texture_ev,
-					texture_ms };
-
-				CreateRenderObject<T>(asset, asset_obj, asset_imgs, inLayout);
-				if (inInstanceData.size() > 0)
-				{
-					CreateInstancedBuffer<T>(asset, inInstanceData);
-				}
-				outRenderObjects.push_back(asset);
-			}
-		}
-	}
 protected:
 	/** Choose the format of the image to render to the SwapChain */
 	VkSurfaceFormatKHR ChooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats)
@@ -6065,6 +6260,103 @@ protected:
 			throw std::runtime_error("failed to Create texture sampler!");
 		}
 	}
+
+	template <typename T>
+	void CreateRenderObjectsFromProfabs(std::vector<T>& outRenderObjects, const VkDescriptorSetLayout& inLayout, const std::string& inAssetName, const std::vector<FInstanceData>& inInstanceData = {})
+	{
+		std::string asset_set_dir = "Profabs";
+		for (const auto& folder : std::filesystem::directory_iterator(asset_set_dir))
+		{
+			std::string asset_name = folder.path().filename().generic_string();
+			std::string asset_set = folder.path().generic_string();
+			if (inAssetName != asset_name)
+			{
+				continue;
+			}
+			std::string models_dir = asset_set + std::string("/models/");
+			std::string textures_dir = asset_set + std::string("/textures/");
+			if (!std::filesystem::is_directory(models_dir) ||
+				!std::filesystem::is_directory(textures_dir))
+			{
+				continue;
+			}
+			for (const auto& Model : std::filesystem::directory_iterator(models_dir))
+			{
+				std::string model_file = Model.path().generic_string();
+				std::string model_file_name = model_file.substr(model_file.find_last_of("/\\") + 1);
+				std::string::size_type const p(model_file_name.find_last_of('.'));
+				std::string model_name = model_file_name.substr(0, p);
+				std::string model_suffix = model_file_name.substr(p + 1);
+				if (model_suffix != "obj") {
+					continue;
+				}
+				std::string texture_bc = textures_dir + model_name + std::string("_bc.png");
+				if (!std::filesystem::exists(texture_bc)) {
+					texture_bc = std::string("Content/Textures/default_grey.png");
+				}
+				std::string texture_m = textures_dir + model_name + std::string("_m.png");
+				if (!std::filesystem::exists(texture_m)) {
+					texture_m = std::string("Content/Textures/default_black.png");
+				}
+				std::string texture_r = textures_dir + model_name + std::string("_r.png");
+				if (!std::filesystem::exists(texture_r)) {
+					texture_r = std::string("Content/Textures/default_white.png");
+				}
+				std::string texture_n = textures_dir + model_name + std::string("_n.png");
+				if (!std::filesystem::exists(texture_n)) {
+					texture_n = std::string("Content/Textures/default_normal.png");
+				}
+				std::string texture_ao = textures_dir + model_name + std::string("_ao.png");
+				if (!std::filesystem::exists(texture_ao)) {
+					texture_ao = std::string("Content/Textures/default_white.png");
+				}
+				std::string texture_ev = textures_dir + model_name + std::string("_ev.png");
+				if (!std::filesystem::exists(texture_ev)) {
+					texture_ev = std::string("Content/Textures/default_black.png");
+				}
+				std::string texture_ms = textures_dir + model_name + std::string("_ms.png");
+				if (!std::filesystem::exists(texture_ms)) {
+					texture_ms = std::string("Content/Textures/default_white.png");
+				}
+
+				T asset;
+				std::string asset_obj = model_file;
+				std::vector<std::string> asset_imgs = {
+					texture_bc,
+					texture_m,
+					texture_r,
+					texture_n,
+					texture_ao,
+					texture_ev,
+					texture_ms };
+
+				CreateRenderObject<T>(asset, asset_obj, asset_imgs, inLayout);
+				if (inInstanceData.size() > 0)
+				{
+					CreateInstancedBuffer<T>(asset, inInstanceData);
+				}
+				outRenderObjects.push_back(asset);
+			}
+		}
+	}
+
+	static void GenerateInstance(std::vector<FInstanceData>& OutData, const FObject& Object)
+	{
+		OutData.resize(Object.InstCount);
+		for (uint32_t i = 0; i < Object.InstCount; i++) {
+			float radians = RandRange(0.0f, 360.0f, std::rand());
+			float distance = RandRange(Object.InstMinRadius, Object.InstMaxRadius, std::rand());
+			float X = sin(glm::radians(radians)) * distance;
+			float Y = cos(glm::radians(radians)) * distance;
+			float Z = 0.0;
+			OutData[i].InstancePosition = glm::vec3(X, Y, Z);
+			// Y(Pitch), Z(Yaw), X(Roll)
+			float Yaw = float(M_PI) * RandRange(0.0f, 180.0f, std::rand());
+			OutData[i].InstanceRotation = glm::vec3(0.0, Yaw, 0.0);
+			OutData[i].InstancePScale = RandRange(Object.InstMinScale, Object.InstMaxScale, std::rand());
+			OutData[i].InstanceTexIndex = RandRange(0, 255, std::rand());
+		}
+	}
 private:
 	/** Load the compiled shader binary SPV file into a memory buffer */
 	static std::vector<char> LoadShaderSource(const std::string& filename)
@@ -6282,6 +6574,10 @@ private:
 	// Find file in Profabs folder.
 	std::string ProfabsAsset(const std::string& inFilename)
 	{
+		if (std::filesystem::exists(inFilename))
+		{
+			return inFilename;
+		}
 		std::string file_name_with_suffix = inFilename.substr(inFilename.find_last_of("/\\") + 1);
 		std::string::size_type const p(file_name_with_suffix.find_last_of('.'));
 		std::string file_name = file_name_with_suffix.substr(0, p);
@@ -6321,13 +6617,6 @@ private:
 		}
 		return inFilename;
 	}
-
-	/* Random number engine */
-	int RandRange(int min, int max)
-	{
-		//std::srand(seed);
-		return min + (std::rand() % (max - min + 1));
-	};
 
 	/** Select the content to print for Debug information */
 	void PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo)
@@ -6379,6 +6668,20 @@ private:
 		OutputDebugString(output.c_str());
 #endif
 		return VK_FALSE;
+	}
+private:
+	/* Random number engine */
+	static int RandRange(int min, int max, uint32_t seed)
+	{
+		std::mt19937 gen(seed); // Initialize Mersenne Twister algorithm generator with seed value
+		std::uniform_int_distribution<int> dis(min, max); // Define a uniform distribution from min to max
+		return dis(gen); // Generate random number
+	}
+	static float RandRange(float min, float max, uint32_t seed)
+	{
+		std::mt19937 gen(seed); // Initialize Mersenne Twister algorithm generator with seed value
+		std::uniform_real_distribution<float> dis(min, max); // Define a uniform distribution from min to max
+		return dis(gen); // Generate random number
 	}
 };
 

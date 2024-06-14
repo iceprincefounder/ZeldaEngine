@@ -19,3 +19,6 @@
 [submodule "Third_Party/glslang"]
 	path = Third_Party/glslang
 	url = https://github.com/KhronosGroup/glslang.git
+[submodule "Third_Party/rapidjson"]
+	path = Third_Party/rapidjson
+	url = https://github.com/Tencent/rapidjson.git
