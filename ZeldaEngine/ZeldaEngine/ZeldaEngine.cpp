@@ -72,6 +72,7 @@
 // @TODO: Implement Bindless Feature
 // @see https://dev.to/gasim/implementing-bindless-design-in-vulkan-34no
 #define ENABLE_BINDLESS false
+#define ENABLE_IMGUI_EDITOR true
 
 #define ASSETS(x) ProfabsAsset(x)
 
@@ -1407,9 +1408,9 @@ public:
 		CreateBackgroundPass(); // Create background rect render pass
 		CreateCommandBuffer(); // Create command buffer from command before submit
 		CreateSyncObjects(); // Create sync fence to ensure next frame render after the last frame finished
-
+#if ENABLE_IMGUI_EDITOR
 		CreateImGuiForVulkan(); // Create ImGui for Vulkan
-
+#endif
 		CreateEngineWorld(); // Create main world
 		CreateEngineScene(); // Create main rendering scene
 	}
@@ -1418,10 +1419,12 @@ public:
 	void MainTick()
 	{
 		while (!glfwWindowShouldClose(Window))
-		{
-			glfwPollEvents();
-			DrawFrame(); // Draw a frame
-		}
+        {
+            DrawFrame(); // Draw a frame
+            
+            glfwSwapBuffers(Window);
+            glfwPollEvents();
+        }
 
 		vkDeviceWaitIdle(Device);
 	}
@@ -1440,11 +1443,12 @@ public:
 
 	static void KeyboardCallback(GLFWwindow* window, int key, int scancode, int action, int mods)
 	{
+#if ENABLE_IMGUI_EDITOR
 		if (ImGui::GetIO().WantCaptureKeyboard || ImGui::GetIO().WantCaptureMouse)
 		{
 			return;
 		}
-
+#endif
 		FZeldaEngineApp* app = reinterpret_cast<FZeldaEngineApp*>(glfwGetWindowUserPointer(window));
 		FGlobalInput* input = &app->GlobalInput;
 		FGlobalConstants* constants = &app->GlobalConstants;
@@ -1513,11 +1517,13 @@ public:
 
 	static void MouseButtonCallback(GLFWwindow* window, int button, int action, int mods)
 	{
-		if (ImGui::GetIO().WantCaptureKeyboard || ImGui::GetIO().WantCaptureMouse)
+#if ENABLE_IMGUI_EDITOR
+
+        if (ImGui::GetIO().WantCaptureKeyboard || ImGui::GetIO().WantCaptureMouse)
 		{
 			return;
 		}
-
+#endif
 		FZeldaEngineApp* app = reinterpret_cast<FZeldaEngineApp*>(glfwGetWindowUserPointer(window));
 		FGlobalInput* input = &app->GlobalInput;
 
@@ -1537,11 +1543,12 @@ public:
 
 	static void MousePositionCallback(GLFWwindow* window, double xpos, double ypos)
 	{
+#if ENABLE_IMGUI_EDITOR
 		if (ImGui::GetIO().WantCaptureKeyboard || ImGui::GetIO().WantCaptureMouse)
 		{
 			return;
 		}
-
+#endif
 		FZeldaEngineApp* app = reinterpret_cast<FZeldaEngineApp*>(glfwGetWindowUserPointer(window));
 		FGlobalInput* input = &app->GlobalInput;
 
@@ -1634,14 +1641,27 @@ public:
 			Scene.bReload = false;
 		}
 
-		// Wait for the previous frame to finish rendering
+        if(bFramebufferResized)
+        {
+            for (size_t i = 0; i < InFlightFences.size(); i++)
+            {
+                vkWaitForFences(Device, 1, &InFlightFences[i], VK_TRUE, UINT64_MAX);
+            }
+
+            bFramebufferResized = false;
+
+            // @TODO: recreate swap chain on macOS
+            //RecreateSwapChain();
+            return;
+        }
+        // Wait for the previous frame to finish rendering
 		vkWaitForFences(Device, 1, &InFlightFences[CurrentFrame], VK_TRUE, UINT64_MAX);
 
 		uint32_t imageIndex;
 		VkResult result = vkAcquireNextImageKHR(Device, SwapChain, UINT64_MAX, ImageAvailableSemaphores[CurrentFrame], VK_NULL_HANDLE, &imageIndex);
 
 		// If the window is out of date (window size changed or window minimized and then restored), recreate the SwapChain and stop rendering for this frame
-		if (result == VK_ERROR_OUT_OF_DATE_KHR || bFramebufferResized) {
+		if (result == VK_ERROR_OUT_OF_DATE_KHR) {
 			RecreateSwapChain();
 			return;
 		}
@@ -1651,9 +1671,11 @@ public:
 
 		// update os inputs
 		UpdateInputs();
-		// update imgui	widgets
+#if ENABLE_IMGUI_EDITOR
+        // update imgui	widgets
 		UpdateImGuiWidgets();
-		// update uniform buffer（UBO）
+#endif
+        // update uniform buffer（UBO）
 		UpdateUniformBuffer(CurrentFrame);
 
 		vkResetFences(Device, 1, &InFlightFences[CurrentFrame]);
@@ -1987,8 +2009,6 @@ protected:
 #if ENABLE_DEFEERED_SHADING
 		CreateBaseDeferredPass();
 #endif
-
-		bFramebufferResized = false;
 	}
 
 	/** Image View
@@ -2695,6 +2715,7 @@ protected:
 		}
 	}
 
+#if ENABLE_IMGUI_EDITOR
 	/** Create ImGui Vulkan args*/
 	void CreateImGuiForVulkan()
 	{
@@ -2805,7 +2826,8 @@ protected:
 			};
 		ImGui_ImplVulkan_Init(&init_info);
 	}
-
+#endif
+    
 	/** Write the commands to be executed into the command buffer, corresponding to each image of the SwapChain */
 	void RecordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex)
 	{
@@ -3358,6 +3380,7 @@ protected:
 			vkCmdEndRenderPass(commandBuffer);
 		}
 
+#if ENABLE_IMGUI_EDITOR
 		// 【主界面】渲染主界面
 		{
 			VkRenderPassBeginInfo renderPassInfo{};
@@ -3389,8 +3412,9 @@ protected:
 			// 【主界面】结束RenderPass
 			vkCmdEndRenderPass(commandBuffer);
 		}
+#endif
 
-		// 结束记录指令
+        // 结束记录指令
 		if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
 		{
 			throw std::runtime_error("failed to record command buffer!");
@@ -3411,10 +3435,12 @@ protected:
 
 		vkDestroyRenderPass(Device, MainRenderPass, nullptr);
 
-		// clear up imgui pass
+#if ENABLE_IMGUI_EDITOR
+        // clear up imgui pass
 		CleanupImgui();
+#endif
 
-		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
 		{
 			vkDestroyBuffer(Device, BaseUniformBuffers[i], nullptr);
 			vkFreeMemory(Device, BaseUniformBuffersMemory[i], nullptr);
@@ -3668,6 +3694,7 @@ protected:
 		vkFreeMemory(Device, GBuffer.GBufferDMemory, nullptr);
 	}
 
+#if ENABLE_IMGUI_EDITOR
 	void CleanupImgui()
 	{
 		ImGui_ImplVulkan_Shutdown();
@@ -3677,7 +3704,8 @@ protected:
 		vkDestroyDescriptorPool(Device, ImGuiPass.DescriptorPool, nullptr);
 		vkDestroyRenderPass(Device, ImGuiPass.RenderPass, nullptr);
 	}
-
+#endif
+    
 public:
 	void CreateEngineWorld()
 	{
@@ -3938,6 +3966,7 @@ public:
 		// @TODO: WASD control camera
 	}
 
+#if ENABLE_IMGUI_EDITOR
 	/** Update ImGui widgets*/
 	void UpdateImGuiWidgets()
 	{
@@ -3950,12 +3979,16 @@ public:
 			// get window size
 			int windowWidth, windowHeight;
 			glfwGetWindowSize(Window, &windowWidth, &windowHeight);
+            int frameBufferWidth, frameBufferHeight;
+            glfwGetFramebufferSize(Window, &frameBufferWidth, &frameBufferHeight);
 
 			const float rightBarWidth = windowWidth * 0.2f;
 			const float bottomBarWidth = windowHeight * 0.2f;
 
-			ImGuiPass.RightBarSpace = rightBarWidth;
-			ImGuiPass.BottomBarSpace = bottomBarWidth;
+            // windows size is point but framebuffer size is pixel
+            // Retina got mutiple pixel size in save window area
+			ImGuiPass.RightBarSpace = frameBufferWidth * 0.2f;
+			ImGuiPass.BottomBarSpace = frameBufferHeight * 0.2f;
 
 			ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
 			ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.05f, 0.05f, 0.05f, 1.0f));
@@ -4160,6 +4193,7 @@ public:
 		}
 		ImGui::Render();
 	}
+#endif
 
 	/** Update Uniform Buffer Object (UBO) */
 	void UpdateUniformBuffer(const uint32_t currentImageIdx)
