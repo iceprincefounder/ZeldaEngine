@@ -73,7 +73,7 @@
 // @see https://dev.to/gasim/implementing-bindless-design-in-vulkan-34no
 #define ENABLE_BINDLESS false
 #define ENABLE_IMGUI_EDITOR true
-#define ENABLE_GENERATE_WORLD true
+#define ENABLE_GENERATE_WORLD false
 
 #define ASSETS(x) ProfabsAsset(x)
 
