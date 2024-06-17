@@ -1420,11 +1420,11 @@ public:
 	{
 		while (!glfwWindowShouldClose(Window))
         {
-            DrawFrame(); // Draw a frame
-            
-            glfwSwapBuffers(Window);
-            glfwPollEvents();
-        }
+			glfwSwapBuffers(Window);
+			glfwPollEvents();
+
+			DrawFrame(); // Draw a frame
+		}
 
 		vkDeviceWaitIdle(Device);
 	}
@@ -3373,7 +3373,7 @@ protected:
 				// 【主场景】渲染背景面片
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BackgroundPass.Pipelines[0]);
 				vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BackgroundPass.PipelineLayout, 0, 1, &BackgroundPass.DescriptorSets[CurrentFrame], 0, nullptr);
-				//vkCmdDraw(commandBuffer, 6, 1, 0, 0);
+				vkCmdDraw(commandBuffer, 6, 1, 0, 0);
 			}
 
 			// 【主场景】结束RenderPass
@@ -3735,7 +3735,7 @@ public:
 		FObject rock_01;
 		rock_01.ProfabName = "rock_01";
 		rock_01.InstCount = 1;
-		World.Objects.push_back(rock_01);
+		//World.Objects.push_back(rock_01);
 
 		FObject rock_02;
 		rock_02.ProfabName = "rock_02";
@@ -3744,7 +3744,7 @@ public:
 		rock_02.InstMaxRadius = 5.0f;
 		rock_02.InstMinScale = 0.2f;
 		rock_02.InstMaxScale = 0.5f;
-		World.Objects.push_back(rock_02);
+		//World.Objects.push_back(rock_02);
 
 		FObject grass_01;
 		grass_01.ProfabName = "grass_01";
@@ -3753,7 +3753,7 @@ public:
 		grass_01.InstMaxRadius = 8.0f;
 		grass_01.InstMinScale = 0.1f;
 		grass_01.InstMaxScale = 0.5f;
-		World.Objects.push_back(grass_01);
+		//World.Objects.push_back(grass_01);
 
 		FObject grass_02;
 		grass_02.ProfabName = "grass_02";
@@ -3762,7 +3762,7 @@ public:
 		grass_02.InstMaxRadius = 9.0f;
 		grass_02.InstMinScale = 0.1f;
 		grass_02.InstMaxScale = 0.5f;
-		World.Objects.push_back(grass_02);
+		//World.Objects.push_back(grass_02);
 
 		uint32_t DirectionalLightNum = 1;
 		FLight Moonlight;
@@ -3912,15 +3912,16 @@ public:
 #else
 				CreateRenderObjectsFromProfabs(
 					Scene.RenderInstancedObjects,
-					*Scene.SceneDescriptorSetLayout, Object.ProfabName, Data);
+					*Scene.DescriptorSetLayout, Object.ProfabName, Data);
 		}
 			else
 			{
-				CreateRenderObjectsFromProfabs(Scene.RenderDeferredObjects,
-					*Scene.SceneDescriptorSetLayout, Object.ProfabName);
+				CreateRenderObjectsFromProfabs(Scene.RenderObjects,
+					*Scene.DescriptorSetLayout, Object.ProfabName);
 			}
 #endif
 		}
+		CreateRenderObjectsFromProfabs(Scene.RenderObjects, *Scene.DescriptorSetLayout, "rock_01");
 
 		/* 
 		* (3) Create light here
@@ -4293,39 +4294,24 @@ public:
 			FRenderObject* RenderObject = &Scene.RenderObjects[i];
 			BasePass.RenderObjects.push_back(RenderObject);
 			ShadowmapPass.RenderObjects.push_back(RenderObject);
-#if ENABLE_BINDLESS
-			UpdateDescriptorSet(RenderObject->MateData.DescriptorSets, RenderObject->MateData.TextureImageViews, RenderObject->MateData.TextureImageSamplers);
-#endif
 		}
 		for (size_t i = 0; i < Scene.RenderInstancedObjects.size(); i++)
 		{
 			FRenderInstancedObject* RenderInstancedObject = &Scene.RenderInstancedObjects[i];
 			BasePass.RenderInstancedObjects.push_back(RenderInstancedObject);
-				ShadowmapPass.RenderInstancedObjects.push_back(RenderInstancedObject);
-#if ENABLE_BINDLESS
-			UpdateDescriptorSet(RenderInstancedObject->MateData.DescriptorSets,
-				RenderInstancedObject->MateData.TextureImageViews, RenderInstancedObject->MateData.TextureImageSamplers);
-#endif
+			ShadowmapPass.RenderInstancedObjects.push_back(RenderInstancedObject);
 		}
 		for (size_t i = 0; i < Scene.RenderIndirectObjects.size(); i++)
 		{
 			FRenderObjectIndirect* RenderIndirectObject = &Scene.RenderIndirectObjects[i];
 			BaseIndirectPass.RenderIndirectObjects.push_back(RenderIndirectObject);
 			ShadowmapPass.RenderIndirectObjects.push_back(RenderIndirectObject);
-#if ENABLE_BINDLESS
-			UpdateDescriptorSet(RenderIndirectObject->MateData.DescriptorSets,
-				RenderIndirectObject->MateData.TextureImageViews, RenderIndirectObject->MateData.TextureImageSamplers);
-#endif
 		}
 		for (size_t i = 0; i < Scene.RenderIndirectInstancedObjects.size(); i++)
 		{
 			FRenderInstancedObjectIndirect* RenderIndirectInstancedObject = &Scene.RenderIndirectInstancedObjects[i];
 			BaseIndirectPass.RenderIndirectInstancedObjects.push_back(RenderIndirectInstancedObject);
 			ShadowmapPass.RenderIndirectInstancedObjects.push_back(RenderIndirectInstancedObject);
-#if ENABLE_BINDLESS
-			UpdateDescriptorSet(RenderIndirectInstancedObject->MateData.DescriptorSets,
-				RenderIndirectInstancedObject->MateData.TextureImageViews, RenderIndirectInstancedObject->MateData.TextureImageSamplers);
-#endif
 		}
 #if ENABLE_DEFEERED_SHADING
 		for (size_t i = 0; i < Scene.RenderDeferredObjects.size(); i++)
@@ -4333,20 +4319,12 @@ public:
 			FRenderDeferredObject* RenderDeferredObject = &Scene.RenderDeferredObjects[i];
 			BaseDeferredPass.RenderDeferredObjects.push_back(RenderDeferredObject);
 			ShadowmapPass.RenderObjects.push_back(RenderDeferredObject);
-#if ENABLE_BINDLESS
-			UpdateDescriptorSet(RenderDeferredObject->MateData.DescriptorSets,
-				RenderDeferredObject->MateData.TextureImageViews, RenderDeferredObject->MateData.TextureImageSamplers);
-#endif
 		}
 		for (size_t i = 0; i < Scene.RenderDeferredInstancedObjects.size(); i++)
 		{
 			FRenderDeferredInstancedObject* RenderDeferredInstancedObject = &Scene.RenderDeferredInstancedObjects[i];
 			BaseDeferredPass.RenderDeferredInstancedObjects.push_back(RenderDeferredInstancedObject);
 			ShadowmapPass.RenderInstancedObjects.push_back(RenderDeferredInstancedObject);
-#if ENABLE_BINDLESS
-			UpdateDescriptorSet(RenderDeferredInstancedObject->MateData.DescriptorSets,
-				RenderDeferredInstancedObject->MateData.TextureImageViews, RenderDeferredInstancedObject->MateData.TextureImageSamplers);
-#endif
 		}
 #endif
 	}
