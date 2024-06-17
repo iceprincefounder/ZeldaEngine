@@ -1,3 +1,5 @@
+// Copyright ©XUKAI. All Rights Reserved.
+
 #include <iostream>
 #include <vector>
 #include <string>
