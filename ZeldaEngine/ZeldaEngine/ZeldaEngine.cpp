@@ -73,7 +73,7 @@
 // @see https://dev.to/gasim/implementing-bindless-design-in-vulkan-34no
 #define ENABLE_BINDLESS false
 #define ENABLE_IMGUI_EDITOR true
-#define ENABLE_GENERATE_WORLD false
+#define ENABLE_GENERATE_WORLD true
 
 #define ASSETS(x) ProfabsAsset(x)
 
@@ -326,7 +326,6 @@ public:
 glslang::EShTargetLanguage FShaderCompiler::EnvTargetLanguage = glslang::EShTargetLanguage::EShTargetNone;
 glslang::EShTargetLanguageVersion FShaderCompiler::EnvTargetLanguageVersion = static_cast<glslang::EShTargetLanguageVersion>(0);
 
-
 enum class ERenderFlags : uint16_t
 {
 	VertexIndexed = 1 << 0, // binary 0001
@@ -489,7 +488,6 @@ struct FVertex {
 	}
 };
 
-
 namespace std {
 	template<> struct hash<FVertex> {
 		size_t operator()(FVertex const& vertex) const {
@@ -498,8 +496,76 @@ namespace std {
 	};
 }
 
+/** Object data struct, to procedural generate object instance*/
+struct FObjectDesc
+{
+	FObjectDesc() : ObjectID(GenerateObjectID()) {}
 
-struct FMesh {
+	uint32_t ObjectID;
+
+	std::string ProfabName = "";
+
+	//~ Begin procedural instance generation arguments
+	uint32_t InstanceCount = 0;
+	float MinRadius = 0.0f;
+	float MaxRadius = 0.0f;
+	float MinPScale = 0.0f;
+	float MaxPScale = 0.0f;
+	float MinRotYaw = 0.0f;
+	float MaxRotYaw = 0.0f;
+	float MinRotRoll = 0.0f;
+	float MaxRotRoll = 0.0f;
+	float MinRotPitch = 0.0f;
+	float MaxRotPitch = 0.0f;
+	//~ End procedural instance generation arguments
+
+	static uint32_t GenerateObjectID()
+	{
+		static uint32_t currentID = 0;
+		return currentID++;
+	}
+
+	static void GenerateInstance(std::vector<FInstanceData>& OutData, const FObjectDesc& Object)
+	{
+		OutData.resize(Object.InstanceCount);
+		for (uint32_t i = 0; i < Object.InstanceCount; i++) {
+			float radians = RandRange(0.0f, 360.0f, std::rand());
+			float distance = RandRange(Object.MinRadius, Object.MaxRadius, std::rand());
+			float X = sin(glm::radians(radians)) * distance;
+			float Y = cos(glm::radians(radians)) * distance;
+			float Z = 0.0;
+			OutData[i].InstancePosition = glm::vec3(X, Y, Z);
+			// Y(Pitch), Z(Yaw), X(Roll)
+			float Yaw = float(M_PI) * RandRange(0.0f, 180.0f, std::rand());
+			OutData[i].InstanceRotation = glm::vec3(0.0, Yaw, 0.0);
+			OutData[i].InstancePScale = RandRange(Object.MinPScale, Object.MaxPScale, std::rand());
+			OutData[i].InstanceTexIndex = RandRange(0, 255, std::rand());
+		}
+	}
+
+	/* Random number engine */
+	static int RandRange(int min, int max, uint32_t seed)
+	{
+		std::mt19937 gen(seed); // Initialize Mersenne Twister algorithm generator with seed value
+		std::uniform_int_distribution<int> dis(min, max); // Define a uniform distribution from min to max
+		return dis(gen); // Generate random number
+	}
+	static float RandRange(float min, float max, uint32_t seed)
+	{
+		std::mt19937 gen(seed); // Initialize Mersenne Twister algorithm generator with seed value
+		std::uniform_real_distribution<float> dis(min, max); // Define a uniform distribution from min to max
+		return dis(gen); // Generate random number
+	}
+};
+
+/** Light data struct, to procedural generate light instance*/
+struct FLightDesc : public FObjectDesc
+{
+	// @TODO: Implement light instance generation
+};
+
+struct FMesh 
+{
 	std::vector<FVertex> Vertices;                       // Vertex
 	std::vector<uint32_t> Indices;                       // Index
 	VkBuffer VertexBuffer;                               // Vertex buffer
@@ -515,7 +581,8 @@ struct FMesh {
 typedef FMesh FInstancedMesh;
 
 /** Meshlet data block*/
-struct FMeshlet {
+struct FMeshlet 
+{
 	uint32_t VertexOffset;
 	uint32_t VertexCount;
 	uint32_t TriangleOffset;
@@ -528,7 +595,8 @@ struct FMeshlet {
 };
 
 /** Meshlet group set data block, all meshlets make up a model mesh data.*/
-struct FMeshletSet {
+struct FMeshletSet 
+{
 	std::vector<FMeshlet> Meshlets;
 	std::vector<uint32_t> MeshletVertices;
 	std::vector<uint8_t> MeshletTriangles;
@@ -541,7 +609,8 @@ struct FMeshIndirect : public FMesh
 
 typedef FMeshIndirect FInstancedMeshIndirect;
 
-struct FMaterial {
+struct FMaterial 
+{
 	std::vector<VkImage> TextureImages;
 	std::vector<VkDeviceMemory> TextureImageMemorys;
 	std::vector<VkImageView> TextureImageViews;
@@ -556,8 +625,8 @@ struct FMaterial {
 
 struct FRenderBase
 {
-	FMaterial MateData;
-	uint32_t InstCount;
+	FMaterial Material;
+	uint32_t InstanceCount;
 	
 	// @TODO: use model's own transform
 	/* uniform buffers contain model transform */
@@ -569,12 +638,12 @@ struct FRenderBase
 /** RenderObject for a single draw call.*/
 struct FRenderObject : public FRenderBase
 {
-	FMesh MeshData;
+	FMesh Mesh;
 };
 
 struct FRenderInstancedObject : public FRenderBase
 {
-	FInstancedMesh MeshData;
+	FInstancedMesh Mesh;
 };
 
 struct FRenderObjectIndirectBase : public FRenderBase
@@ -586,17 +655,16 @@ struct FRenderObjectIndirectBase : public FRenderBase
 
 struct FRenderObjectIndirect : public FRenderObjectIndirectBase
 {
-	FMeshIndirect MeshData;
+	FMeshIndirect Mesh;
 };
 
 struct FRenderInstancedObjectIndirect : public FRenderObjectIndirectBase
 {
-	FInstancedMeshIndirect MeshData;
+	FInstancedMeshIndirect Mesh;
 };
 
 typedef FRenderObject FRenderDeferredObject;
 typedef FRenderInstancedObject FRenderDeferredInstancedObject;
-
 
 /** Common light data struct.*/
 struct FLight
@@ -616,6 +684,10 @@ struct FLight
 	}
 };
 
+struct FLightObject : public FLight, FObjectDesc
+{
+
+};
 
 /** Camera data struct.*/
 struct FCamera
@@ -774,7 +846,7 @@ class FZeldaEngineApp
 	} GlobalConstants;
 
 	/** Scene viewport data struct.*/
-	struct FUniformBufferView {
+	struct FView {
 		glm::mat4 ViewProjSpace;
 		glm::mat4 ShadowmapSpace;
 		glm::mat4 LocalToWorld;
@@ -783,13 +855,17 @@ class FZeldaEngineApp
 		FLight DirectionalLights[MAX_DIRECTIONAL_LIGHTS_NUM];
 		FLight PointLights[MAX_POINT_LIGHTS_NUM];
 		FLight SpotLights[MAX_SPOT_LIGHTS_NUM];
-		// LightsCount: [0] for number of DirectionalLights, [1] for number of PointLights, [2] for number of SpotLights, [3] for number of cube map max miplevels.
+		// LightsCount: 
+		// [0] for number of DirectionalLights
+		// [1] for number of PointLights
+		// [2] for number of SpotLights
+		// [3] for number of cube map max miplevels
 		glm::ivec4 LightsCount;
 		glm::float32 Time;
 		glm::float32 zNear;
 		glm::float32 zFar;
 
-		FUniformBufferView& operator=(const FUniformBufferView& rhs)
+		FView& operator=(const FView& rhs)
 		{
 			ViewProjSpace = rhs.ViewProjSpace;
 			ShadowmapSpace = rhs.ShadowmapSpace;
@@ -846,22 +922,6 @@ class FZeldaEngineApp
 		}
 	} Scene;
 
-	struct FObject
-	{
-		std::string ProfabName = "";
-		uint32_t InstCount = 0; 
-		float InstMinRadius = 0.0f;
-		float InstMaxRadius = 0.0f;
-		float InstMinScale = 0.0f;
-		float InstMaxScale = 0.0f;
-		float InstMinYaw = 0.0f;
-		float InstMaxYaw = 0.0f;
-		float InstMinRoll = 0.0f;
-		float InstMaxRoll = 0.0f;
-		float InstMinPitch = 0.0f;
-		float InstMaxPitch = 0.0f;
-	};
-
 	struct FWorld
 	{
 		std::string FilePath = "Content/World.json";
@@ -880,9 +940,9 @@ class FZeldaEngineApp
 		std::vector<FLight> DirectionalLights;
 		std::vector<FLight> PointLights;
 		std::vector<FLight> SpotLights;
-		std::vector<FLight> MeshLights;
+		std::vector<FLight> QuadLights;
 
-		std::vector<FObject> Objects;
+		std::vector<FObjectDesc> ObjectDescs;
 
 		void Load()
 		{
@@ -937,23 +997,22 @@ class FZeldaEngineApp
 			PushLightsFromJson(SpotLights, SpotLightsArray);
 
 			const auto& ObjectsArray = JsonDocument["Objects"];
-			//const auto& ObjectsArray = JsonDocument["Objects"].GetArray();
 			for (uint32_t i = 0; i < ObjectsArray.Size(); i++) {
 				const auto& JsonObject = ObjectsArray[i];
-				FObject LocalObject;
+				FObjectDesc LocalObject;
 				LocalObject.ProfabName = JsonObject["ProfabName"].GetString();
-				LocalObject.InstCount = JsonObject["InstCount"].GetUint();
-				LocalObject.InstMinRadius = JsonObject["InstMinRadius"].GetFloat();
-				LocalObject.InstMaxRadius = JsonObject["InstMaxRadius"].GetFloat();
-				LocalObject.InstMinScale = JsonObject["InstMinScale"].GetFloat();
-				LocalObject.InstMaxScale = JsonObject["InstMaxScale"].GetFloat();
-				LocalObject.InstMinYaw = JsonObject["InstMinYaw"].GetFloat();
-				LocalObject.InstMaxYaw = JsonObject["InstMaxYaw"].GetFloat();
-				LocalObject.InstMinRoll = JsonObject["InstMinRoll"].GetFloat();
-				LocalObject.InstMaxRoll = JsonObject["InstMaxRoll"].GetFloat();
-				LocalObject.InstMinPitch = JsonObject["InstMinPitch"].GetFloat();
-				LocalObject.InstMaxPitch = JsonObject["InstMaxPitch"].GetFloat();
-				Objects.push_back(LocalObject);
+				LocalObject.InstanceCount = JsonObject["InstanceCount"].GetUint();
+				LocalObject.MinRadius = JsonObject["MinRadius"].GetFloat();
+				LocalObject.MaxRadius = JsonObject["MaxRadius"].GetFloat();
+				LocalObject.MinRotYaw = JsonObject["MinRotYaw"].GetFloat();
+				LocalObject.MaxRotYaw = JsonObject["MaxRotYaw"].GetFloat();
+				LocalObject.MinRotRoll = JsonObject["MinRotRoll"].GetFloat();
+				LocalObject.MaxRotRoll = JsonObject["MaxRotRoll"].GetFloat();
+				LocalObject.MinRotPitch = JsonObject["MinRotPitch"].GetFloat();
+				LocalObject.MaxRotPitch = JsonObject["MaxRotPitch"].GetFloat();
+				LocalObject.MinPScale = JsonObject["MinPScale"].GetFloat();
+				LocalObject.MaxPScale = JsonObject["MaxPScale"].GetFloat();
+				ObjectDescs.push_back(LocalObject);
 			}
 		}
 
@@ -1018,25 +1077,25 @@ class FZeldaEngineApp
 			JsonDocument.AddMember("SpotLights", SpotLightsArray, JsonAllocator);
 
 			rapidjson::Value ObjectsArray(rapidjson::kArrayType);
-			for (const auto& obj : Objects) {
+			for (const auto& objDesc : ObjectDescs) {
 				rapidjson::Value JsonObject(rapidjson::kObjectType);
-				JsonObject.AddMember("ProfabName", rapidjson::Value(obj.ProfabName.c_str(), JsonAllocator), JsonAllocator);
-				JsonObject.AddMember("InstCount", rapidjson::Value(obj.InstCount), JsonAllocator);
-				JsonObject.AddMember("InstMinRadius", rapidjson::Value(obj.InstMinRadius), JsonAllocator);
-				JsonObject.AddMember("InstMaxRadius", rapidjson::Value(obj.InstMaxRadius), JsonAllocator);
-				JsonObject.AddMember("InstMinScale", rapidjson::Value(obj.InstMinScale), JsonAllocator);
-				JsonObject.AddMember("InstMaxScale", rapidjson::Value(obj.InstMaxScale), JsonAllocator);
-				JsonObject.AddMember("InstMinYaw", rapidjson::Value(obj.InstMinYaw), JsonAllocator);
-				JsonObject.AddMember("InstMaxYaw", rapidjson::Value(obj.InstMaxYaw), JsonAllocator);
-				JsonObject.AddMember("InstMinRoll", rapidjson::Value(obj.InstMinRoll), JsonAllocator);
-				JsonObject.AddMember("InstMaxRoll", rapidjson::Value(obj.InstMaxRoll), JsonAllocator);
-				JsonObject.AddMember("InstMinPitch", rapidjson::Value(obj.InstMinPitch), JsonAllocator);
-				JsonObject.AddMember("InstMaxPitch", rapidjson::Value(obj.InstMaxPitch), JsonAllocator);
+				JsonObject.AddMember("ProfabName", rapidjson::Value(objDesc.ProfabName.c_str(), JsonAllocator), JsonAllocator);
+				JsonObject.AddMember("InstanceCount", rapidjson::Value(objDesc.InstanceCount), JsonAllocator);
+				JsonObject.AddMember("MinRadius", rapidjson::Value(objDesc.MinRadius), JsonAllocator);
+				JsonObject.AddMember("MaxRadius", rapidjson::Value(objDesc.MaxRadius), JsonAllocator);
+				JsonObject.AddMember("MinRotYaw", rapidjson::Value(objDesc.MinRotYaw), JsonAllocator);
+				JsonObject.AddMember("MaxRotYaw", rapidjson::Value(objDesc.MaxRotYaw), JsonAllocator);
+				JsonObject.AddMember("MinRotRoll", rapidjson::Value(objDesc.MinRotRoll), JsonAllocator);
+				JsonObject.AddMember("MaxRotRoll", rapidjson::Value(objDesc.MaxRotRoll), JsonAllocator);
+				JsonObject.AddMember("MinRotPitch", rapidjson::Value(objDesc.MinRotPitch), JsonAllocator);
+				JsonObject.AddMember("MaxRotPitch", rapidjson::Value(objDesc.MaxRotPitch), JsonAllocator);
+				JsonObject.AddMember("MinPScale", rapidjson::Value(objDesc.MinPScale), JsonAllocator);
+				JsonObject.AddMember("MaxPScale", rapidjson::Value(objDesc.MaxPScale), JsonAllocator);
 				ObjectsArray.PushBack(JsonObject, JsonAllocator);
 			}
 			JsonDocument.AddMember("Objects", ObjectsArray, JsonAllocator);
 			
-			std::vector<FObject> Objects;
+			std::vector<FObjectDesc> Objects;
 			rapidjson::StringBuffer buffer;
 			rapidjson::PrettyWriter<rapidjson::StringBuffer> writer(buffer);
 			JsonDocument.Accept(writer);
@@ -1075,7 +1134,7 @@ class FZeldaEngineApp
 			SpotLights.clear();
 			//QuadLights.clear();
 
-			Objects.clear();
+			ObjectDescs.clear();
 		}
 	} World;
 
@@ -1414,7 +1473,7 @@ public:
 	void MainTick()
 	{
 		while (!glfwWindowShouldClose(Window))
-        {
+		{
 			glfwSwapBuffers(Window);
 			glfwPollEvents();
 
@@ -1514,7 +1573,7 @@ public:
 	{
 #if ENABLE_IMGUI_EDITOR
 
-        if (ImGui::GetIO().WantCaptureKeyboard || ImGui::GetIO().WantCaptureMouse)
+		if (ImGui::GetIO().WantCaptureKeyboard || ImGui::GetIO().WantCaptureMouse)
 		{
 			return;
 		}
@@ -1636,20 +1695,20 @@ public:
 			Scene.bReload = false;
 		}
 
-        if(bFramebufferResized)
-        {
-            for (size_t i = 0; i < InFlightFences.size(); i++)
-            {
-                vkWaitForFences(Device, 1, &InFlightFences[i], VK_TRUE, UINT64_MAX);
-            }
+		if(bFramebufferResized)
+		{
+			for (size_t i = 0; i < InFlightFences.size(); i++)
+			{
+				vkWaitForFences(Device, 1, &InFlightFences[i], VK_TRUE, UINT64_MAX);
+			}
 
-            bFramebufferResized = false;
+			bFramebufferResized = false;
 
-            // @TODO: recreate swap chain on macOS
-            //RecreateSwapChain();
-            return;
-        }
-        // Wait for the previous frame to finish rendering
+			// @TODO: recreate swap chain on macOS
+			//RecreateSwapChain();
+			return;
+		}
+		// Wait for the previous frame to finish rendering
 		vkWaitForFences(Device, 1, &InFlightFences[CurrentFrame], VK_TRUE, UINT64_MAX);
 
 		uint32_t imageIndex;
@@ -1667,10 +1726,10 @@ public:
 		// update os inputs
 		UpdateInputs();
 #if ENABLE_IMGUI_EDITOR
-        // update imgui	widgets
+		// update imgui	widgets
 		UpdateImGuiWidgets();
 #endif
-        // update uniform buffer（UBO）
+		// update uniform buffer（UBO）
 		UpdateUniformBuffer(CurrentFrame);
 
 		vkResetFences(Device, 1, &InFlightFences[CurrentFrame]);
@@ -2173,7 +2232,7 @@ protected:
 			//vkMapMemory(Device, BaseUniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersMapped[i]);
 		}
 
-		VkDeviceSize bufferSizeOfView = sizeof(FUniformBufferView);
+		VkDeviceSize bufferSizeOfView = sizeof(FView);
 		ViewUniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
 		ViewUniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
 
@@ -2824,7 +2883,7 @@ protected:
 		ImGui_ImplVulkan_Init(&init_info);
 	}
 #endif
-    
+	
 	/** Write the commands to be executed into the command buffer, corresponding to each image of the SwapChain */
 	void RecordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex)
 	{
@@ -2960,28 +3019,28 @@ protected:
 			{
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ShadowmapPass.Pipelines[0]);
 				FRenderObject* renderObject = ShadowmapPass.RenderObjects[i];
-				VkBuffer objectVertexBuffers[] = { renderObject->MeshData.VertexBuffer };
+				VkBuffer objectVertexBuffers[] = { renderObject->Mesh.VertexBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
-				vkCmdBindIndexBuffer(commandBuffer, renderObject->MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+				vkCmdBindIndexBuffer(commandBuffer, renderObject->Mesh.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 				vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
 					ShadowmapPass.PipelineLayout, 0, 1, &ShadowmapPass.DescriptorSets[CurrentFrame], 0, nullptr);
-				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderObject->MeshData.Indices.size()), 1, 0, 0, 0);
+				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderObject->Mesh.Indices.size()), 1, 0, 0, 0);
 			}
 			// 【阴影】渲染 Instanced 场景
 			for (size_t i = 0; i < ShadowmapPass.RenderInstancedObjects.size(); i++)
 			{
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ShadowmapPass.PipelinesInstanced[0]);
 				FRenderInstancedObject* renderInstancedObject = ShadowmapPass.RenderInstancedObjects[i];
-				VkBuffer objectVertexBuffers[] = { renderInstancedObject->MeshData.VertexBuffer };
-				VkBuffer objectInstanceBuffers[] = { renderInstancedObject->MeshData.InstancedBuffer };
+				VkBuffer objectVertexBuffers[] = { renderInstancedObject->Mesh.VertexBuffer };
+				VkBuffer objectInstanceBuffers[] = { renderInstancedObject->Mesh.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, VERTEX_BUFFER_BIND_ID, 1, objectVertexBuffers, objectOffsets);
 				vkCmdBindVertexBuffers(commandBuffer, INSTANCE_BUFFER_BIND_ID, 1, objectInstanceBuffers, objectOffsets);
-				vkCmdBindIndexBuffer(commandBuffer, renderInstancedObject->MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+				vkCmdBindIndexBuffer(commandBuffer, renderInstancedObject->Mesh.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 				vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
 					ShadowmapPass.PipelineLayout, 0, 1, &ShadowmapPass.DescriptorSets[CurrentFrame], 0, nullptr);
-				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderInstancedObject->MeshData.Indices.size()), renderInstancedObject->InstCount, 0, 0, 0);
+				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderInstancedObject->Mesh.Indices.size()), renderInstancedObject->InstanceCount, 0, 0, 0);
 			}
 			// 【阴影】渲染Indirect场景
 			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ShadowmapPass.Pipelines[0]);
@@ -2990,10 +3049,10 @@ protected:
 			for (size_t i = 0; i < ShadowmapPass.RenderIndirectObjects.size(); i++)
 			{
 				FRenderObjectIndirect* RenderIndirectObject = ShadowmapPass.RenderIndirectObjects[i];
-				VkBuffer objectVertexBuffers[] = { RenderIndirectObject->MeshData.VertexBuffer };
+				VkBuffer objectVertexBuffers[] = { RenderIndirectObject->Mesh.VertexBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
-				vkCmdBindIndexBuffer(commandBuffer, RenderIndirectObject->MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+				vkCmdBindIndexBuffer(commandBuffer, RenderIndirectObject->Mesh.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 				uint32_t indirectDrawCount = static_cast<uint32_t>(RenderIndirectObject->IndirectCommands.size());
 				if (IsSupportMultiDrawIndirect(PhysicalDevice))
 				{
@@ -3025,12 +3084,12 @@ protected:
 			for (size_t i = 0; i < ShadowmapPass.RenderIndirectInstancedObjects.size(); i++)
 			{
 				FRenderInstancedObjectIndirect* RenderIndirectInstancedObject = ShadowmapPass.RenderIndirectInstancedObjects[i];
-				VkBuffer objectVertexBuffers[] = { RenderIndirectInstancedObject->MeshData.VertexBuffer };
-				VkBuffer objectInstanceBuffers[] = { RenderIndirectInstancedObject->MeshData.InstancedBuffer };
+				VkBuffer objectVertexBuffers[] = { RenderIndirectInstancedObject->Mesh.VertexBuffer };
+				VkBuffer objectInstanceBuffers[] = { RenderIndirectInstancedObject->Mesh.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, VERTEX_BUFFER_BIND_ID, 1, objectVertexBuffers, objectOffsets);
 				vkCmdBindVertexBuffers(commandBuffer, INSTANCE_BUFFER_BIND_ID, 1, objectInstanceBuffers, objectOffsets);
-				vkCmdBindIndexBuffer(commandBuffer, RenderIndirectInstancedObject->MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+				vkCmdBindIndexBuffer(commandBuffer, RenderIndirectInstancedObject->Mesh.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 				uint32_t indirectDrawCount = static_cast<uint32_t>(RenderIndirectInstancedObject->IndirectCommands.size());
 				if (IsSupportMultiDrawIndirect(PhysicalDevice))
 				{
@@ -3115,16 +3174,16 @@ protected:
 				VkPipeline baseScenePassPipeline = BasePass.DeferredScenePipelines[SpecConstants];
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, baseScenePassPipeline);
 				FRenderDeferredObject* renderObject = BasePass.RenderDeferredObjects[i];
-				VkBuffer objectVertexBuffers[] = { renderObject->MeshData.VertexBuffer };
+				VkBuffer objectVertexBuffers[] = { renderObject->Mesh.VertexBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
-				vkCmdBindIndexBuffer(commandBuffer, renderObject->MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+				vkCmdBindIndexBuffer(commandBuffer, renderObject->Mesh.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 				vkCmdBindDescriptorSets(
 					commandBuffer,
 					VK_PIPELINE_BIND_POINT_GRAPHICS,
 					BasePass.DeferredScenePipelineLayout, 0, 1,
-					&renderObject->MateData.DescriptorSets[CurrentFrame], 0, nullptr);
-				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderObject->MeshData.Indices.size()), 1, 0, 0, 0);
+					&renderObject->Material.DescriptorSets[CurrentFrame], 0, nullptr);
+				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderObject->Mesh.Indices.size()), 1, 0, 0, 0);
 			}
 			// 【延迟渲染】渲染 Instanced 场景
 			for (size_t i = 0; i < BasePass.RenderDeferredInstancedObjects.size(); i++)
@@ -3133,18 +3192,18 @@ protected:
 				VkPipeline BaseScenePassPipelineInstanced = BasePass.DeferredScenePipelinesInstanced[SpecConstants];
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BaseScenePassPipelineInstanced);
 				FRenderDeferredInstancedObject* renderInstancedObject = BasePass.RenderDeferredInstancedObjects[i];
-				VkBuffer objectVertexBuffers[] = { renderInstancedObject->MeshData.VertexBuffer };
-				VkBuffer objectInstanceBuffers[] = { renderInstancedObject->MeshData.InstancedBuffer };
+				VkBuffer objectVertexBuffers[] = { renderInstancedObject->Mesh.VertexBuffer };
+				VkBuffer objectInstanceBuffers[] = { renderInstancedObject->Mesh.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, VERTEX_BUFFER_BIND_ID, 1, objectVertexBuffers, objectOffsets);
 				vkCmdBindVertexBuffers(commandBuffer, INSTANCE_BUFFER_BIND_ID, 1, objectInstanceBuffers, objectOffsets);
-				vkCmdBindIndexBuffer(commandBuffer, renderInstancedObject->MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+				vkCmdBindIndexBuffer(commandBuffer, renderInstancedObject->Mesh.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 				vkCmdBindDescriptorSets(
 					commandBuffer,
 					VK_PIPELINE_BIND_POINT_GRAPHICS,
 					BasePass.DeferredScenePipelineLayout, 0, 1,
-					&renderInstancedObject->MateData.DescriptorSets[CurrentFrame], 0, nullptr);
-				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderInstancedObject->MeshData.Indices.size()), renderInstancedObject->InstCount, 0, 0, 0);
+					&renderInstancedObject->Material.DescriptorSets[CurrentFrame], 0, nullptr);
+				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderInstancedObject->Mesh.Indices.size()), renderInstancedObject->InstanceCount, 0, 0, 0);
 			}
 
 			// 【延迟渲染】结束RenderPass
@@ -3219,17 +3278,17 @@ protected:
 				VkPipeline baseScenePassPipeline = BasePass.Pipelines[GlobalConstants.SpecConstants];
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, baseScenePassPipeline);
 				FRenderObject* renderObject = BasePass.RenderObjects[i];
-				VkBuffer objectVertexBuffers[] = { renderObject->MeshData.VertexBuffer };
+				VkBuffer objectVertexBuffers[] = { renderObject->Mesh.VertexBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
-				vkCmdBindIndexBuffer(commandBuffer, renderObject->MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+				vkCmdBindIndexBuffer(commandBuffer, renderObject->Mesh.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 				vkCmdBindDescriptorSets(
 					commandBuffer,
 					VK_PIPELINE_BIND_POINT_GRAPHICS,
 					BasePass.PipelineLayout, 0, 1,
-					&renderObject->MateData.DescriptorSets[CurrentFrame], 0, nullptr);
+					&renderObject->Material.DescriptorSets[CurrentFrame], 0, nullptr);
 				vkCmdPushConstants(commandBuffer, BasePass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
-				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderObject->MeshData.Indices.size()), 1, 0, 0, 0);
+				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderObject->Mesh.Indices.size()), 1, 0, 0, 0);
 			}
 			// 【主场景】渲染 Instanced 场景
 			for (size_t i = 0; i < BasePass.RenderInstancedObjects.size(); i++)
@@ -3237,19 +3296,19 @@ protected:
 				VkPipeline BaseScenePassPipelineInstanced = BasePass.PipelinesInstanced[GlobalConstants.SpecConstants];
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BaseScenePassPipelineInstanced);
 				FRenderInstancedObject* renderInstancedObject = BasePass.RenderInstancedObjects[i];
-				VkBuffer objectVertexBuffers[] = { renderInstancedObject->MeshData.VertexBuffer };
-				VkBuffer objectInstanceBuffers[] = { renderInstancedObject->MeshData.InstancedBuffer };
+				VkBuffer objectVertexBuffers[] = { renderInstancedObject->Mesh.VertexBuffer };
+				VkBuffer objectInstanceBuffers[] = { renderInstancedObject->Mesh.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, VERTEX_BUFFER_BIND_ID, 1, objectVertexBuffers, objectOffsets);
 				vkCmdBindVertexBuffers(commandBuffer, INSTANCE_BUFFER_BIND_ID, 1, objectInstanceBuffers, objectOffsets);
-				vkCmdBindIndexBuffer(commandBuffer, renderInstancedObject->MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+				vkCmdBindIndexBuffer(commandBuffer, renderInstancedObject->Mesh.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 				vkCmdBindDescriptorSets(
 					commandBuffer,
 					VK_PIPELINE_BIND_POINT_GRAPHICS,
 					BasePass.PipelineLayout, 0, 1,
-					&renderInstancedObject->MateData.DescriptorSets[CurrentFrame], 0, nullptr);
+					&renderInstancedObject->Material.DescriptorSets[CurrentFrame], 0, nullptr);
 				vkCmdPushConstants(commandBuffer, BasePass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
-				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderInstancedObject->MeshData.Indices.size()), renderInstancedObject->InstCount, 0, 0, 0);
+				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderInstancedObject->Mesh.Indices.size()), renderInstancedObject->InstanceCount, 0, 0, 0);
 			}
 #if ENABLE_INDIRECT_DRAW
 			// 【主场景】渲染 Indirect 场景
@@ -3258,15 +3317,15 @@ protected:
 				VkPipeline indirectScenePassPipeline = BasePass.IndirectPipelines[GlobalConstants.SpecConstants];
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, indirectScenePassPipeline);
 				FRenderObjectIndirect* RenderIndirectObject = BasePass.RenderIndirectObjects[i];
-				VkBuffer objectVertexBuffers[] = { RenderIndirectObject->MeshData.VertexBuffer };
+				VkBuffer objectVertexBuffers[] = { RenderIndirectObject->Mesh.VertexBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
-				vkCmdBindIndexBuffer(commandBuffer, RenderIndirectObject->MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+				vkCmdBindIndexBuffer(commandBuffer, RenderIndirectObject->Mesh.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 				vkCmdBindDescriptorSets(
 					commandBuffer,
 					VK_PIPELINE_BIND_POINT_GRAPHICS,
 					BasePass.IndirectPipelineLayout, 0, 1,
-					&RenderIndirectObject->MateData.DescriptorSets[CurrentFrame], 0, nullptr);
+					&RenderIndirectObject->Material.DescriptorSets[CurrentFrame], 0, nullptr);
 				vkCmdPushConstants(commandBuffer, BasePass.IndirectPipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
 				uint32_t indirectDrawCount = static_cast<uint32_t>(RenderIndirectObject->IndirectCommands.size());
 				if (IsSupportMultiDrawIndirect(PhysicalDevice))
@@ -3315,19 +3374,19 @@ protected:
 				VkPipeline indirectScenePassPipelineInstanced = BasePass.IndirectPipelinesInstanced[GlobalConstants.SpecConstants];
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, indirectScenePassPipelineInstanced);
 				FRenderInstancedObjectIndirect* RenderIndirectInstancedObject = BasePass.RenderIndirectInstancedObjects[i];
-				VkBuffer objectVertexBuffers[] = { RenderIndirectInstancedObject->MeshData.VertexBuffer };
-				VkBuffer objectInstanceBuffers[] = { RenderIndirectInstancedObject->MeshData.InstancedBuffer };
+				VkBuffer objectVertexBuffers[] = { RenderIndirectInstancedObject->Mesh.VertexBuffer };
+				VkBuffer objectInstanceBuffers[] = { RenderIndirectInstancedObject->Mesh.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				// Binding point 0 : Mesh vertex buffer
 				vkCmdBindVertexBuffers(commandBuffer, VERTEX_BUFFER_BIND_ID, 1, objectVertexBuffers, objectOffsets);
 				// Binding point 1 : Instance data buffer
 				vkCmdBindVertexBuffers(commandBuffer, INSTANCE_BUFFER_BIND_ID, 1, objectInstanceBuffers, objectOffsets);
-				vkCmdBindIndexBuffer(commandBuffer, RenderIndirectInstancedObject->MeshData.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+				vkCmdBindIndexBuffer(commandBuffer, RenderIndirectInstancedObject->Mesh.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 				vkCmdBindDescriptorSets(
 					commandBuffer,
 					VK_PIPELINE_BIND_POINT_GRAPHICS,
 					BasePass.IndirectPipelineLayout, 0, 1,
-					&RenderIndirectInstancedObject->MateData.DescriptorSets[CurrentFrame], 0, nullptr);
+					&RenderIndirectInstancedObject->Material.DescriptorSets[CurrentFrame], 0, nullptr);
 				vkCmdPushConstants(commandBuffer, BasePass.IndirectPipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
 				uint32_t indirectDrawCount = static_cast<uint32_t>(RenderIndirectInstancedObject->IndirectCommands.size());
 				if (IsSupportMultiDrawIndirect(PhysicalDevice))
@@ -3412,7 +3471,7 @@ protected:
 		}
 #endif
 
-        // 结束记录指令
+		// 结束记录指令
 		if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
 		{
 			throw std::runtime_error("[RecordCommandBuffer] Failed to record command buffer!");
@@ -3434,7 +3493,7 @@ protected:
 		vkDestroyRenderPass(Device, MainRenderPass, nullptr);
 
 #if ENABLE_IMGUI_EDITOR
-        // clear up imgui pass
+		// clear up imgui pass
 		CleanupImgui();
 #endif
 
@@ -3599,8 +3658,8 @@ protected:
 
 			DestroyRenderObject(renderInstancedObject);
 
-			vkDestroyBuffer(Device, renderInstancedObject.MeshData.InstancedBuffer, nullptr);
-			vkFreeMemory(Device, renderInstancedObject.MeshData.InstancedBufferMemory, nullptr);
+			vkDestroyBuffer(Device, renderInstancedObject.Mesh.InstancedBuffer, nullptr);
+			vkFreeMemory(Device, renderInstancedObject.Mesh.InstancedBufferMemory, nullptr);
 		}
 		for (size_t i = 0; i < Scene.RenderIndirectObjects.size(); i++)
 		{
@@ -3617,8 +3676,8 @@ protected:
 
 			DestroyRenderObject(RenderIndirectInstancedObject);
 
-			vkDestroyBuffer(Device, RenderIndirectInstancedObject.MeshData.InstancedBuffer, nullptr);
-			vkFreeMemory(Device, RenderIndirectInstancedObject.MeshData.InstancedBufferMemory, nullptr);
+			vkDestroyBuffer(Device, RenderIndirectInstancedObject.Mesh.InstancedBuffer, nullptr);
+			vkFreeMemory(Device, RenderIndirectInstancedObject.Mesh.InstancedBufferMemory, nullptr);
 
 			vkDestroyBuffer(Device, RenderIndirectInstancedObject.IndirectCommandsBuffer, nullptr);
 			vkFreeMemory(Device, RenderIndirectInstancedObject.IndirectCommandsBufferMemory, nullptr);
@@ -3636,8 +3695,8 @@ protected:
 
 			DestroyRenderObject(renderInstancedObject);
 
-			vkDestroyBuffer(Device, renderInstancedObject.MeshData.InstancedBuffer, nullptr);
-			vkFreeMemory(Device, renderInstancedObject.MeshData.InstancedBufferMemory, nullptr);
+			vkDestroyBuffer(Device, renderInstancedObject.Mesh.InstancedBuffer, nullptr);
+			vkFreeMemory(Device, renderInstancedObject.Mesh.InstancedBufferMemory, nullptr);
 		}
 #endif
 		Scene.Reset();
@@ -3727,7 +3786,7 @@ protected:
 		vkDestroyRenderPass(Device, ImGuiPass.RenderPass, nullptr);
 	}
 #endif
-    
+	
 public:
 	void CreateEngineWorld()
 	{
@@ -3750,44 +3809,48 @@ public:
 		World.OverrideBackground = true;
 		World.BackgroundFileName = "background.png";
 
-		FObject terrain;
+		FObjectDesc terrain;
 		terrain.ProfabName = "terrain";
-		terrain.InstCount = 1;
-		World.Objects.push_back(terrain);
+		terrain.InstanceCount = 1;
+		World.ObjectDescs.push_back(terrain);
 
-		FObject rock_01;
+		FObjectDesc rock_01;
 		rock_01.ProfabName = "rock_01";
-		rock_01.InstCount = 1;
-		World.Objects.push_back(rock_01);
+		rock_01.InstanceCount = 1;
+		World.ObjectDescs.push_back(rock_01);
 
-		FObject rock_02;
+		FObjectDesc rock_02;
 		rock_02.ProfabName = "rock_02";
-		rock_02.InstCount = 64;
-		rock_02.InstMinRadius = 1.0f;
-		rock_02.InstMaxRadius = 5.0f;
-		rock_02.InstMinScale = 0.2f;
-		rock_02.InstMaxScale = 0.5f;
-		World.Objects.push_back(rock_02);
+		rock_02.InstanceCount = 64;
+		rock_02.MinRadius = 1.0f;
+		rock_02.MaxRadius = 5.0f;
+		rock_02.MinPScale = 0.2f;
+		rock_02.MaxPScale = 0.5f;
+		World.ObjectDescs.push_back(rock_02);
 
-		FObject grass_01;
+		FObjectDesc grass_01;
 		grass_01.ProfabName = "grass_01";
-		grass_01.InstCount = 10000;
-		grass_01.InstMinRadius = 2.0f;
-		grass_01.InstMaxRadius = 8.0f;
-		grass_01.InstMinScale = 0.1f;
-		grass_01.InstMaxScale = 0.5f;
-		World.Objects.push_back(grass_01);
+		grass_01.InstanceCount = 10000;
+		grass_01.MinRadius = 2.0f;
+		grass_01.MaxRadius = 8.0f;
+		grass_01.MinPScale = 0.1f;
+		grass_01.MaxPScale = 0.5f;
+		World.ObjectDescs.push_back(grass_01);
 
-		FObject grass_02;
+		FObjectDesc grass_02;
 		grass_02.ProfabName = "grass_02";
-		grass_02.InstCount = 10000;
-		grass_02.InstMinRadius = 1.0f;
-		grass_02.InstMaxRadius = 9.0f;
-		grass_02.InstMinScale = 0.1f;
-		grass_02.InstMaxScale = 0.5f;
-		World.Objects.push_back(grass_02);
+		grass_02.InstanceCount = 10000;
+		grass_02.MinRadius = 1.0f;
+		grass_02.MaxRadius = 9.0f;
+		grass_02.MinPScale = 0.1f;
+		grass_02.MaxPScale = 0.5f;
+		World.ObjectDescs.push_back(grass_02);
 
+		FObjectDesc directional_light;
 		uint32_t DirectionalLightNum = 1;
+		directional_light.ProfabName = "directional_light";
+		directional_light.InstanceCount = 1;
+
 		FLight Moonlight;
 		Moonlight.Position = glm::vec4(20.0f, 0.0f, 20.0f, 0.0);
 		Moonlight.Color = glm::vec4(0.0, 0.1, 0.6, 15.0);
@@ -3799,14 +3862,14 @@ public:
 		for (uint32_t i = 0; i < PointLightNum; i++)
 		{
 			FLight PointLight;
-			float radians = RandRange(0.0f, 360.0f, i);
-			float distance = RandRange(0.1f, 0.6f, i);
+			float radians = FObjectDesc::RandRange(0.0f, 360.0f, i);
+			float distance = FObjectDesc::RandRange(0.1f, 0.6f, i);
 			float X = sin(glm::radians(radians)) * distance;
 			float Y = cos(glm::radians(radians)) * distance;
 			float Z = 1.0;
 			PointLight.Position = glm::vec4(glm::vec3(X, Y, Z), 0.0);
-			float R = (((float)RandRange(50, 75, i) / 100.0f));
-			float G = (((float)RandRange(25, 50, i) / 100.0f));
+			float R = (((float)FObjectDesc::RandRange(50, 75, i) / 100.0f));
+			float G = (((float)FObjectDesc::RandRange(25, 50, i) / 100.0f));
 			float B = 0.0;
 			PointLight.Color = glm::vec4(R, G, B, 10.0);
 			PointLight.Direction = glm::vec4(0.0, 0.0, 1.0, 1.5);
@@ -3891,9 +3954,9 @@ public:
 
 			object.IndirectCommands.clear();
 
-			for (uint32_t i = 0; i < object.MeshData.MeshletSet.Meshlets.size(); ++i)
+			for (uint32_t i = 0; i < object.Mesh.MeshletSet.Meshlets.size(); ++i)
 			{
-				const FMeshlet meshletSet = object.MeshData.MeshletSet.Meshlets[i];
+				const FMeshlet meshletSet = object.Mesh.MeshletSet.Meshlets[i];
 				// Member of FMeshlet:
 				//uint32_t VertexOffset;
 				//uint32_t VertexCount;
@@ -3914,7 +3977,7 @@ public:
 				object.IndirectCommands.push_back(indirectCmd);
 			}
 			//VkDrawIndexedIndirectCommand indirectCmd{};
-			//indirectCmd.indexCount = (uint32_t)object.MeshData.Indices.size(); /*indexCount*/
+			//indirectCmd.indexCount = (uint32_t)object.Mesh.Indices.size(); /*indexCount*/
 			//indirectCmd.instanceCount = 1; /*instanceCount*/
 			//indirectCmd.firstIndex = 0; /*firstIndex*/
 			//indirectCmd.vertexOffset = 0; /*vertexOffset*/
@@ -3925,21 +3988,21 @@ public:
 			Scene.RenderIndirectObjects.push_back(object);
 		}
 
-		for (const FObject& Object : World.Objects)
+		for (const FObjectDesc& ObjectDesc : World.ObjectDescs)
 		{
-			if (Object.InstCount > 1)
+			if (ObjectDesc.InstanceCount > 1)
 			{
 				std::vector<FInstanceData> Data;
-				GenerateInstance(Data, Object);
+				FObjectDesc::GenerateInstance(Data, ObjectDesc);
 #if ENABLE_DEFEERED_SHADING
 				CreateRenderObjectsFromProfabs(
 					Scene.RenderDeferredInstancedObjects,
-					*Scene.DeferredSceneDescriptorSetLayout, Object.ProfabName, Data);
+					*Scene.DeferredSceneDescriptorSetLayout, ObjectDesc.ProfabName, Data);
 			}
 			else
 			{
 				CreateRenderObjectsFromProfabs(Scene.RenderDeferredObjects,
-					*Scene.DeferredSceneDescriptorSetLayout, Object.ProfabName);
+					*Scene.DeferredSceneDescriptorSetLayout, ObjectDesc.ProfabName);
 			}
 
 			UpdateDescriptorSet(BasePass.DeferredLightingDescriptorSets, GBuffer.ImageViews(), GBuffer.Samplers(), ERenderFlags::DeferredLighting);
@@ -3972,12 +4035,6 @@ public:
 			View.SpotLights[i] = World.SpotLights[i];
 		}
 		View.LightsCount = glm::ivec4(World.DirectionalLights.size(), World.PointLights.size(), World.SpotLights.size(), CubemapMaxMips);
-	}
-
-	void RecreateEngineScene()
-	{
-		CleanupBasePass();
-
 	}
 
 	/** Update player inputs*/
@@ -4019,14 +4076,14 @@ public:
 			// get window size
 			int windowWidth, windowHeight;
 			glfwGetWindowSize(Window, &windowWidth, &windowHeight);
-            int frameBufferWidth, frameBufferHeight;
-            glfwGetFramebufferSize(Window, &frameBufferWidth, &frameBufferHeight);
+			int frameBufferWidth, frameBufferHeight;
+			glfwGetFramebufferSize(Window, &frameBufferWidth, &frameBufferHeight);
 
 			const float rightBarWidth = windowWidth * 0.2f;
 			const float bottomBarWidth = windowHeight * 0.2f;
 
-            // windows size is point but framebuffer size is pixel
-            // Retina got mutiple pixel size in save window area
+			// windows size is point but framebuffer size is pixel
+			// Retina got mutiple pixel size in save window area
 			ImGuiPass.RightBarSpace = frameBufferWidth * 0.2f;
 			ImGuiPass.BottomBarSpace = frameBufferHeight * 0.2f;
 
@@ -4130,7 +4187,7 @@ public:
 			}
 			if (ImGui::TreeNode("Lights"))
 			{
-				if (ImGui::TreeNode("Directional Lights"))
+				if (World.DirectionalLights.size() > 0 && ImGui::TreeNode("Directional Lights"))
 				{
 					ImGui::TreePop();
 				}
@@ -4142,7 +4199,7 @@ public:
 				{
 					ImGui::TreePop();
 				}
-				if (World.MeshLights.size() > 0 && ImGui::TreeNode("Mesh Lights"))
+				if (World.QuadLights.size() > 0 && ImGui::TreeNode("Mesh Lights"))
 				{
 					ImGui::TreePop();
 				}
@@ -4174,27 +4231,27 @@ public:
 			}
 			if (ImGui::TreeNode("BasePass"))
 			{
-				if (ImGui::TreeNode("DeferredObject"))
+				if (ImGui::TreeNode("DeferredObjects"))
 				{
 					ImGui::TreePop();
 				}
-				if (ImGui::TreeNode("DeferredInstancedObject"))
+				if (ImGui::TreeNode("DeferredInstancedObjects"))
 				{
 					ImGui::TreePop();
 				}
-				if (ImGui::TreeNode("ForwardObject"))
+				if (ImGui::TreeNode("ForwardObjects"))
 				{
 					ImGui::TreePop();
 				}
-				if (ImGui::TreeNode("ForwardInstancedObject"))
+				if (ImGui::TreeNode("ForwardInstancedObjects"))
 				{
 					ImGui::TreePop();
 				}
-				if (ImGui::TreeNode("ForwardObjectIndirect"))
+				if (ImGui::TreeNode("ForwardObjectIndirects"))
 				{
 					ImGui::TreePop();
 				}
-				if (ImGui::TreeNode("ForwardInstancedObjectIndirect"))
+				if (ImGui::TreeNode("ForwardInstancedObjectIndirects"))
 				{
 					ImGui::TreePop();
 				}
@@ -5074,7 +5131,7 @@ public:
 				VkDescriptorBufferInfo viewBufferInfo{};
 				viewBufferInfo.buffer = ViewUniformBuffers[i];
 				viewBufferInfo.offset = 0;
-				viewBufferInfo.range = sizeof(FUniformBufferView);
+				viewBufferInfo.range = sizeof(FView);
 
 				descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 				descriptorWrites[0].dstSet = outDescriptorSets[i];
@@ -5155,7 +5212,7 @@ public:
 				VkDescriptorBufferInfo viewBufferInfo{};
 				viewBufferInfo.buffer = ViewUniformBuffers[i];
 				viewBufferInfo.offset = 0;
-				viewBufferInfo.range = sizeof(FUniformBufferView);
+				viewBufferInfo.range = sizeof(FView);
 
 				descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 				descriptorWrites[1].dstSet = outDescriptorSets[i];
@@ -5520,36 +5577,36 @@ public:
 	template <typename T>
 	void CreateRenderObject(T& outObject, const std::string& objfile, const std::vector<std::string>& pngfiles, const VkDescriptorSetLayout& inDescriptorSetLayout)
 	{
-		CreateMesh(outObject.MeshData.Vertices, outObject.MeshData.Indices, objfile);
-		outObject.MateData.TextureImages.resize(pngfiles.size());
-		outObject.MateData.TextureImageMemorys.resize(pngfiles.size());
-		outObject.MateData.TextureImageViews.resize(pngfiles.size());
-		outObject.MateData.TextureImageSamplers.resize(pngfiles.size());
+		CreateMesh(outObject.Mesh.Vertices, outObject.Mesh.Indices, objfile);
+		outObject.Material.TextureImages.resize(pngfiles.size());
+		outObject.Material.TextureImageMemorys.resize(pngfiles.size());
+		outObject.Material.TextureImageViews.resize(pngfiles.size());
+		outObject.Material.TextureImageSamplers.resize(pngfiles.size());
 		for (size_t i = 0; i < pngfiles.size(); i++)
 		{
 			bool sRGB = (i == 0);
 			CreateImageContext(
-				outObject.MateData.TextureImages[i],
-				outObject.MateData.TextureImageMemorys[i],
-				outObject.MateData.TextureImageViews[i],
-				outObject.MateData.TextureImageSamplers[i],
+				outObject.Material.TextureImages[i],
+				outObject.Material.TextureImageMemorys[i],
+				outObject.Material.TextureImageViews[i],
+				outObject.Material.TextureImageSamplers[i],
 				pngfiles[i], sRGB);
 		}
 
 		CreateVertexBuffer(
-			outObject.MeshData.VertexBuffer,
-			outObject.MeshData.VertexBufferMemory,
-			outObject.MeshData.Vertices);
+			outObject.Mesh.VertexBuffer,
+			outObject.Mesh.VertexBufferMemory,
+			outObject.Mesh.Vertices);
 		CreateIndexBuffer(
-			outObject.MeshData.IndexBuffer,
-			outObject.MeshData.IndexBufferMemory,
-			outObject.MeshData.Indices);
+			outObject.Mesh.IndexBuffer,
+			outObject.Mesh.IndexBufferMemory,
+			outObject.Mesh.Indices);
 		CreateDescriptorSet(
-			outObject.MateData.DescriptorSets,
-			outObject.MateData.DescriptorPool,
+			outObject.Material.DescriptorSets,
+			outObject.Material.DescriptorPool,
 			inDescriptorSetLayout,
-			outObject.MateData.TextureImageViews,
-			outObject.MateData.TextureImageSamplers);
+			outObject.Material.TextureImageViews,
+			outObject.Material.TextureImageSamplers);
 
 		VkDeviceSize BufferSize = sizeof(FUniformBufferTransfrom);
 		outObject.TransfromUniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
@@ -5576,20 +5633,20 @@ public:
 	template <typename T>
 	void DestroyRenderObject(T& outObject)
 	{
-		vkDestroyDescriptorPool(Device, outObject.MateData.DescriptorPool, nullptr);
+		vkDestroyDescriptorPool(Device, outObject.Material.DescriptorPool, nullptr);
 
-		for (size_t j = 0; j < outObject.MateData.TextureImages.size(); j++)
+		for (size_t j = 0; j < outObject.Material.TextureImages.size(); j++)
 		{
-			vkDestroyImageView(Device, outObject.MateData.TextureImageViews[j], nullptr);
-			vkDestroySampler(Device, outObject.MateData.TextureImageSamplers[j], nullptr);
-			vkDestroyImage(Device, outObject.MateData.TextureImages[j], nullptr);
-			vkFreeMemory(Device, outObject.MateData.TextureImageMemorys[j], nullptr);
+			vkDestroyImageView(Device, outObject.Material.TextureImageViews[j], nullptr);
+			vkDestroySampler(Device, outObject.Material.TextureImageSamplers[j], nullptr);
+			vkDestroyImage(Device, outObject.Material.TextureImages[j], nullptr);
+			vkFreeMemory(Device, outObject.Material.TextureImageMemorys[j], nullptr);
 		}
 
-		vkDestroyBuffer(Device, outObject.MeshData.VertexBuffer, nullptr);
-		vkFreeMemory(Device, outObject.MeshData.VertexBufferMemory, nullptr);
-		vkDestroyBuffer(Device, outObject.MeshData.IndexBuffer, nullptr);
-		vkFreeMemory(Device, outObject.MeshData.IndexBufferMemory, nullptr);
+		vkDestroyBuffer(Device, outObject.Mesh.VertexBuffer, nullptr);
+		vkFreeMemory(Device, outObject.Mesh.VertexBufferMemory, nullptr);
+		vkDestroyBuffer(Device, outObject.Mesh.IndexBuffer, nullptr);
+		vkFreeMemory(Device, outObject.Mesh.IndexBufferMemory, nullptr);
 
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
 		{
@@ -5601,63 +5658,63 @@ public:
 	template <typename T>
 	void CreateRenderIndirectObject(T& outObject, const std::string& objfile, const std::vector<std::string>& pngfiles)
 	{
-		CreateMeshlet(outObject.MeshData.Vertices, outObject.MeshData.Indices,
-			outObject.MeshData.MeshletSet.Meshlets, outObject.MeshData.MeshletSet.MeshletVertices, outObject.MeshData.MeshletSet.MeshletTriangles, objfile);
+		CreateMeshlet(outObject.Mesh.Vertices, outObject.Mesh.Indices,
+			outObject.Mesh.MeshletSet.Meshlets, outObject.Mesh.MeshletSet.MeshletVertices, outObject.Mesh.MeshletSet.MeshletTriangles, objfile);
 
-		outObject.MateData.TextureImages.resize(pngfiles.size());
-		outObject.MateData.TextureImageMemorys.resize(pngfiles.size());
-		outObject.MateData.TextureImageViews.resize(pngfiles.size());
-		outObject.MateData.TextureImageSamplers.resize(pngfiles.size());
+		outObject.Material.TextureImages.resize(pngfiles.size());
+		outObject.Material.TextureImageMemorys.resize(pngfiles.size());
+		outObject.Material.TextureImageViews.resize(pngfiles.size());
+		outObject.Material.TextureImageSamplers.resize(pngfiles.size());
 		for (size_t i = 0; i < pngfiles.size(); i++)
 		{
 			bool sRGB = (i == 0);
 			CreateImageContext(
-				outObject.MateData.TextureImages[i],
-				outObject.MateData.TextureImageMemorys[i],
-				outObject.MateData.TextureImageViews[i],
-				outObject.MateData.TextureImageSamplers[i],
+				outObject.Material.TextureImages[i],
+				outObject.Material.TextureImageMemorys[i],
+				outObject.Material.TextureImageViews[i],
+				outObject.Material.TextureImageSamplers[i],
 				pngfiles[i], sRGB);
 		}
 
-		std::vector<FVertex> tmpVertices = outObject.MeshData.Vertices;
-		outObject.MeshData.Vertices.resize(outObject.MeshData.MeshletSet.MeshletVertices.size());
-		for (uint32_t i = 0; i < outObject.MeshData.MeshletSet.MeshletVertices.size(); i++)
+		std::vector<FVertex> tmpVertices = outObject.Mesh.Vertices;
+		outObject.Mesh.Vertices.resize(outObject.Mesh.MeshletSet.MeshletVertices.size());
+		for (uint32_t i = 0; i < outObject.Mesh.MeshletSet.MeshletVertices.size(); i++)
 		{
-			outObject.MeshData.Vertices[i] = tmpVertices[outObject.MeshData.MeshletSet.MeshletVertices[i]];
+			outObject.Mesh.Vertices[i] = tmpVertices[outObject.Mesh.MeshletSet.MeshletVertices[i]];
 		}
-		outObject.MeshData.Indices.resize(outObject.MeshData.MeshletSet.MeshletTriangles.size());
+		outObject.Mesh.Indices.resize(outObject.Mesh.MeshletSet.MeshletTriangles.size());
 		uint32_t triangleCount = 0;
 		uint32_t triangleOffset = 0;
-		for (uint32_t i = 0; i < outObject.MeshData.MeshletSet.Meshlets.size(); i++)
+		for (uint32_t i = 0; i < outObject.Mesh.MeshletSet.Meshlets.size(); i++)
 		{
-			FMeshlet meshlet = outObject.MeshData.MeshletSet.Meshlets[i];
+			FMeshlet meshlet = outObject.Mesh.MeshletSet.Meshlets[i];
 			triangleCount += meshlet.TriangleCount;
 			triangleOffset += meshlet.TriangleOffset;
 		}
-		for (uint32_t i = 0; i < outObject.MeshData.MeshletSet.MeshletTriangles.size(); i++)
+		for (uint32_t i = 0; i < outObject.Mesh.MeshletSet.MeshletTriangles.size(); i++)
 		{
-			outObject.MeshData.Indices[i] = outObject.MeshData.MeshletSet.MeshletTriangles[i];
+			outObject.Mesh.Indices[i] = outObject.Mesh.MeshletSet.MeshletTriangles[i];
 		}
 		CreateVertexBuffer(
-			outObject.MeshData.VertexBuffer,
-			outObject.MeshData.VertexBufferMemory,
-			outObject.MeshData.Vertices);
+			outObject.Mesh.VertexBuffer,
+			outObject.Mesh.VertexBufferMemory,
+			outObject.Mesh.Vertices);
 		CreateIndexBuffer(
-			outObject.MeshData.IndexBuffer,
-			outObject.MeshData.IndexBufferMemory,
-			outObject.MeshData.Indices);
+			outObject.Mesh.IndexBuffer,
+			outObject.Mesh.IndexBufferMemory,
+			outObject.Mesh.Indices);
 		CreateDescriptorSet(
-			outObject.MateData.DescriptorSets,
-			outObject.MateData.DescriptorPool,
+			outObject.Material.DescriptorSets,
+			outObject.Material.DescriptorPool,
 			BasePass.DescriptorSetLayout,
-			outObject.MateData.TextureImageViews,
-			outObject.MateData.TextureImageSamplers);
+			outObject.Material.TextureImageViews,
+			outObject.Material.TextureImageSamplers);
 	};
 
 	template <typename T>
 	void CreateInstancedBuffer(T& outObject, const std::vector<FInstanceData>& inInstanceData)
 	{
-		outObject.InstCount = static_cast<uint32_t>(inInstanceData.size());
+		outObject.InstanceCount = static_cast<uint32_t>(inInstanceData.size());
 		VkDeviceSize bufferSize = inInstanceData.size() * sizeof(FInstanceData);
 		VkBuffer stagingBuffer;
 		VkDeviceMemory stagingBufferMemory;
@@ -5677,9 +5734,9 @@ public:
 			bufferSize,
 			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-			outObject.MeshData.InstancedBuffer,
-			outObject.MeshData.InstancedBufferMemory);
-		CopyBuffer(stagingBuffer, outObject.MeshData.InstancedBuffer, bufferSize);
+			outObject.Mesh.InstancedBuffer,
+			outObject.Mesh.InstancedBufferMemory);
+		CopyBuffer(stagingBuffer, outObject.Mesh.InstancedBuffer, bufferSize);
 
 		vkDestroyBuffer(Device, stagingBuffer, nullptr);
 		vkFreeMemory(Device, stagingBufferMemory, nullptr);
@@ -6424,23 +6481,6 @@ protected:
 		}
 	}
 
-	static void GenerateInstance(std::vector<FInstanceData>& OutData, const FObject& Object)
-	{
-		OutData.resize(Object.InstCount);
-		for (uint32_t i = 0; i < Object.InstCount; i++) {
-			float radians = RandRange(0.0f, 360.0f, std::rand());
-			float distance = RandRange(Object.InstMinRadius, Object.InstMaxRadius, std::rand());
-			float X = sin(glm::radians(radians)) * distance;
-			float Y = cos(glm::radians(radians)) * distance;
-			float Z = 0.0;
-			OutData[i].InstancePosition = glm::vec3(X, Y, Z);
-			// Y(Pitch), Z(Yaw), X(Roll)
-			float Yaw = float(M_PI) * RandRange(0.0f, 180.0f, std::rand());
-			OutData[i].InstanceRotation = glm::vec3(0.0, Yaw, 0.0);
-			OutData[i].InstancePScale = RandRange(Object.InstMinScale, Object.InstMaxScale, std::rand());
-			OutData[i].InstanceTexIndex = RandRange(0, 255, std::rand());
-		}
-	}
 private:
 	/** Load the compiled shader binary SPV file into a memory buffer */
 	static std::vector<char> LoadShaderSource(const std::string& filename)
@@ -6752,20 +6792,6 @@ private:
 		OutputDebugString(output.c_str());
 #endif
 		return VK_FALSE;
-	}
-private:
-	/* Random number engine */
-	static int RandRange(int min, int max, uint32_t seed)
-	{
-		std::mt19937 gen(seed); // Initialize Mersenne Twister algorithm generator with seed value
-		std::uniform_int_distribution<int> dis(min, max); // Define a uniform distribution from min to max
-		return dis(gen); // Generate random number
-	}
-	static float RandRange(float min, float max, uint32_t seed)
-	{
-		std::mt19937 gen(seed); // Initialize Mersenne Twister algorithm generator with seed value
-		std::uniform_real_distribution<float> dis(min, max); // Define a uniform distribution from min to max
-		return dis(gen); // Generate random number
 	}
 };
 
