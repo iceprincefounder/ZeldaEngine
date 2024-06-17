@@ -73,6 +73,7 @@
 // @see https://dev.to/gasim/implementing-bindless-design-in-vulkan-34no
 #define ENABLE_BINDLESS false
 #define ENABLE_IMGUI_EDITOR true
+#define ENABLE_GENERATE_WORLD false
 
 #define ASSETS(x) ProfabsAsset(x)
 
@@ -130,7 +131,7 @@ public:
 		else
 		{
 			assert(true);
-			throw std::runtime_error("File extension[" + ext + "]does not have a vulkan shader stage.");
+			throw std::runtime_error("[ReadShaderFile] File extension[" + ext + "]does not have a vulkan shader stage.");
 		}
 
 		std::ifstream file;
@@ -139,7 +140,7 @@ public:
 
 		if (!file.is_open())
 		{
-			throw std::runtime_error("Failed to open file: " + inFilename);
+			throw std::runtime_error("[ReadShaderFile] Failed to open file: " + inFilename);
 		}
 
 		uint64_t read_count = 0;
@@ -163,7 +164,7 @@ public:
 		out.open(inFilename.c_str(), std::ios::binary | std::ios::out);
 		if (out.fail()){
 			assert(true);
-			throw std::runtime_error("ERROR: Failed to open file: " + inFilename);
+			throw std::runtime_error("[SaveShaderFile] ERROR: Failed to open file: " + inFilename);
 		}
 		for (int i = 0; i < (int)inSpirvSource.size(); ++i) {
 			unsigned int word = inSpirvSource[i];
@@ -842,8 +843,6 @@ class FZeldaEngineApp
 			IndirectDescriptorSetLayout = nullptr;
 			DeferredSceneDescriptorSetLayout = nullptr;
 			DeferredLightingDescriptorSetLayout = nullptr;
-
-			bReload = false;
 		}
 	} Scene;
 
@@ -867,21 +866,21 @@ class FZeldaEngineApp
 	{
 		std::string FilePath = "Content/World.json";
 
-		bool EnableSkydome;
-		bool OverrideSkydome;
+		bool EnableSkydome = true;
+		bool OverrideSkydome = false;
 		std::string SkydomeFileName;
 
-		bool OverrideCubeMap;
+		bool OverrideCubeMap = false;
 		std::array<std::string, 6> CubeMapFileNames;
 
-		bool EnableBackground;
-		bool OverrideBackground;
+		bool EnableBackground = false;
+		bool OverrideBackground = false;
 		std::string BackgroundFileName;
 
 		std::vector<FLight> DirectionalLights;
 		std::vector<FLight> PointLights;
 		std::vector<FLight> SpotLights;
-		//std::vector<FLight> QuadLights;
+		std::vector<FLight> MeshLights;
 
 		std::vector<FObject> Objects;
 
@@ -889,7 +888,7 @@ class FZeldaEngineApp
 		{
 			FILE* fp = fopen(FilePath.c_str(), "rb");
 			if (fp == nullptr) {
-				perror("Failed to open file");
+				throw std::runtime_error("[WORLD] Failed to load file: " + FilePath);
 				return;
 			}
 			std::vector<char> readBuffer(65720);
@@ -1044,7 +1043,7 @@ class FZeldaEngineApp
 
 			FILE* fp = fopen(FilePath.c_str(), "w");
 			if (!fp) {
-				perror("Failed to open file for writing");
+				throw std::runtime_error("[WORLD] Failed to save file: " + FilePath);
 				return;
 			}
 
@@ -1222,32 +1221,32 @@ class FZeldaEngineApp
 		VkPipelineLayout PipelineLayout;
 		std::vector<VkPipeline> Pipelines;
 		std::vector<VkPipeline> PipelinesInstanced;
-	} BasePass;
 
-	struct FBaseIndirectPass {
+#if ENABLE_INDIRECT_DRAW
 		std::vector<FRenderObjectIndirect*> RenderIndirectObjects;
 		std::vector<FRenderInstancedObjectIndirect*> RenderIndirectInstancedObjects;
-		VkDescriptorSetLayout DescriptorSetLayout;
-		VkPipelineLayout PipelineLayout;
-		std::vector<VkPipeline> Pipelines;
-		std::vector<VkPipeline> PipelinesInstanced;
-	} BaseIndirectPass;
+		VkDescriptorSetLayout IndirectDescriptorSetLayout;
+		VkPipelineLayout IndirectPipelineLayout;
+		std::vector<VkPipeline> IndirectPipelines;
+		std::vector<VkPipeline> IndirectPipelinesInstanced;
+#endif
 
-	struct FBaseDeferredRenderingPass {
+#if ENABLE_DEFEERED_SHADING
 		std::vector<FRenderDeferredObject*> RenderDeferredObjects;
 		std::vector<FRenderDeferredInstancedObject*> RenderDeferredInstancedObjects;
-		VkDescriptorSetLayout SceneDescriptorSetLayout;
-		VkPipelineLayout ScenePipelineLayout;
-		std::vector<VkPipeline> ScenePipelines;
-		std::vector<VkPipeline> ScenePipelinesInstanced;
-		VkFramebuffer SceneFrameBuffer;
-		VkRenderPass SceneRenderPass;
-		VkDescriptorSetLayout LightingDescriptorSetLayout;
-		VkDescriptorPool LightingDescriptorPool;
-		std::vector<VkDescriptorSet> LightingDescriptorSets;
-		VkPipelineLayout LightingPipelineLayout;
-		std::vector<VkPipeline> LightingPipelines;
-	} BaseDeferredPass;
+		VkDescriptorSetLayout DeferredSceneDescriptorSetLayout;
+		VkPipelineLayout DeferredScenePipelineLayout;
+		std::vector<VkPipeline> DeferredScenePipelines;
+		std::vector<VkPipeline> DeferredScenePipelinesInstanced;
+		VkFramebuffer DeferredSceneFrameBuffer;
+		VkRenderPass DeferredSceneRenderPass;
+		VkDescriptorSetLayout DeferredLightingDescriptorSetLayout;
+		VkDescriptorPool DeferredLightingDescriptorPool;
+		std::vector<VkDescriptorSet> DeferredLightingDescriptorSets;
+		VkPipelineLayout DeferredLightingPipelineLayout;
+		std::vector<VkPipeline> DeferredLightingPipelines;
+#endif
+	} BasePass;
 
 	struct FImGuiPass {
 		VkRenderPass RenderPass;
@@ -1401,10 +1400,6 @@ public:
 		CreateShadowmapPass(); // Create shadow depths render pass
 		CreateSkydomePass(); // Create sky dome sphere render pass
 		CreateBasePass(); // Create base scene forward render pass
-		CreateBaseIndirectPass(); // Create base scene indirect render pass
-#if ENABLE_DEFEERED_SHADING
-		CreateBaseDeferredPass(); // Create base scene deferred render pass
-#endif
 		CreateBackgroundPass(); // Create background rect render pass
 		CreateCommandBuffer(); // Create command buffer from command before submit
 		CreateSyncObjects(); // Create sync fence to ensure next frame render after the last frame finished
@@ -1666,7 +1661,7 @@ public:
 			return;
 		}
 		else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
-			throw std::runtime_error("failed to acquire swap chain image!");
+			throw std::runtime_error("[DrawFrane] Failed to acquire swap chain image!");
 		}
 
 		// update os inputs
@@ -1703,7 +1698,7 @@ public:
 
 		// Submit render command
 		if (vkQueueSubmit(GraphicsQueue, 1, &submitInfo, InFlightFences[CurrentFrame]) != VK_SUCCESS) {
-			throw std::runtime_error("failed to submit draw command buffer!");
+			throw std::runtime_error("[DrawFrame] Failed to submit draw command buffer!");
 		}
 
 		VkPresentInfoKHR presentInfo{};
@@ -1729,7 +1724,7 @@ protected:
 	{
 		if (bEnableValidationLayers && !CheckValidationLayerSupport())
 		{
-			throw std::runtime_error("validation layers requested, but not available!");
+			throw std::runtime_error("[CreateInstance] Validation layers requested, but not available!");
 		}
 
 		VkApplicationInfo appInfo{};
@@ -1785,7 +1780,7 @@ protected:
 
 		if (vkCreateInstance(&createInfo, Allocator, &Instance) != VK_SUCCESS)
 		{
-			throw std::runtime_error("failed to Create Instance!");
+			throw std::runtime_error("[CreateInstance] Failed to Create Instance!");
 		}
 	}
 
@@ -1805,7 +1800,7 @@ protected:
 
 		if (CreateDebugUtilsMessengerEXT(Instance, &createInfo, nullptr, &DebugMessenger) != VK_SUCCESS)
 		{
-			throw std::runtime_error("failed to set up debug messenger!");
+			throw std::runtime_error("[CreateDebugMessenger] Failed to set up debug messenger!");
 		}
 	}
 
@@ -1813,7 +1808,7 @@ protected:
 	void CreateWindowsSurface()
 	{
 		if (glfwCreateWindowSurface(Instance, Window, nullptr, &Surface) != VK_SUCCESS) {
-			throw std::runtime_error("failed to Create Window Surface!");
+			throw std::runtime_error("[CreateWindowsSurface] Failed to Create Window Surface!");
 		}
 	}
 
@@ -1825,7 +1820,7 @@ protected:
 
 		if (deviceCount == 0)
 		{
-			throw std::runtime_error("failed to find GPUs with Vulkan support!");
+			throw std::runtime_error("[SelectPhysicalDevice] Failed to find GPUs with Vulkan support!");
 		}
 
 		std::vector<VkPhysicalDevice> devices(deviceCount);
@@ -1842,7 +1837,7 @@ protected:
 
 		if (PhysicalDevice == VK_NULL_HANDLE)
 		{
-			throw std::runtime_error("failed to find a suitable GPU!");
+			throw std::runtime_error("[SelectPhysicalDevice] Failed to find a suitable GPU!");
 		}
 	}
 
@@ -1913,7 +1908,7 @@ protected:
 
 		if (vkCreateDevice(PhysicalDevice, &createInfo, nullptr, &Device) != VK_SUCCESS)
 		{
-			throw std::runtime_error("failed to Create logical Device!");
+			throw std::runtime_error("[CreateLogicalDevice] Failed to Create logical Device!");
 		}
 
 		vkGetDeviceQueue(Device, QueueFamilyIndices.GraphicsFamily.value(), 0, &GraphicsQueue);
@@ -1974,7 +1969,7 @@ protected:
 
 		if (vkCreateSwapchainKHR(Device, &createInfo, nullptr, &SwapChain) != VK_SUCCESS)
 		{
-			throw std::runtime_error("failed to Create swap chain!");
+			throw std::runtime_error("[CreateSwapChain] Failed to Create swap chain!");
 		}
 
 		vkGetSwapchainImagesKHR(Device, SwapChain, &imageCount, nullptr);
@@ -1999,16 +1994,12 @@ protected:
 		vkDeviceWaitIdle(Device);
 
 		CleanupSwapChain();
-#if ENABLE_DEFEERED_SHADING
-		CleanupBaseDeferredPass();
-#endif
+		CleanupBasePass();
 
 		CreateSwapChain();
 		CreateSwapChainImageViews();
 		CreateFramebuffers();
-#if ENABLE_DEFEERED_SHADING
-		CreateBaseDeferredPass();
-#endif
+		CreateBasePass();
 	}
 
 	/** Image View
@@ -2097,7 +2088,7 @@ protected:
 		renderPassCI.dependencyCount = 1;
 		renderPassCI.pDependencies = &dependency;
 		if (vkCreateRenderPass(Device, &renderPassCI, nullptr, &MainRenderPass) != VK_SUCCESS) {
-			throw std::runtime_error("failed to Create render pass!");
+			throw std::runtime_error("[CreateRenderPass] Failed to Create render pass!");
 		}
 	}
 
@@ -2129,7 +2120,7 @@ protected:
 
 			if (vkCreateFramebuffer(Device, &frameBufferCI, nullptr, &SwapChainFramebuffers[i]) != VK_SUCCESS)
 			{
-				throw std::runtime_error("failed to Create framebuffer!");
+				throw std::runtime_error("[CreateFramebuffers] Failed to Create framebuffer!");
 			}
 		}
 	}
@@ -2146,7 +2137,7 @@ protected:
 
 		if (vkCreateCommandPool(Device, &poolCI, nullptr, &CommandPool) != VK_SUCCESS)
 		{
-			throw std::runtime_error("failed to Create command pool!");
+			throw std::runtime_error("[CreateCommandPool] Failed to Create command pool!");
 		}
 	}
 
@@ -2275,7 +2266,7 @@ protected:
 		renderPassCreateInfo.pDependencies = dependencies.data();
 
 		if (vkCreateRenderPass(Device, &renderPassCreateInfo, nullptr, &ShadowmapPass.RenderPass)) {
-			throw std::runtime_error("failed to Create shadow map render pass!");
+			throw std::runtime_error("[CreateShadowmapPass] Failed to Create shadow map render pass!");
 		}
 
 		// Create frame buffer
@@ -2289,7 +2280,7 @@ protected:
 		frameBufferCreateInfo.layers = 1;
 
 		if (vkCreateFramebuffer(Device, &frameBufferCreateInfo, nullptr, &ShadowmapPass.FrameBuffer)) {
-			throw std::runtime_error("failed to Create shadow map frame buffer!");
+			throw std::runtime_error("[CreateShadowmapPass] Failed to Create shadow map frame buffer!");
 		}
 
 
@@ -2435,244 +2426,250 @@ protected:
 	void CreateBasePass()
 	{
 		//~ Begin create scene rendering pipeline and shaders
-		uint32_t SpecConstantsCount = GlobalConstants.SpecConstantsCount;
-		CreateDescriptorSetLayout(BasePass.DescriptorSetLayout);
-		BasePass.Pipelines.resize(SpecConstantsCount);
-		BasePass.PipelinesInstanced.resize(SpecConstantsCount);
-		CreatePipelineLayout(BasePass.PipelineLayout, BasePass.DescriptorSetLayout);
-		CreateGraphicsPipelines(
-			BasePass.Pipelines,
-			BasePass.PipelineLayout,
-			MainRenderPass,
-			"Shaders/Base_VS.spv",
-			"Shaders/Base_FS.spv",
-			ERenderFlags::VertexIndexed);
-		CreateGraphicsPipelines(
-			BasePass.PipelinesInstanced,
-			BasePass.PipelineLayout,
-			MainRenderPass,
-			"Shaders/BaseInstanced_VS.spv",
-			"Shaders/Base_FS.spv",
-			ERenderFlags::Instanced);
+		{
+			uint32_t SpecConstantsCount = GlobalConstants.SpecConstantsCount;
+			CreateDescriptorSetLayout(BasePass.DescriptorSetLayout);
+			BasePass.Pipelines.resize(SpecConstantsCount);
+			BasePass.PipelinesInstanced.resize(SpecConstantsCount);
+			CreatePipelineLayout(BasePass.PipelineLayout, BasePass.DescriptorSetLayout);
+			CreateGraphicsPipelines(
+				BasePass.Pipelines,
+				BasePass.PipelineLayout,
+				MainRenderPass,
+				"Shaders/Base_VS.spv",
+				"Shaders/Base_FS.spv",
+				ERenderFlags::VertexIndexed);
+			CreateGraphicsPipelines(
+				BasePass.PipelinesInstanced,
+				BasePass.PipelineLayout,
+				MainRenderPass,
+				"Shaders/BaseInstanced_VS.spv",
+				"Shaders/Base_FS.spv",
+				ERenderFlags::Instanced);
+		}
 		//~ End of creating scene, including VBO, UBO, textures, etc.
-	}
 
-	/** Create basic indirect rendering pipeline */
-	void CreateBaseIndirectPass()
-	{
-		// Create scene rendering pipeline and shaders
-		CreateDescriptorSetLayout(BaseIndirectPass.DescriptorSetLayout);
-		uint32_t SpecConstantsCount = GlobalConstants.SpecConstantsCount;
-		BaseIndirectPass.Pipelines.resize(SpecConstantsCount);
-		BaseIndirectPass.PipelinesInstanced.resize(SpecConstantsCount);
-		CreatePipelineLayout(BaseIndirectPass.PipelineLayout, BaseIndirectPass.DescriptorSetLayout);
-		CreateGraphicsPipelines(
-			BaseIndirectPass.Pipelines,
-			BaseIndirectPass.PipelineLayout,
-			MainRenderPass,
-			"Shaders/Base_VS.spv",
-			"Shaders/Base_FS.spv",
-			ERenderFlags::VertexIndexed);
-		CreateGraphicsPipelines(
-			BaseIndirectPass.PipelinesInstanced,
-			BaseIndirectPass.PipelineLayout,
-			MainRenderPass,
-			"Shaders/BaseInstanced_VS.spv",
-			"Shaders/Base_FS.spv",
-			ERenderFlags::Instanced);
-	}
-
-	/** Create GBuffer, used for deferred rendering */
-	void CreateBaseDeferredPass()
-	{
-		// Depth Stencil (Currently depth-only)
-		GBuffer.DepthStencilFormat = VK_FORMAT_D32_SFLOAT;
-		CreateImage(GBuffer.DepthStencilImage, GBuffer.DepthStencilMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.DepthStencilFormat,
-			VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-		CreateImageView(GBuffer.DepthStencilImageView, GBuffer.DepthStencilImage, GBuffer.DepthStencilFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
-		CreateSampler(GBuffer.DepthStencilSampler);
-
-		// Scene Color
-		GBuffer.SceneColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
-		CreateImage(GBuffer.SceneColorImage, GBuffer.SceneColorMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.SceneColorFormat,
-			VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-		CreateImageView(GBuffer.SceneColorImageView, GBuffer.SceneColorImage, GBuffer.SceneColorFormat, VK_IMAGE_ASPECT_COLOR_BIT);
-		CreateSampler(GBuffer.SceneColorSampler);
-
-		// GBufferA Normal+(CastShadow+Masked)
-		GBuffer.GBufferAFormat = VK_FORMAT_A2R10G10B10_UNORM_PACK32;
-		CreateImage(GBuffer.GBufferAImage, GBuffer.GBufferAMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.GBufferAFormat,
-			VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-		CreateImageView(GBuffer.GBufferAImageView, GBuffer.GBufferAImage, GBuffer.GBufferAFormat, VK_IMAGE_ASPECT_COLOR_BIT);
-		CreateSampler(GBuffer.GBufferASampler);
-
-		// GBufferB M+S+R+(ShadingModelID+SelectiveOutputMask) for unreal
-		// GBufferB M+S+R+(OpacityMask) for me
-		GBuffer.GBufferBFormat = VK_FORMAT_R8G8B8A8_UNORM;
-		CreateImage(GBuffer.GBufferBImage, GBuffer.GBufferBMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.GBufferBFormat,
-			VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-		CreateImageView(GBuffer.GBufferBImageView, GBuffer.GBufferBImage, GBuffer.GBufferBFormat, VK_IMAGE_ASPECT_COLOR_BIT);
-		CreateSampler(GBuffer.GBufferBSampler);
-
-		// GBufferC BaseColor + AO
-		GBuffer.GBufferCFormat = VK_FORMAT_R8G8B8A8_UNORM;
-		CreateImage(GBuffer.GBufferCImage, GBuffer.GBufferCMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.GBufferCFormat,
-			VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-		CreateImageView(GBuffer.GBufferCImageView, GBuffer.GBufferCImage, GBuffer.GBufferCFormat, VK_IMAGE_ASPECT_COLOR_BIT);
-		CreateSampler(GBuffer.GBufferCSampler);
-
-		// GBufferD Position + ID
-		GBuffer.GBufferDFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
-		CreateImage(GBuffer.GBufferDImage, GBuffer.GBufferDMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.GBufferDFormat,
-			VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-		CreateImageView(GBuffer.GBufferDImageView, GBuffer.GBufferDImage, GBuffer.GBufferDFormat, VK_IMAGE_ASPECT_COLOR_BIT);
-		CreateSampler(GBuffer.GBufferDSampler);
-
-		VkAttachmentDescription DepthAttachment{};
-		DepthAttachment.format = FindDepthFormat();
-		DepthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-		DepthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-		DepthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-		DepthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-		DepthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
-		DepthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		DepthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-
-		VkAttachmentDescription ColorAttachment{};
-		ColorAttachment.format = SwapChainImageFormat;
-		ColorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-		ColorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-		ColorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-		ColorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-		ColorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-		ColorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		ColorAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-		std::array<VkAttachmentDescription, GBUFFER_SAMPLER_NUMBER> AttachmentDescriptions = {};
-		for (size_t i = 0; i < GBUFFER_SAMPLER_NUMBER; i++)
+#if ENABLE_INDIRECT_DRAW
+		//~ Begin create indirect BasePass
 		{
-			AttachmentDescriptions[i] = ColorAttachment;
-			if (i == 0)
+			// Create scene rendering pipeline and shaders
+			CreateDescriptorSetLayout(BasePass.DescriptorSetLayout);
+			uint32_t SpecConstantsCount = GlobalConstants.SpecConstantsCount;
+			BasePass.Pipelines.resize(SpecConstantsCount);
+			BasePass.PipelinesInstanced.resize(SpecConstantsCount);
+			CreatePipelineLayout(BasePass.PipelineLayout, BasePass.DescriptorSetLayout);
+			CreateGraphicsPipelines(
+				BasePass.Pipelines,
+				BasePass.PipelineLayout,
+				MainRenderPass,
+				"Shaders/Base_VS.spv",
+				"Shaders/Base_FS.spv",
+				ERenderFlags::VertexIndexed);
+			CreateGraphicsPipelines(
+				BasePass.PipelinesInstanced,
+				BasePass.PipelineLayout,
+				MainRenderPass,
+				"Shaders/BaseInstanced_VS.spv",
+				"Shaders/Base_FS.spv",
+				ERenderFlags::Instanced);
+		}
+		//~ End create indirect BasePass
+#endif
+
+#if ENABLE_DEFEERED_SHADING
+		//~ Begin create deferred BasePass
+		{
+			// Depth Stencil (Currently depth-only)
+			GBuffer.DepthStencilFormat = VK_FORMAT_D32_SFLOAT;
+			CreateImage(GBuffer.DepthStencilImage, GBuffer.DepthStencilMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.DepthStencilFormat,
+				VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+			CreateImageView(GBuffer.DepthStencilImageView, GBuffer.DepthStencilImage, GBuffer.DepthStencilFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
+			CreateSampler(GBuffer.DepthStencilSampler);
+
+			// Scene Color
+			GBuffer.SceneColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
+			CreateImage(GBuffer.SceneColorImage, GBuffer.SceneColorMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.SceneColorFormat,
+				VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+			CreateImageView(GBuffer.SceneColorImageView, GBuffer.SceneColorImage, GBuffer.SceneColorFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+			CreateSampler(GBuffer.SceneColorSampler);
+
+			// GBufferA Normal+(CastShadow+Masked)
+			GBuffer.GBufferAFormat = VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+			CreateImage(GBuffer.GBufferAImage, GBuffer.GBufferAMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.GBufferAFormat,
+				VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+			CreateImageView(GBuffer.GBufferAImageView, GBuffer.GBufferAImage, GBuffer.GBufferAFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+			CreateSampler(GBuffer.GBufferASampler);
+
+			// GBufferB M+S+R+(ShadingModelID+SelectiveOutputMask) for unreal
+			// GBufferB M+S+R+(OpacityMask) for me
+			GBuffer.GBufferBFormat = VK_FORMAT_R8G8B8A8_UNORM;
+			CreateImage(GBuffer.GBufferBImage, GBuffer.GBufferBMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.GBufferBFormat,
+				VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+			CreateImageView(GBuffer.GBufferBImageView, GBuffer.GBufferBImage, GBuffer.GBufferBFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+			CreateSampler(GBuffer.GBufferBSampler);
+
+			// GBufferC BaseColor + AO
+			GBuffer.GBufferCFormat = VK_FORMAT_R8G8B8A8_UNORM;
+			CreateImage(GBuffer.GBufferCImage, GBuffer.GBufferCMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.GBufferCFormat,
+				VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+			CreateImageView(GBuffer.GBufferCImageView, GBuffer.GBufferCImage, GBuffer.GBufferCFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+			CreateSampler(GBuffer.GBufferCSampler);
+
+			// GBufferD Position + ID
+			GBuffer.GBufferDFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+			CreateImage(GBuffer.GBufferDImage, GBuffer.GBufferDMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.GBufferDFormat,
+				VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+			CreateImageView(GBuffer.GBufferDImageView, GBuffer.GBufferDImage, GBuffer.GBufferDFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+			CreateSampler(GBuffer.GBufferDSampler);
+
+			VkAttachmentDescription DepthAttachment{};
+			DepthAttachment.format = FindDepthFormat();
+			DepthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+			DepthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+			DepthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+			DepthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+			DepthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
+			DepthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+			DepthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+
+			VkAttachmentDescription ColorAttachment{};
+			ColorAttachment.format = SwapChainImageFormat;
+			ColorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+			ColorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+			ColorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+			ColorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+			ColorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+			ColorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+			ColorAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+			std::array<VkAttachmentDescription, GBUFFER_SAMPLER_NUMBER> AttachmentDescriptions = {};
+			for (size_t i = 0; i < GBUFFER_SAMPLER_NUMBER; i++)
 			{
-				AttachmentDescriptions[i] = DepthAttachment;
+				AttachmentDescriptions[i] = ColorAttachment;
+				if (i == 0)
+				{
+					AttachmentDescriptions[i] = DepthAttachment;
+				}
+				AttachmentDescriptions[i].format = GBuffer.Formats()[i];
 			}
-			AttachmentDescriptions[i].format = GBuffer.Formats()[i];
-		}
 
-		VkAttachmentReference DepthAttachmentRef = {};
-		std::vector<VkAttachmentReference> ColorAttachmentRefs;
-		for (size_t i = 0; i < GBUFFER_SAMPLER_NUMBER; i++)
-		{
-			if (i == 0)
+			VkAttachmentReference DepthAttachmentRef = {};
+			std::vector<VkAttachmentReference> ColorAttachmentRefs;
+			for (size_t i = 0; i < GBUFFER_SAMPLER_NUMBER; i++)
 			{
-				DepthAttachmentRef.attachment = static_cast<uint32_t>(i);
-				DepthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+				if (i == 0)
+				{
+					DepthAttachmentRef.attachment = static_cast<uint32_t>(i);
+					DepthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+				}
+				else
+				{
+					VkAttachmentReference AttachmentReference;
+					AttachmentReference.attachment = static_cast<uint32_t>(i);
+					AttachmentReference.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+					ColorAttachmentRefs.push_back(AttachmentReference);
+				}
 			}
-			else
+
+			VkSubpassDescription subpass{};
+			subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+			subpass.colorAttachmentCount = static_cast<uint32_t>(ColorAttachmentRefs.size());
+			subpass.pColorAttachments = ColorAttachmentRefs.data();
+			subpass.pDepthStencilAttachment = &DepthAttachmentRef;
+
+			std::array<VkSubpassDependency, 2> dependencies;
+			dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+			dependencies[0].dstSubpass = 0;
+			dependencies[0].srcStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+			dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+			dependencies[0].srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+			dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+			dependencies[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+
+			dependencies[1].srcSubpass = 0;
+			dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+			dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+			dependencies[1].dstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+			dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+			dependencies[1].dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+			dependencies[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+
+			VkRenderPassCreateInfo renderPassCI = {};
+			renderPassCI.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+			renderPassCI.attachmentCount = static_cast<uint32_t>(AttachmentDescriptions.size());
+			renderPassCI.pAttachments = AttachmentDescriptions.data();
+			renderPassCI.subpassCount = 1;
+			renderPassCI.pSubpasses = &subpass;
+			renderPassCI.dependencyCount = static_cast<uint32_t>(dependencies.size());
+			renderPassCI.pDependencies = dependencies.data();
+
+			if (vkCreateRenderPass(Device, &renderPassCI, nullptr, &BasePass.DeferredSceneRenderPass) != VK_SUCCESS) {
+				throw std::runtime_error("[CreateBaseDeferredPass] Failed to Create render pass!");
+			}
+
+			std::array<VkImageView, GBUFFER_SAMPLER_NUMBER> attachments;
+			for (size_t i = 0; i < GBUFFER_SAMPLER_NUMBER; i++)
 			{
-				VkAttachmentReference AttachmentReference;
-				AttachmentReference.attachment = static_cast<uint32_t>(i);
-				AttachmentReference.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-				ColorAttachmentRefs.push_back(AttachmentReference);
+				attachments[i] = GBuffer.ImageViews()[i];
 			}
+
+			VkFramebufferCreateInfo frameBufferCI{};
+			frameBufferCI.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+			frameBufferCI.renderPass = BasePass.DeferredSceneRenderPass;
+			frameBufferCI.attachmentCount = static_cast<uint32_t>(attachments.size());
+			frameBufferCI.pAttachments = attachments.data();
+			frameBufferCI.width = SwapChainExtent.width;
+			frameBufferCI.height = SwapChainExtent.height;
+			frameBufferCI.layers = 1;
+
+			if (vkCreateFramebuffer(Device, &frameBufferCI, nullptr, &BasePass.DeferredSceneFrameBuffer) != VK_SUCCESS)
+			{
+				throw std::runtime_error("[CreateBaseDeferredPass] Failed to Create framebuffer!");
+			}
+
+			CreateDescriptorSetLayout(BasePass.DeferredSceneDescriptorSetLayout, ERenderFlags::DeferredScene);
+			BasePass.DeferredScenePipelines.resize(GlobalConstants.SpecConstantsCount);
+			BasePass.DeferredScenePipelinesInstanced.resize(GlobalConstants.SpecConstantsCount);
+			CreatePipelineLayout(BasePass.DeferredScenePipelineLayout, BasePass.DeferredSceneDescriptorSetLayout);
+			CreateGraphicsPipelines(
+				BasePass.DeferredScenePipelines,
+				BasePass.DeferredScenePipelineLayout,
+				BasePass.DeferredSceneRenderPass,
+				"Shaders/Base_VS.spv",
+				"Shaders/BaseScene_FS.spv",
+				ERenderFlags::VertexIndexed | ERenderFlags::DeferredScene);
+			CreateGraphicsPipelines(
+				BasePass.DeferredScenePipelinesInstanced,
+				BasePass.DeferredScenePipelineLayout,
+				BasePass.DeferredSceneRenderPass,
+				"Shaders/BaseInstanced_VS.spv",
+				"Shaders/BaseScene_FS.spv",
+				ERenderFlags::Instanced | ERenderFlags::DeferredScene);
+
+			/** Create DescriptorSetLayout for Lighting*/
+			CreateDescriptorSetLayout(BasePass.DeferredLightingDescriptorSetLayout, ERenderFlags::DeferredLighting);
+
+			/** Create DescriptorPool and DescriptorSets for Lighting*/
+			CreateDescriptorSet(
+				BasePass.DeferredLightingDescriptorSets,
+				BasePass.DeferredLightingDescriptorPool,
+				BasePass.DeferredLightingDescriptorSetLayout,
+				GBuffer.ImageViews(),
+				GBuffer.Samplers(),
+				ERenderFlags::DeferredLighting);
+
+			CreatePipelineLayout(BasePass.DeferredLightingPipelineLayout, BasePass.DeferredLightingDescriptorSetLayout);
+			BasePass.DeferredLightingPipelines.resize(GlobalConstants.SpecConstantsCount);
+			CreateGraphicsPipelines(
+				BasePass.DeferredLightingPipelines,
+				BasePass.DeferredLightingPipelineLayout,
+				MainRenderPass,
+				"Shaders/Background_VS.spv",
+				"Shaders/BaseLighting_FS.spv",
+				ERenderFlags::ScreenRect | ERenderFlags::NoDepthTest | ERenderFlags::DeferredLighting);
 		}
-
-		VkSubpassDescription subpass{};
-		subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-		subpass.colorAttachmentCount = static_cast<uint32_t>(ColorAttachmentRefs.size());
-		subpass.pColorAttachments = ColorAttachmentRefs.data();
-		subpass.pDepthStencilAttachment = &DepthAttachmentRef;
-
-		std::array<VkSubpassDependency, 2> dependencies;
-		dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-		dependencies[0].dstSubpass = 0;
-		dependencies[0].srcStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-		dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-		dependencies[0].srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;
-		dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-		dependencies[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
-
-		dependencies[1].srcSubpass = 0;
-		dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-		dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-		dependencies[1].dstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-		dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-		dependencies[1].dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
-		dependencies[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
-
-		VkRenderPassCreateInfo renderPassCI = {};
-		renderPassCI.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-		renderPassCI.attachmentCount = static_cast<uint32_t>(AttachmentDescriptions.size());
-		renderPassCI.pAttachments = AttachmentDescriptions.data();
-		renderPassCI.subpassCount = 1;
-		renderPassCI.pSubpasses = &subpass;
-		renderPassCI.dependencyCount = static_cast<uint32_t>(dependencies.size());
-		renderPassCI.pDependencies = dependencies.data();
-
-		if (vkCreateRenderPass(Device, &renderPassCI, nullptr, &BaseDeferredPass.SceneRenderPass) != VK_SUCCESS) {
-			throw std::runtime_error("failed to Create render pass!");
-		}
-
-		std::array<VkImageView, GBUFFER_SAMPLER_NUMBER> attachments;
-		for (size_t i = 0; i < GBUFFER_SAMPLER_NUMBER; i++)
-		{
-			attachments[i] = GBuffer.ImageViews()[i];
-		}
-
-		VkFramebufferCreateInfo frameBufferCI{};
-		frameBufferCI.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-		frameBufferCI.renderPass = BaseDeferredPass.SceneRenderPass;
-		frameBufferCI.attachmentCount = static_cast<uint32_t>(attachments.size());
-		frameBufferCI.pAttachments = attachments.data();
-		frameBufferCI.width = SwapChainExtent.width;
-		frameBufferCI.height = SwapChainExtent.height;
-		frameBufferCI.layers = 1;
-
-		if (vkCreateFramebuffer(Device, &frameBufferCI, nullptr, &BaseDeferredPass.SceneFrameBuffer) != VK_SUCCESS)
-		{
-			throw std::runtime_error("failed to Create framebuffer!");
-		}
-
-		CreateDescriptorSetLayout(BaseDeferredPass.SceneDescriptorSetLayout, ERenderFlags::DeferredScene);
-		BaseDeferredPass.ScenePipelines.resize(GlobalConstants.SpecConstantsCount);
-		BaseDeferredPass.ScenePipelinesInstanced.resize(GlobalConstants.SpecConstantsCount);
-		CreatePipelineLayout(BaseDeferredPass.ScenePipelineLayout, BaseDeferredPass.SceneDescriptorSetLayout);
-		CreateGraphicsPipelines(
-			BaseDeferredPass.ScenePipelines,
-			BaseDeferredPass.ScenePipelineLayout,
-			BaseDeferredPass.SceneRenderPass,
-			"Shaders/Base_VS.spv",
-			"Shaders/BaseScene_FS.spv",
-			ERenderFlags::VertexIndexed | ERenderFlags::DeferredScene);
-		CreateGraphicsPipelines(
-			BaseDeferredPass.ScenePipelinesInstanced,
-			BaseDeferredPass.ScenePipelineLayout,
-			BaseDeferredPass.SceneRenderPass,
-			"Shaders/BaseInstanced_VS.spv",
-			"Shaders/BaseScene_FS.spv",
-			ERenderFlags::Instanced | ERenderFlags::DeferredScene);
-
-		/** Create DescriptorSetLayout for Lighting*/
-		CreateDescriptorSetLayout(BaseDeferredPass.LightingDescriptorSetLayout, ERenderFlags::DeferredLighting);
-
-		/** Create DescriptorPool and DescriptorSets for Lighting*/
-		CreateDescriptorSet(
-			BaseDeferredPass.LightingDescriptorSets,
-			BaseDeferredPass.LightingDescriptorPool,
-			BaseDeferredPass.LightingDescriptorSetLayout,
-			GBuffer.ImageViews(),
-			GBuffer.Samplers(),
-			ERenderFlags::DeferredLighting);
-
-		CreatePipelineLayout(BaseDeferredPass.LightingPipelineLayout, BaseDeferredPass.LightingDescriptorSetLayout);
-		BaseDeferredPass.LightingPipelines.resize(GlobalConstants.SpecConstantsCount);
-		CreateGraphicsPipelines(
-			BaseDeferredPass.LightingPipelines,
-			BaseDeferredPass.LightingPipelineLayout,
-			MainRenderPass,
-			"Shaders/Background_VS.spv",
-			"Shaders/BaseLighting_FS.spv",
-			ERenderFlags::ScreenRect | ERenderFlags::NoDepthTest | ERenderFlags::DeferredLighting);
+		//~ End create deferred BasePass
+#endif
 	}
 
 	/** Create command buffer, multiple CPU Cores can send commands to the CommandBuffer in parallel, making full use of the multi-core performance of the CPU */
@@ -2687,7 +2684,7 @@ protected:
 		allocInfo.commandBufferCount = (uint32_t)CommandBuffers.size();
 
 		if (vkAllocateCommandBuffers(Device, &allocInfo, CommandBuffers.data()) != VK_SUCCESS) {
-			throw std::runtime_error("failed to allocate command buffers!");
+			throw std::runtime_error("[CreateCommandBuffer] Failed to allocate command buffers!");
 		}
 	}
 
@@ -2710,7 +2707,7 @@ protected:
 				vkCreateSemaphore(Device, &semaphoreInfo, nullptr, &RenderFinishedSemaphores[i]) != VK_SUCCESS ||
 				vkCreateFence(Device, &fenceInfo, nullptr, &InFlightFences[i]) != VK_SUCCESS) {
 
-				throw std::runtime_error("failed to Create synchronization objects for a frame!");
+				throw std::runtime_error("[CreateSyncObjects] Failed to Create synchronization objects for a frame!");
 			}
 		}
 	}
@@ -2771,7 +2768,7 @@ protected:
 		renderPassCI.dependencyCount = 1;
 		renderPassCI.pDependencies = &dependency;
 		if (vkCreateRenderPass(Device, &renderPassCI, nullptr, &ImGuiPass.RenderPass) != VK_SUCCESS) {
-			throw std::runtime_error("failed to Create render pass!");
+			throw std::runtime_error("[CreateImGuiForVulkan] Failed to Create render pass!");
 		}
 
 		VkDescriptorPoolSize pool_sizes[] =
@@ -2787,7 +2784,7 @@ protected:
 		pool_info.pPoolSizes = pool_sizes;
 
 		if (vkCreateDescriptorPool(Device, &pool_info, Allocator, &ImGuiPass.DescriptorPool) != VK_SUCCESS) {
-			throw std::runtime_error("failed to create descriptor pool!");
+			throw std::runtime_error("[CreateImGuiForVulkan] Failed to create descriptor pool!");
 		}
 
 		// Init ImGui
@@ -2821,7 +2818,7 @@ protected:
 				if (err != 0)
 				{
 					std::cerr << "VkResult " << err << " is not VK_SUCCESS" << std::endl;
-					throw std::runtime_error("failed to create ImGui_ImplVulkan_InitInfo!");
+					throw std::runtime_error("[CreateImGuiForVulkan] Failed to create ImGui_ImplVulkan_InitInfo!");
 				}
 			};
 		ImGui_ImplVulkan_Init(&init_info);
@@ -2905,7 +2902,7 @@ protected:
 		// 开始记录指令
 		if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS)
 		{
-			throw std::runtime_error("failed to begin recording command buffer!");
+			throw std::runtime_error("[RecordCommandBuffer] Failed to begin recording command buffer!");
 		}
 
 		// 【阴影】渲染阴影
@@ -3090,8 +3087,8 @@ protected:
 		{
 			VkRenderPassBeginInfo renderPassInfo{};
 			renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-			renderPassInfo.renderPass = BaseDeferredPass.SceneRenderPass;
-			renderPassInfo.framebuffer = BaseDeferredPass.SceneFrameBuffer;
+			renderPassInfo.renderPass = BasePass.DeferredSceneRenderPass;
+			renderPassInfo.framebuffer = BasePass.DeferredSceneFrameBuffer;
 			renderPassInfo.renderArea.offset = { 0, 0 };
 			renderPassInfo.renderArea.extent = SwapChainExtent;
 
@@ -3112,12 +3109,12 @@ protected:
 			vkCmdSetScissor(commandBuffer, 0, 1, &mainScissor);
 
 			// 【延迟渲染】渲染场景
-			for (size_t i = 0; i < BaseDeferredPass.RenderDeferredObjects.size(); i++)
+			for (size_t i = 0; i < BasePass.RenderDeferredObjects.size(); i++)
 			{
 				uint32_t SpecConstants = GlobalConstants.SpecConstants;
-				VkPipeline baseScenePassPipeline = BaseDeferredPass.ScenePipelines[SpecConstants];
+				VkPipeline baseScenePassPipeline = BasePass.DeferredScenePipelines[SpecConstants];
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, baseScenePassPipeline);
-				FRenderDeferredObject* renderObject = BaseDeferredPass.RenderDeferredObjects[i];
+				FRenderDeferredObject* renderObject = BasePass.RenderDeferredObjects[i];
 				VkBuffer objectVertexBuffers[] = { renderObject->MeshData.VertexBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
@@ -3125,17 +3122,17 @@ protected:
 				vkCmdBindDescriptorSets(
 					commandBuffer,
 					VK_PIPELINE_BIND_POINT_GRAPHICS,
-					BaseDeferredPass.ScenePipelineLayout, 0, 1,
+					BasePass.DeferredScenePipelineLayout, 0, 1,
 					&renderObject->MateData.DescriptorSets[CurrentFrame], 0, nullptr);
 				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderObject->MeshData.Indices.size()), 1, 0, 0, 0);
 			}
 			// 【延迟渲染】渲染 Instanced 场景
-			for (size_t i = 0; i < BaseDeferredPass.RenderDeferredInstancedObjects.size(); i++)
+			for (size_t i = 0; i < BasePass.RenderDeferredInstancedObjects.size(); i++)
 			{
 				uint32_t SpecConstants = GlobalConstants.SpecConstants;
-				VkPipeline BaseScenePassPipelineInstanced = BaseDeferredPass.ScenePipelinesInstanced[SpecConstants];
+				VkPipeline BaseScenePassPipelineInstanced = BasePass.DeferredScenePipelinesInstanced[SpecConstants];
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BaseScenePassPipelineInstanced);
-				FRenderDeferredInstancedObject* renderInstancedObject = BaseDeferredPass.RenderDeferredInstancedObjects[i];
+				FRenderDeferredInstancedObject* renderInstancedObject = BasePass.RenderDeferredInstancedObjects[i];
 				VkBuffer objectVertexBuffers[] = { renderInstancedObject->MeshData.VertexBuffer };
 				VkBuffer objectInstanceBuffers[] = { renderInstancedObject->MeshData.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
@@ -3145,7 +3142,7 @@ protected:
 				vkCmdBindDescriptorSets(
 					commandBuffer,
 					VK_PIPELINE_BIND_POINT_GRAPHICS,
-					BaseDeferredPass.ScenePipelineLayout, 0, 1,
+					BasePass.DeferredScenePipelineLayout, 0, 1,
 					&renderInstancedObject->MateData.DescriptorSets[CurrentFrame], 0, nullptr);
 				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderInstancedObject->MeshData.Indices.size()), renderInstancedObject->InstCount, 0, 0, 0);
 			}
@@ -3208,9 +3205,9 @@ protected:
 			vkCmdSetViewport(commandBuffer, 0, 1, &mainWindow);
 
 			// 【主场景】渲染延迟渲染灯光
-			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BaseDeferredPass.LightingPipelines[GlobalConstants.SpecConstants]);
-			vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BaseDeferredPass.LightingPipelineLayout, 0, 1, &BaseDeferredPass.LightingDescriptorSets[CurrentFrame], 0, nullptr);
-			vkCmdPushConstants(commandBuffer, BaseDeferredPass.LightingPipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
+			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BasePass.DeferredLightingPipelines[GlobalConstants.SpecConstants]);
+			vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BasePass.DeferredLightingPipelineLayout, 0, 1, &BasePass.DeferredLightingDescriptorSets[CurrentFrame], 0, nullptr);
+			vkCmdPushConstants(commandBuffer, BasePass.DeferredLightingPipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
 			vkCmdDraw(commandBuffer, 6, 1, 0, 0);
 #endif
 			// 【主场景】设置前向渲染视口
@@ -3254,12 +3251,13 @@ protected:
 				vkCmdPushConstants(commandBuffer, BasePass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
 				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderInstancedObject->MeshData.Indices.size()), renderInstancedObject->InstCount, 0, 0, 0);
 			}
+#if ENABLE_INDIRECT_DRAW
 			// 【主场景】渲染 Indirect 场景
-			for (size_t i = 0; i < BaseIndirectPass.RenderIndirectObjects.size(); i++)
+			for (size_t i = 0; i < BasePass.RenderIndirectObjects.size(); i++)
 			{
-				VkPipeline indirectScenePassPipeline = BaseIndirectPass.Pipelines[GlobalConstants.SpecConstants];
+				VkPipeline indirectScenePassPipeline = BasePass.IndirectPipelines[GlobalConstants.SpecConstants];
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, indirectScenePassPipeline);
-				FRenderObjectIndirect* RenderIndirectObject = BaseIndirectPass.RenderIndirectObjects[i];
+				FRenderObjectIndirect* RenderIndirectObject = BasePass.RenderIndirectObjects[i];
 				VkBuffer objectVertexBuffers[] = { RenderIndirectObject->MeshData.VertexBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
@@ -3267,9 +3265,9 @@ protected:
 				vkCmdBindDescriptorSets(
 					commandBuffer,
 					VK_PIPELINE_BIND_POINT_GRAPHICS,
-					BaseIndirectPass.PipelineLayout, 0, 1,
+					BasePass.IndirectPipelineLayout, 0, 1,
 					&RenderIndirectObject->MateData.DescriptorSets[CurrentFrame], 0, nullptr);
-				vkCmdPushConstants(commandBuffer, BaseIndirectPass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
+				vkCmdPushConstants(commandBuffer, BasePass.IndirectPipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
 				uint32_t indirectDrawCount = static_cast<uint32_t>(RenderIndirectObject->IndirectCommands.size());
 				if (IsSupportMultiDrawIndirect(PhysicalDevice))
 				{
@@ -3312,11 +3310,11 @@ protected:
 				}
 			}
 			// 【主场景】渲染 Indirect Instanced 场景
-			for (size_t i = 0; i < BaseIndirectPass.RenderIndirectInstancedObjects.size(); i++)
+			for (size_t i = 0; i < BasePass.RenderIndirectInstancedObjects.size(); i++)
 			{
-				VkPipeline indirectScenePassPipelineInstanced = BaseIndirectPass.PipelinesInstanced[GlobalConstants.SpecConstants];
+				VkPipeline indirectScenePassPipelineInstanced = BasePass.IndirectPipelinesInstanced[GlobalConstants.SpecConstants];
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, indirectScenePassPipelineInstanced);
-				FRenderInstancedObjectIndirect* RenderIndirectInstancedObject = BaseIndirectPass.RenderIndirectInstancedObjects[i];
+				FRenderInstancedObjectIndirect* RenderIndirectInstancedObject = BasePass.RenderIndirectInstancedObjects[i];
 				VkBuffer objectVertexBuffers[] = { RenderIndirectInstancedObject->MeshData.VertexBuffer };
 				VkBuffer objectInstanceBuffers[] = { RenderIndirectInstancedObject->MeshData.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
@@ -3328,9 +3326,9 @@ protected:
 				vkCmdBindDescriptorSets(
 					commandBuffer,
 					VK_PIPELINE_BIND_POINT_GRAPHICS,
-					BaseIndirectPass.PipelineLayout, 0, 1,
+					BasePass.IndirectPipelineLayout, 0, 1,
 					&RenderIndirectInstancedObject->MateData.DescriptorSets[CurrentFrame], 0, nullptr);
-				vkCmdPushConstants(commandBuffer, BaseIndirectPass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
+				vkCmdPushConstants(commandBuffer, BasePass.IndirectPipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
 				uint32_t indirectDrawCount = static_cast<uint32_t>(RenderIndirectInstancedObject->IndirectCommands.size());
 				if (IsSupportMultiDrawIndirect(PhysicalDevice))
 				{
@@ -3355,7 +3353,7 @@ protected:
 					}
 				}
 			}
-
+#endif
 			// 【主场景】渲染天空球
 			if (SkydomePass.EnableSkydome && GlobalConstants.SpecConstants == 0 /* Don't render if on debug mode*/)
 			{
@@ -3417,7 +3415,7 @@ protected:
         // 结束记录指令
 		if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
 		{
-			throw std::runtime_error("failed to record command buffer!");
+			throw std::runtime_error("[RecordCommandBuffer] Failed to record command buffer!");
 		}
 	}
 
@@ -3440,94 +3438,22 @@ protected:
 		CleanupImgui();
 #endif
 
-        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
-		{
-			vkDestroyBuffer(Device, BaseUniformBuffers[i], nullptr);
-			vkFreeMemory(Device, BaseUniformBuffersMemory[i], nullptr);
-		}
-
-		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
-		{
-			vkDestroyBuffer(Device, ViewUniformBuffers[i], nullptr);
-			vkFreeMemory(Device, ViewUniformBuffersMemory[i], nullptr);
-		}
+		// Clean up UniformBuffers
+		CleanupUniformBuffers();
 
 		CleanupCubeMaps();
 
 		// Clean up ShadowmapPass
-		vkDestroyRenderPass(Device, ShadowmapPass.RenderPass, nullptr);
-		vkDestroyFramebuffer(Device, ShadowmapPass.FrameBuffer, nullptr);
-		vkDestroyDescriptorPool(Device, ShadowmapPass.DescriptorPool, nullptr);
-		vkDestroyDescriptorSetLayout(Device, ShadowmapPass.DescriptorSetLayout, nullptr);
-		vkDestroyPipelineLayout(Device, ShadowmapPass.PipelineLayout, nullptr);
-		for (size_t i = 0; i < ShadowmapPass.Pipelines.size(); i++)
-		{
-			vkDestroyPipeline(Device, ShadowmapPass.Pipelines[i], nullptr);
-		}
-		for (size_t i = 0; i < ShadowmapPass.PipelinesInstanced.size(); i++)
-		{
-			vkDestroyPipeline(Device, ShadowmapPass.PipelinesInstanced[i], nullptr);
-		}
-		vkDestroyImageView(Device, ShadowmapPass.ImageView, nullptr);
-		vkDestroySampler(Device, ShadowmapPass.Sampler, nullptr);
-		vkDestroyImage(Device, ShadowmapPass.Image, nullptr);
-		vkFreeMemory(Device, ShadowmapPass.Memory, nullptr);
-		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
-		{
-			vkDestroyBuffer(Device, ShadowmapPass.UniformBuffers[i], nullptr);
-			vkFreeMemory(Device, ShadowmapPass.UniformBuffersMemory[i], nullptr);
-		}
+		CleanupShadowPass();
 
 		// Clean up SkydomePass
-		vkDestroyDescriptorSetLayout(Device, SkydomePass.DescriptorSetLayout, nullptr);
-		vkDestroyPipelineLayout(Device, SkydomePass.PipelineLayout, nullptr);
-		for (size_t i = 0; i < SkydomePass.Pipelines.size(); i++)
-		{
-			vkDestroyPipeline(Device, SkydomePass.Pipelines[i], nullptr);
-		}
-		vkDestroyDescriptorPool(Device, SkydomePass.DescriptorPool, nullptr);
-		vkDestroyBuffer(Device, SkydomePass.SkydomeMesh.VertexBuffer, nullptr);
-		vkFreeMemory(Device, SkydomePass.SkydomeMesh.VertexBufferMemory, nullptr);
-		vkDestroyBuffer(Device, SkydomePass.SkydomeMesh.IndexBuffer, nullptr);
-		vkFreeMemory(Device, SkydomePass.SkydomeMesh.IndexBufferMemory, nullptr);
-		CleanupSkydome();
+		CleanupSkydomePass();
 
 		// Clean up BackgroundPass
-		vkDestroyDescriptorSetLayout(Device, BackgroundPass.DescriptorSetLayout, nullptr);
-		vkDestroyPipelineLayout(Device, BackgroundPass.PipelineLayout, nullptr);
-		for (size_t i = 0; i < BackgroundPass.Pipelines.size(); i++)
-		{
-			vkDestroyPipeline(Device, BackgroundPass.Pipelines[i], nullptr);
-		}
-		vkDestroyDescriptorPool(Device, BackgroundPass.DescriptorPool, nullptr);
-		CleanupBackground();
+		CleanupBackgroundPass();
 
-		// Clean up BasePass
-		vkDestroyDescriptorSetLayout(Device, BasePass.DescriptorSetLayout, nullptr);
-		vkDestroyPipelineLayout(Device, BasePass.PipelineLayout, nullptr);
-		for (size_t i = 0; i < BasePass.Pipelines.size(); i++)
-		{
-			assert(BasePass.Pipelines.size() == BasePass.PipelinesInstanced.size());
-			vkDestroyPipeline(Device, BasePass.Pipelines[i], nullptr);
-			vkDestroyPipeline(Device, BasePass.PipelinesInstanced[i], nullptr);
-		}
-
-		// Clean up BaseIndirectPass
-		vkDestroyDescriptorSetLayout(Device, BaseIndirectPass.DescriptorSetLayout, nullptr);
-		vkDestroyPipelineLayout(Device, BaseIndirectPass.PipelineLayout, nullptr);
-		for (size_t i = 0; i < BaseIndirectPass.Pipelines.size(); i++)
-		{
-			assert(BaseIndirectPass.Pipelines.size() == BaseIndirectPass.PipelinesInstanced.size());
-			vkDestroyPipeline(Device, BaseIndirectPass.Pipelines[i], nullptr);
-			vkDestroyPipeline(Device, BaseIndirectPass.PipelinesInstanced[i], nullptr);
-		}
-
-		// Clean up BaseDeferredPass
-#if ENABLE_DEFEERED_SHADING
-		CleanupBaseDeferredPass();
-#endif
-
-		CleanupScene();
+		// Cleanup BasePass
+		CleanupBasePass();
 
 		vkFreeCommandBuffers(Device, CommandPool, static_cast<uint32_t>(CommandBuffers.size()), CommandBuffers.data());
 		vkDestroyCommandPool(Device, CommandPool, nullptr);
@@ -3560,7 +3486,106 @@ protected:
 		vkDestroySwapchainKHR(Device, SwapChain, nullptr);
 	}
 
-	void CleanupScene()
+	void CleanupUniformBuffers()
+	{
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+		{
+			vkDestroyBuffer(Device, BaseUniformBuffers[i], nullptr);
+			vkFreeMemory(Device, BaseUniformBuffersMemory[i], nullptr);
+		}
+
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+		{
+			vkDestroyBuffer(Device, ViewUniformBuffers[i], nullptr);
+			vkFreeMemory(Device, ViewUniformBuffersMemory[i], nullptr);
+		}
+	}
+
+	void CleanupShadowPass()
+	{
+		vkDestroyRenderPass(Device, ShadowmapPass.RenderPass, nullptr);
+		vkDestroyFramebuffer(Device, ShadowmapPass.FrameBuffer, nullptr);
+		vkDestroyDescriptorPool(Device, ShadowmapPass.DescriptorPool, nullptr);
+		vkDestroyDescriptorSetLayout(Device, ShadowmapPass.DescriptorSetLayout, nullptr);
+		vkDestroyPipelineLayout(Device, ShadowmapPass.PipelineLayout, nullptr);
+		for (size_t i = 0; i < ShadowmapPass.Pipelines.size(); i++)
+		{
+			vkDestroyPipeline(Device, ShadowmapPass.Pipelines[i], nullptr);
+		}
+		for (size_t i = 0; i < ShadowmapPass.PipelinesInstanced.size(); i++)
+		{
+			vkDestroyPipeline(Device, ShadowmapPass.PipelinesInstanced[i], nullptr);
+		}
+		vkDestroyImageView(Device, ShadowmapPass.ImageView, nullptr);
+		vkDestroySampler(Device, ShadowmapPass.Sampler, nullptr);
+		vkDestroyImage(Device, ShadowmapPass.Image, nullptr);
+		vkFreeMemory(Device, ShadowmapPass.Memory, nullptr);
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+		{
+			vkDestroyBuffer(Device, ShadowmapPass.UniformBuffers[i], nullptr);
+			vkFreeMemory(Device, ShadowmapPass.UniformBuffersMemory[i], nullptr);
+		}
+	}
+
+	void CleanupCubeMaps()
+	{
+		vkDestroyImageView(Device, CubemapImageView, nullptr);
+		vkDestroySampler(Device, CubemapSampler, nullptr);
+		vkDestroyImage(Device, CubemapImage, nullptr);
+		vkFreeMemory(Device, CubemapImageMemory, nullptr);
+	}
+
+	void CleanupSkydomeResource()
+	{
+		for (size_t i = 0; i < SkydomePass.ImageViews.size(); i++)
+		{
+			vkDestroyImageView(Device, SkydomePass.ImageViews[i], nullptr);
+			vkDestroySampler(Device, SkydomePass.ImageSamplers[i], nullptr);
+			vkDestroyImage(Device, SkydomePass.Images[i], nullptr);
+			vkFreeMemory(Device, SkydomePass.ImageMemorys[i], nullptr);
+		}
+	}
+
+	void CleanupSkydomePass()
+	{
+		vkDestroyDescriptorSetLayout(Device, SkydomePass.DescriptorSetLayout, nullptr);
+		vkDestroyPipelineLayout(Device, SkydomePass.PipelineLayout, nullptr);
+		for (size_t i = 0; i < SkydomePass.Pipelines.size(); i++)
+		{
+			vkDestroyPipeline(Device, SkydomePass.Pipelines[i], nullptr);
+		}
+		vkDestroyDescriptorPool(Device, SkydomePass.DescriptorPool, nullptr);
+		vkDestroyBuffer(Device, SkydomePass.SkydomeMesh.VertexBuffer, nullptr);
+		vkFreeMemory(Device, SkydomePass.SkydomeMesh.VertexBufferMemory, nullptr);
+		vkDestroyBuffer(Device, SkydomePass.SkydomeMesh.IndexBuffer, nullptr);
+		vkFreeMemory(Device, SkydomePass.SkydomeMesh.IndexBufferMemory, nullptr);
+		CleanupSkydomeResource();
+	}
+
+	void CleanupBackgroundResource()
+	{
+		for (size_t i = 0; i < BackgroundPass.ImageViews.size(); i++)
+		{
+			vkDestroyImageView(Device, BackgroundPass.ImageViews[i], nullptr);
+			vkDestroySampler(Device, BackgroundPass.ImageSamplers[i], nullptr);
+			vkDestroyImage(Device, BackgroundPass.Images[i], nullptr);
+			vkFreeMemory(Device, BackgroundPass.ImageMemorys[i], nullptr);
+		}
+	}
+
+	void CleanupBackgroundPass()
+	{
+		vkDestroyDescriptorSetLayout(Device, BackgroundPass.DescriptorSetLayout, nullptr);
+		vkDestroyPipelineLayout(Device, BackgroundPass.PipelineLayout, nullptr);
+		for (size_t i = 0; i < BackgroundPass.Pipelines.size(); i++)
+		{
+			vkDestroyPipeline(Device, BackgroundPass.Pipelines[i], nullptr);
+		}
+		vkDestroyDescriptorPool(Device, BackgroundPass.DescriptorPool, nullptr);
+		CleanupBackgroundResource();
+	}
+
+	void CleanupBasePassResources()
 	{
 		// Clean up Scene
 		for (size_t i = 0; i < Scene.RenderObjects.size(); i++)
@@ -3618,54 +3643,48 @@ protected:
 		Scene.Reset();
 	}
 
-	void CleanupCubeMaps()
+	void CleanupBasePass()
 	{
-		vkDestroyImageView(Device, CubemapImageView, nullptr);
-		vkDestroySampler(Device, CubemapSampler, nullptr);
-		vkDestroyImage(Device, CubemapImage, nullptr);
-		vkFreeMemory(Device, CubemapImageMemory, nullptr);
-	}
-
-	void CleanupSkydome()
-	{
-		for (size_t i = 0; i < SkydomePass.ImageViews.size(); i++)
+		// Clean up BasePass
+		vkDestroyDescriptorSetLayout(Device, BasePass.DescriptorSetLayout, nullptr);
+		vkDestroyPipelineLayout(Device, BasePass.PipelineLayout, nullptr);
+		for (size_t i = 0; i < BasePass.Pipelines.size(); i++)
 		{
-			vkDestroyImageView(Device, SkydomePass.ImageViews[i], nullptr);
-			vkDestroySampler(Device, SkydomePass.ImageSamplers[i], nullptr);
-			vkDestroyImage(Device, SkydomePass.Images[i], nullptr);
-			vkFreeMemory(Device, SkydomePass.ImageMemorys[i], nullptr);
+			assert(BasePass.Pipelines.size() == BasePass.PipelinesInstanced.size());
+			vkDestroyPipeline(Device, BasePass.Pipelines[i], nullptr);
+			vkDestroyPipeline(Device, BasePass.PipelinesInstanced[i], nullptr);
 		}
-	}
 
-	void CleanupBackground()
-	{
-		for (size_t i = 0; i < BackgroundPass.ImageViews.size(); i++)
+#if ENABLE_INDIRECT_DRAW
+		// Clean up BasePass
+		vkDestroyDescriptorSetLayout(Device, BasePass.DescriptorSetLayout, nullptr);
+		vkDestroyPipelineLayout(Device, BasePass.PipelineLayout, nullptr);
+		for (size_t i = 0; i < BasePass.Pipelines.size(); i++)
 		{
-			vkDestroyImageView(Device, BackgroundPass.ImageViews[i], nullptr);
-			vkDestroySampler(Device, BackgroundPass.ImageSamplers[i], nullptr);
-			vkDestroyImage(Device, BackgroundPass.Images[i], nullptr);
-			vkFreeMemory(Device, BackgroundPass.ImageMemorys[i], nullptr);
+			assert(BasePass.Pipelines.size() == BasePass.PipelinesInstanced.size());
+			vkDestroyPipeline(Device, BasePass.Pipelines[i], nullptr);
+			vkDestroyPipeline(Device, BasePass.PipelinesInstanced[i], nullptr);
 		}
-	}
+#endif
 
-	void CleanupBaseDeferredPass()
-	{
-		vkDestroyDescriptorSetLayout(Device, BaseDeferredPass.LightingDescriptorSetLayout, nullptr);
-		vkDestroyDescriptorPool(Device, BaseDeferredPass.LightingDescriptorPool, nullptr);
-		vkDestroyPipelineLayout(Device, BaseDeferredPass.LightingPipelineLayout, nullptr);
-		for (size_t i = 0; i < BaseDeferredPass.LightingPipelines.size(); i++)
+#if ENABLE_DEFEERED_SHADING
+		// Clean up BasePass
+		vkDestroyDescriptorSetLayout(Device, BasePass.DeferredLightingDescriptorSetLayout, nullptr);
+		vkDestroyDescriptorPool(Device, BasePass.DeferredLightingDescriptorPool, nullptr);
+		vkDestroyPipelineLayout(Device, BasePass.DeferredLightingPipelineLayout, nullptr);
+		for (size_t i = 0; i < BasePass.DeferredLightingPipelines.size(); i++)
 		{
-			vkDestroyPipeline(Device, BaseDeferredPass.LightingPipelines[i], nullptr);
+			vkDestroyPipeline(Device, BasePass.DeferredLightingPipelines[i], nullptr);
 		}
-		vkDestroyRenderPass(Device, BaseDeferredPass.SceneRenderPass, nullptr);
-		vkDestroyFramebuffer(Device, BaseDeferredPass.SceneFrameBuffer, nullptr);
-		vkDestroyDescriptorSetLayout(Device, BaseDeferredPass.SceneDescriptorSetLayout, nullptr);
-		vkDestroyPipelineLayout(Device, BaseDeferredPass.ScenePipelineLayout, nullptr);
-		for (size_t i = 0; i < BaseDeferredPass.ScenePipelines.size(); i++)
+		vkDestroyRenderPass(Device, BasePass.DeferredSceneRenderPass, nullptr);
+		vkDestroyFramebuffer(Device, BasePass.DeferredSceneFrameBuffer, nullptr);
+		vkDestroyDescriptorSetLayout(Device, BasePass.DeferredSceneDescriptorSetLayout, nullptr);
+		vkDestroyPipelineLayout(Device, BasePass.DeferredScenePipelineLayout, nullptr);
+		for (size_t i = 0; i < BasePass.DeferredScenePipelines.size(); i++)
 		{
-			assert(BaseDeferredPass.ScenePipelines.size() == BaseDeferredPass.ScenePipelinesInstanced.size());
-			vkDestroyPipeline(Device, BaseDeferredPass.ScenePipelines[i], nullptr);
-			vkDestroyPipeline(Device, BaseDeferredPass.ScenePipelinesInstanced[i], nullptr);
+			assert(BasePass.DeferredScenePipelines.size() == BasePass.DeferredScenePipelinesInstanced.size());
+			vkDestroyPipeline(Device, BasePass.DeferredScenePipelines[i], nullptr);
+			vkDestroyPipeline(Device, BasePass.DeferredScenePipelinesInstanced[i], nullptr);
 		}
 
 		vkDestroyImageView(Device, GBuffer.DepthStencilImageView, nullptr);
@@ -3692,6 +3711,9 @@ protected:
 		vkDestroySampler(Device, GBuffer.GBufferDSampler, nullptr);
 		vkDestroyImage(Device, GBuffer.GBufferDImage, nullptr);
 		vkFreeMemory(Device, GBuffer.GBufferDMemory, nullptr);
+#endif
+
+		CleanupBasePassResources();
 	}
 
 #if ENABLE_IMGUI_EDITOR
@@ -3709,6 +3731,7 @@ protected:
 public:
 	void CreateEngineWorld()
 	{
+#if ENABLE_GENERATE_WORLD
 		World.EnableSkydome = true;
 		World.OverrideSkydome = true;
 		World.SkydomeFileName = "grassland_night.png";
@@ -3735,7 +3758,7 @@ public:
 		FObject rock_01;
 		rock_01.ProfabName = "rock_01";
 		rock_01.InstCount = 1;
-		//World.Objects.push_back(rock_01);
+		World.Objects.push_back(rock_01);
 
 		FObject rock_02;
 		rock_02.ProfabName = "rock_02";
@@ -3744,7 +3767,7 @@ public:
 		rock_02.InstMaxRadius = 5.0f;
 		rock_02.InstMinScale = 0.2f;
 		rock_02.InstMaxScale = 0.5f;
-		//World.Objects.push_back(rock_02);
+		World.Objects.push_back(rock_02);
 
 		FObject grass_01;
 		grass_01.ProfabName = "grass_01";
@@ -3753,7 +3776,7 @@ public:
 		grass_01.InstMaxRadius = 8.0f;
 		grass_01.InstMinScale = 0.1f;
 		grass_01.InstMaxScale = 0.5f;
-		//World.Objects.push_back(grass_01);
+		World.Objects.push_back(grass_01);
 
 		FObject grass_02;
 		grass_02.ProfabName = "grass_02";
@@ -3762,7 +3785,7 @@ public:
 		grass_02.InstMaxRadius = 9.0f;
 		grass_02.InstMinScale = 0.1f;
 		grass_02.InstMaxScale = 0.5f;
-		//World.Objects.push_back(grass_02);
+		World.Objects.push_back(grass_02);
 
 		uint32_t DirectionalLightNum = 1;
 		FLight Moonlight;
@@ -3790,16 +3813,19 @@ public:
 			PointLight.LightInfo = glm::vec4(0.0, 0.0, 0.0, 0.0);
 			World.PointLights.push_back(PointLight);
 		}
+#endif
 	}
 	void CreateEngineScene()
 	{
-		CleanupScene();
+		if (Scene.bReload)
+		{
+			CleanupBasePass();
+		}
 
 		SkydomePass.EnableSkydome = World.EnableSkydome;
 		/* (1) Override skydome and background */
 		if (World.OverrideCubeMap)
 		{
-			// @TODO: Fix crash here when select new menu
 			CleanupCubeMaps();
 			CreateImageCubeContext(CubemapImage, CubemapImageMemory, CubemapImageView, CubemapSampler, CubemapMaxMips, {
 			ASSETS(World.CubeMapFileNames[0]),
@@ -3809,9 +3835,10 @@ public:
 			ASSETS(World.CubeMapFileNames[4]),
 			ASSETS(World.CubeMapFileNames[5]) });
 		}
+
 		if (World.OverrideSkydome)
 		{
-			CleanupSkydome();
+			CleanupSkydomeResource();
 			CreateImageContext(
 				SkydomePass.Images[0],
 				SkydomePass.ImageMemorys[0],
@@ -3824,7 +3851,7 @@ public:
 		BackgroundPass.EnableBackground = World.EnableBackground;
 		if (World.OverrideBackground)
 		{
-			CleanupBackground();
+			CleanupBackgroundResource();
 			CreateImageContext(
 				BackgroundPass.Images[0],
 				BackgroundPass.ImageMemorys[0],
@@ -3834,11 +3861,18 @@ public:
 			UpdateDescriptorSet(BackgroundPass.DescriptorSets, BackgroundPass.ImageViews, BackgroundPass.ImageSamplers, ERenderFlags::Background);
 		}
 
+		if (Scene.bReload)
+		{
+			CreateBasePass();
+		}
 		Scene.DescriptorSetLayout = &BasePass.DescriptorSetLayout;
-		Scene.IndirectDescriptorSetLayout = &BaseIndirectPass.DescriptorSetLayout;
-		Scene.DeferredSceneDescriptorSetLayout = &BaseDeferredPass.SceneDescriptorSetLayout;
-		Scene.DeferredLightingDescriptorSetLayout = &BaseDeferredPass.LightingDescriptorSetLayout;
-
+#if ENABLE_INDIRECT_DRAW
+		Scene.IndirectDescriptorSetLayout = &BasePass.IndirectDescriptorSetLayout;
+#endif
+#if ENABLE_DEFEERED_SHADING
+		Scene.DeferredSceneDescriptorSetLayout = &BasePass.DeferredSceneDescriptorSetLayout;
+		Scene.DeferredLightingDescriptorSetLayout = &BasePass.DeferredLightingDescriptorSetLayout;
+#endif
 		/* (2) Create base scene */
 		if (ENABLE_INDIRECT_DRAW)
 		{
@@ -3908,7 +3942,7 @@ public:
 					*Scene.DeferredSceneDescriptorSetLayout, Object.ProfabName);
 			}
 
-			UpdateDescriptorSet(BaseDeferredPass.LightingDescriptorSets, GBuffer.ImageViews(), GBuffer.Samplers(), ERenderFlags::DeferredLighting);
+			UpdateDescriptorSet(BasePass.DeferredLightingDescriptorSets, GBuffer.ImageViews(), GBuffer.Samplers(), ERenderFlags::DeferredLighting);
 #else
 				CreateRenderObjectsFromProfabs(
 					Scene.RenderInstancedObjects,
@@ -3921,7 +3955,6 @@ public:
 			}
 #endif
 		}
-		CreateRenderObjectsFromProfabs(Scene.RenderObjects, *Scene.DescriptorSetLayout, "rock_01");
 
 		/* 
 		* (3) Create light here
@@ -3939,6 +3972,12 @@ public:
 			View.SpotLights[i] = World.SpotLights[i];
 		}
 		View.LightsCount = glm::ivec4(World.DirectionalLights.size(), World.PointLights.size(), World.SpotLights.size(), CubemapMaxMips);
+	}
+
+	void RecreateEngineScene()
+	{
+		CleanupBasePass();
+
 	}
 
 	/** Update player inputs*/
@@ -4082,7 +4121,7 @@ public:
 			ImGui::Begin("Outliner", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_HorizontalScrollbar);
 			if (ImGui::TreeNode("Cameras"))
 			{
-				if (ImGui::TreeNodeEx("Main Camera", ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_Selected))
+				if (ImGui::TreeNodeEx("Main Camera", ImGuiTreeNodeFlags_Leaf))
 				{
 					ImGuiPass.SelectNodeIndex = 1;
 					ImGui::TreePop();
@@ -4095,15 +4134,15 @@ public:
 				{
 					ImGui::TreePop();
 				}
-				if (ImGui::TreeNode("Point Lights"))
+				if (World.PointLights.size() > 0 && ImGui::TreeNode("Point Lights"))
 				{
 					ImGui::TreePop();
 				}
-				if (ImGui::TreeNode("Point Lights"))
+				if (World.SpotLights.size() > 0 && ImGui::TreeNode("Point Lights"))
 				{
 					ImGui::TreePop();
 				}
-				if (ImGui::TreeNode("Mesh Lights"))
+				if (World.MeshLights.size() > 0 && ImGui::TreeNode("Mesh Lights"))
 				{
 					ImGui::TreePop();
 				}
@@ -4111,11 +4150,15 @@ public:
 			}
 			if (ImGui::TreeNode("ShadowPass"))
 			{
+				if (ImGui::TreeNodeEx("PCF Shadow Map", ImGuiTreeNodeFlags_Leaf))
+				{
+					ImGui::TreePop();
+				}
 				ImGui::TreePop();
 			}
 			if (ImGui::TreeNode("SkydomePass"))
 			{
-				if (ImGui::TreeNodeEx("Skydome", ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_Selected))
+				if (ImGui::TreeNodeEx("Skydome", ImGuiTreeNodeFlags_Leaf))
 				{
 					ImGui::TreePop();
 				}
@@ -4129,24 +4172,48 @@ public:
 				}
 				ImGui::TreePop();
 			}
-			if (ImGui::TreeNode("BaseDeferredPass"))
-			{
-				ImGui::TreePop();
-			}
 			if (ImGui::TreeNode("BasePass"))
 			{
-				ImGui::TreePop();
-			}
-			if (ImGui::TreeNode("BaseIndirectPass"))
-			{
+				if (ImGui::TreeNode("DeferredObject"))
+				{
+					ImGui::TreePop();
+				}
+				if (ImGui::TreeNode("DeferredInstancedObject"))
+				{
+					ImGui::TreePop();
+				}
+				if (ImGui::TreeNode("ForwardObject"))
+				{
+					ImGui::TreePop();
+				}
+				if (ImGui::TreeNode("ForwardInstancedObject"))
+				{
+					ImGui::TreePop();
+				}
+				if (ImGui::TreeNode("ForwardObjectIndirect"))
+				{
+					ImGui::TreePop();
+				}
+				if (ImGui::TreeNode("ForwardInstancedObjectIndirect"))
+				{
+					ImGui::TreePop();
+				}
 				ImGui::TreePop();
 			}
 			if (ImGui::TreeNode("BackgroundPass"))
 			{
+				if (ImGui::TreeNodeEx("BackgroundRect", ImGuiTreeNodeFlags_Leaf))
+				{
+					ImGui::TreePop();
+				}
 				ImGui::TreePop();
 			}
 			if (ImGui::TreeNode("PostProcess"))
 			{
+				if (ImGui::TreeNodeEx("GlobalPostProcessVolume", ImGuiTreeNodeFlags_Leaf))
+				{
+					ImGui::TreePop();
+				}
 				ImGui::TreePop();
 			}
 
@@ -4219,8 +4286,8 @@ public:
 
 		glm::vec3 center = glm::vec3(0.0f);
 
-		FLight* MoonLight = &View.DirectionalLights[0];
-		glm::vec3 lightPos = glm::vec3(MoonLight->Position.x, MoonLight->Position.y, MoonLight->Position.z);
+		FLight* MainLight = &View.DirectionalLights[0];
+		glm::vec3 lightPos = glm::vec3(MainLight->Position.x, MainLight->Position.y, MainLight->Position.z);
 		float RollStage = GlobalInput.bPlayStageRoll ?
 			(GlobalInput.RollStage + GlobalInput.DeltaTime * glm::radians(15.0f)) : GlobalInput.RollStage;
 		GlobalInput.RollStage = RollStage;
@@ -4284,11 +4351,14 @@ public:
 		ShadowmapPass.RenderIndirectInstancedObjects.clear();
 		BasePass.RenderObjects.clear();
 		BasePass.RenderInstancedObjects.clear();
-		BaseIndirectPass.RenderIndirectObjects.clear();
-		BaseIndirectPass.RenderIndirectInstancedObjects.clear();
-		BaseDeferredPass.RenderDeferredObjects.clear();
-		BaseDeferredPass.RenderDeferredInstancedObjects.clear();
-
+#if ENABLE_INDIRECT_DRAW
+		BasePass.RenderIndirectObjects.clear();
+		BasePass.RenderIndirectInstancedObjects.clear();
+#endif
+#if ENABLE_DEFEERED_SHADING
+		BasePass.RenderDeferredObjects.clear();
+		BasePass.RenderDeferredInstancedObjects.clear();
+#endif
 		for (size_t i = 0; i < Scene.RenderObjects.size(); i++)
 		{
 			FRenderObject* RenderObject = &Scene.RenderObjects[i];
@@ -4301,29 +4371,31 @@ public:
 			BasePass.RenderInstancedObjects.push_back(RenderInstancedObject);
 			ShadowmapPass.RenderInstancedObjects.push_back(RenderInstancedObject);
 		}
+#if ENABLE_INDIRECT_DRAW
 		for (size_t i = 0; i < Scene.RenderIndirectObjects.size(); i++)
 		{
 			FRenderObjectIndirect* RenderIndirectObject = &Scene.RenderIndirectObjects[i];
-			BaseIndirectPass.RenderIndirectObjects.push_back(RenderIndirectObject);
+			BasePass.RenderIndirectObjects.push_back(RenderIndirectObject);
 			ShadowmapPass.RenderIndirectObjects.push_back(RenderIndirectObject);
 		}
 		for (size_t i = 0; i < Scene.RenderIndirectInstancedObjects.size(); i++)
 		{
 			FRenderInstancedObjectIndirect* RenderIndirectInstancedObject = &Scene.RenderIndirectInstancedObjects[i];
-			BaseIndirectPass.RenderIndirectInstancedObjects.push_back(RenderIndirectInstancedObject);
+			BasePass.RenderIndirectInstancedObjects.push_back(RenderIndirectInstancedObject);
 			ShadowmapPass.RenderIndirectInstancedObjects.push_back(RenderIndirectInstancedObject);
 		}
+#endif
 #if ENABLE_DEFEERED_SHADING
 		for (size_t i = 0; i < Scene.RenderDeferredObjects.size(); i++)
 		{
 			FRenderDeferredObject* RenderDeferredObject = &Scene.RenderDeferredObjects[i];
-			BaseDeferredPass.RenderDeferredObjects.push_back(RenderDeferredObject);
+			BasePass.RenderDeferredObjects.push_back(RenderDeferredObject);
 			ShadowmapPass.RenderObjects.push_back(RenderDeferredObject);
 		}
 		for (size_t i = 0; i < Scene.RenderDeferredInstancedObjects.size(); i++)
 		{
 			FRenderDeferredInstancedObject* RenderDeferredInstancedObject = &Scene.RenderDeferredInstancedObjects[i];
-			BaseDeferredPass.RenderDeferredInstancedObjects.push_back(RenderDeferredInstancedObject);
+			BasePass.RenderDeferredInstancedObjects.push_back(RenderDeferredInstancedObject);
 			ShadowmapPass.RenderInstancedObjects.push_back(RenderDeferredInstancedObject);
 		}
 #endif
@@ -4353,7 +4425,7 @@ public:
 		// PipelineLayout可以用来创建和绑定VertexBuffer和UniformBuffer，这样可以往着色器中传递参数
 		if (vkCreatePipelineLayout(Device, &pipelineLayoutInfo, nullptr, &outPipelineLayout) != VK_SUCCESS)
 		{
-			throw std::runtime_error("failed to Create pipeline layout!");
+			throw std::runtime_error("[CreatePipelineLayout] Failed to Create pipeline layout!");
 		}
 	}
 
@@ -4564,7 +4636,7 @@ public:
 
 			if (vkCreateGraphicsPipelines(Device, VK_NULL_HANDLE, 1, &pipelineCI, nullptr, &outPipelines[i]) != VK_SUCCESS)
 			{
-				throw std::runtime_error("failed to Create graphics pipeline!");
+				throw std::runtime_error("[CreateGraphicsPipelines] Failed to Create graphics pipeline!");
 			}
 		}
 
@@ -4751,7 +4823,7 @@ public:
 		layoutInfo.bindingCount = static_cast<uint32_t>(layoutBindings.size());
 		layoutInfo.pBindings = layoutBindings.data();
 		if (vkCreateDescriptorSetLayout(Device, &layoutInfo, nullptr, &outDescriptorSetLayout) != VK_SUCCESS) {
-			throw std::runtime_error("failed to Create descriptor set layout!");
+			throw std::runtime_error("[CreateDescriptorSetLayout] Failed to Create descriptor set layout!");
 		}
 	}
 
@@ -4847,7 +4919,7 @@ public:
 		poolCI.pPoolSizes = poolSizes.data();
 		poolCI.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
 		if (vkCreateDescriptorPool(Device, &poolCI, nullptr, &outDescriptorPool) != VK_SUCCESS) {
-			throw std::runtime_error("failed to Create descriptor pool!");
+			throw std::runtime_error("[CreateDescriptorSet] Failed to Create descriptor pool!");
 		}
 
 		/* create DescriptorSet */
@@ -4859,7 +4931,7 @@ public:
 		allocInfo.pSetLayouts = layouts.data();
 		outDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
 		if (vkAllocateDescriptorSets(Device, &allocInfo, outDescriptorSets.data()) != VK_SUCCESS) {
-			throw std::runtime_error("failed to allocate descriptor sets!");
+			throw std::runtime_error("[CreateDescriptorSet] Failed to allocate descriptor sets!");
 		}
 
 		/* update DescriptorSet */
@@ -5248,7 +5320,7 @@ public:
 			imageInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
 
 			if (vkCreateImage(Device, &imageInfo, nullptr, &outImage) != VK_SUCCESS) {
-				throw std::runtime_error("failed to Create image!");
+				throw std::runtime_error("[CreateImageCubeContext] Failed to Create image!");
 			}
 
 			VkMemoryRequirements memRequirements;
@@ -5260,7 +5332,7 @@ public:
 			allocInfo.memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
 			if (vkAllocateMemory(Device, &allocInfo, nullptr, &outMemory) != VK_SUCCESS) {
-				throw std::runtime_error("failed to allocate image memory!");
+				throw std::runtime_error("[CreateImageCubeContext] Failed to allocate image memory!");
 			}
 
 			vkBindImageMemory(Device, outImage, outMemory, 0);
@@ -5432,7 +5504,7 @@ public:
 			viewInfo.subresourceRange.baseArrayLayer = 0;
 			viewInfo.subresourceRange.layerCount = 6;
 			if (vkCreateImageView(Device, &viewInfo, nullptr, &outImageView) != VK_SUCCESS) {
-				throw std::runtime_error("failed to Create texture image View!");
+				throw std::runtime_error("[CreateImageCubeContext] Failed to Create texture image View!");
 			}
 		}
 		CreateSampler(outSampler,
@@ -5826,7 +5898,7 @@ protected:
 			}
 		}
 
-		throw std::runtime_error("failed to find supported format!");
+		throw std::runtime_error("[FindSupportedFormat] Failed to find supported format!");
 	}
 
 	/** Find the format that supports depth textures */
@@ -5851,7 +5923,7 @@ protected:
 			}
 		}
 
-		throw std::runtime_error("failed to find suitable memory type!");
+		throw std::runtime_error("[FindMemoryType] Failed to find suitable memory type!");
 	}
 
 	VkCommandBuffer BeginSingleTimeCommands()
@@ -5899,7 +5971,7 @@ protected:
 		bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
 		if (vkCreateBuffer(Device, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
-			throw std::runtime_error("failed to Create buffer!");
+			throw std::runtime_error("[CreateBuffer] Failed to Create buffer!");
 		}
 
 		// Allocate memory for VertexBuffer and bind it
@@ -5913,7 +5985,7 @@ protected:
 		allocInfo.memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, properties);
 		// Bind the allocated memory address
 		if (vkAllocateMemory(Device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
-			throw std::runtime_error("failed to allocate buffer memory!");
+			throw std::runtime_error("[CreateBuffer] Failed to allocate buffer memory!");
 		}
 		// Bind the VertexBuffer and its memory address
 		vkBindBufferMemory(Device, buffer, bufferMemory, 0);
@@ -6005,7 +6077,7 @@ protected:
 		VkShaderModule shaderModule;
 		if (vkCreateShaderModule(Device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS)
 		{
-			throw std::runtime_error("failed to Create shader module!");
+			throw std::runtime_error("[CreateShaderModule] Failed to Create shader module!");
 		}
 
 		return shaderModule;
@@ -6069,7 +6141,7 @@ protected:
 		vkGetPhysicalDeviceFormatProperties(PhysicalDevice, imageFormat, &formatProperties);
 
 		if (!(formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) {
-			throw std::runtime_error("texture image format does not support linear blitting!");
+			throw std::runtime_error("[GenerateMipmaps] Texture image format does not support linear blitting!");
 		}
 
 		VkCommandBuffer commandBuffer = BeginSingleTimeCommands();
@@ -6194,7 +6266,7 @@ protected:
 		imageInfo.mipLevels = miplevels;
 
 		if (vkCreateImage(Device, &imageInfo, nullptr, &outImage) != VK_SUCCESS) {
-			throw std::runtime_error("failed to Create image!");
+			throw std::runtime_error("[CreateImage] Failed to Create image!");
 		}
 
 		VkMemoryRequirements memRequirements;
@@ -6206,7 +6278,7 @@ protected:
 		allocInfo.memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, properties);
 
 		if (vkAllocateMemory(Device, &allocInfo, nullptr, &outImageMemory) != VK_SUCCESS) {
-			throw std::runtime_error("failed to allocate image memory!");
+			throw std::runtime_error("[CreateImage] Failed to allocate image memory!");
 		}
 
 		vkBindImageMemory(Device, outImage, outImageMemory, 0);
@@ -6232,7 +6304,7 @@ protected:
 		viewInfo.subresourceRange.layerCount = 1;
 
 		if (vkCreateImageView(Device, &viewInfo, nullptr, &outImageView) != VK_SUCCESS) {
-			throw std::runtime_error("failed to Create texture image View!");
+			throw std::runtime_error("[CreateImageView] Failed to Create texture image View!");
 		}
 	}
 
@@ -6269,7 +6341,7 @@ protected:
 		samplerInfo.mipLodBias = 0.0f;
 
 		if (vkCreateSampler(Device, &samplerInfo, nullptr, &outSampler) != VK_SUCCESS) {
-			throw std::runtime_error("failed to Create texture sampler!");
+			throw std::runtime_error("[CreateSampler] Failed to Create texture sampler!");
 		}
 	}
 
@@ -6378,7 +6450,7 @@ private:
 		if (!file.is_open())
 		{
 			assert(true);
-			throw std::runtime_error("failed to open shader file!");
+			throw std::runtime_error("[LoadShaderSource] Failed to open shader file:" + filename);
 		}
 
 		size_t fileSize = (size_t)file.tellg();
@@ -6401,7 +6473,7 @@ private:
 		outMipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(outWidth, outHeight)))) + 1;
 		if (!pixels) {
 			assert(0);
-			throw std::runtime_error("failed to load texture image!");
+			throw std::runtime_error("[LoadTextureAsset] Failed to load texture image:" + filename);
 		}
 		outPixels.resize(outWidth * outHeight * 4);
 		std::memcpy(outPixels.data(), pixels, static_cast<size_t>(outWidth * outHeight * 4));
@@ -6419,7 +6491,7 @@ private:
 
 		if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, filename.c_str())) {
 			assert(0);
-			throw std::runtime_error(warn + err);
+			throw std::runtime_error("[LoadMeshAsset] Fail to load obj:" + warn + err);
 		}
 
 		std::unordered_map<FVertex, uint32_t> uniqueVertices{};

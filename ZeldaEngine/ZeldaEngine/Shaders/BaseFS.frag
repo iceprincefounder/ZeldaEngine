@@ -1,5 +1,8 @@
 # version 450
 
+// Use this constant to control the flow of the shader depending on the SPEC_CONSTANTS value 
+// selected at pipeline creation time
+layout(constant_id = 0) const int SPEC_CONSTANTS = 0;
 
 struct light
 {
@@ -13,10 +16,6 @@ struct light
 	vec4 info;
 };
 
-// Use this constant to control the flow of the shader depending on the SPEC_CONSTANTS value 
-// selected at pipeline creation time
-layout(constant_id = 0) const int SPEC_CONSTANTS = 0;
-
 // push constants block
 layout(push_constant) uniform constants
 {
@@ -28,12 +27,14 @@ layout(push_constant) uniform constants
 	uint specConstantsCount;
 } global;
 
+// [binding = 0] for vertex MVP buffer
 layout(set = 0, binding = 1) uniform uniformbuffer
 {
 	mat4 viewProjSpace;
 	mat4 shadowmapSpace;
 	mat4 localToWorld;
 	vec4 cameraInfo;
+	vec4 viewportInfo;
 	light directionalLights [16];
 	light pointLights [512];
 	light spotLights [16];
@@ -422,16 +423,10 @@ void main()
 	float NdotV = saturate(dot(N, V));
 
 	float ShadowFactor = 1.0;
-	if (SPEC_CONSTANTS == 8)
-	{
-		vec4 ShadowCoord = ComputeShadowCoord(P);
-		ShadowFactor = ShadowDepthProject(ShadowCoord / ShadowCoord.w, vec2(0.0));
-	}
-	if (SPEC_CONSTANTS == 0 || SPEC_CONSTANTS == 9)
-	{
-		vec4 ShadowCoord = ComputeShadowCoord(P);
-		ShadowFactor = ComputePCF(ShadowCoord / ShadowCoord.w, 2);
-	}
+	vec4 ShadowCoord = ComputeShadowCoord(P);
+	// we use PCF shadow filtering here
+	// ShadowFactor = ShadowDepthProject(ShadowCoord / ShadowCoord.w, vec2(0.0));
+	ShadowFactor = ComputePCF(ShadowCoord / ShadowCoord.w, 2);
 
 	// (1) Direct Lighting : DisneyDiffuse + SpecularGGX
 	vec3 DirectLighting = vec3(0.0);
@@ -502,8 +497,9 @@ void main()
 		case 7:
 			outColor = vec4(vec3(ReflectionColor), 1.0); break;
 		case 8:
-		case 9:
 			outColor = vec4(vec3(ShadowFactor), 1.0); break;
+		case 9:
+			outColor = vec4(FinalColor * ShadowFactor, 1.0); break;
 		default:
 			outColor = vec4(FinalColor * ShadowFactor, 1.0); break;
 	};

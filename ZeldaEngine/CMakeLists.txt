@@ -164,3 +164,4 @@ endfunction(BuildToolkit)
 
 BuildEngine(ZeldaEngine)
 BuildToolkit(ZeldaMeshlet)
+BuildToolkit(ZeldaPython)

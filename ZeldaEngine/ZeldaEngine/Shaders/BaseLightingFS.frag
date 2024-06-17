@@ -1,5 +1,8 @@
 # version 450
 
+// Use this constant to control the flow of the shader depending on the SPEC_CONSTANTS value 
+// selected at pipeline creation time
+layout(constant_id = 0) const int SPEC_CONSTANTS = 0;
 
 struct light
 {
@@ -12,10 +15,6 @@ struct light
 	/* (only used for spot lights) info.x represents light inner cone angle, info.y represents light outer cone angle */
 	vec4 info;
 };
-
-// Use this constant to control the flow of the shader depending on the SPEC_CONSTANTS value 
-// selected at pipeline creation time
-layout(constant_id = 0) const int SPEC_CONSTANTS = 0;
 
 // push constants block
 layout(push_constant) uniform constants
