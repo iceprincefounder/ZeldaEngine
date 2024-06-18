@@ -73,15 +73,17 @@
 // @see https://dev.to/gasim/implementing-bindless-design-in-vulkan-34no
 #define ENABLE_BINDLESS false
 #define ENABLE_IMGUI_EDITOR true
-#define ENABLE_GENERATE_WORLD false
+#define ENABLE_GENERATE_WORLD true
 
 #define ASSETS(x) ProfabsAsset(x)
+
+typedef std::string XkString;
 
 /**
 * Helper class to generate SPIRV code from GLSL source
 * A very simple version of the glslValidator application
 */
-class FShaderCompiler
+class XkShaderCompiler
 {
 private:
 	static glslang::EShTargetLanguage EnvTargetLanguage;
@@ -94,10 +96,10 @@ public:
 	* @param[out] outShaderStage Output shader stage detect by file suffix
 	* @param inFilename Shader file path
 	*/
-	static void ReadShaderFile(std::vector<uint8_t>& outShaderSource, VkShaderStageFlagBits& outShaderStage, const std::string& inFilename)
+	static void ReadShaderFile(std::vector<uint8_t>& outShaderSource, VkShaderStageFlagBits& outShaderStage, const XkString& inFilename)
 	{
-		std::string::size_type const p(inFilename.find_last_of('.'));
-		std::string ext = inFilename.substr(p + 1);
+		XkString::size_type const p(inFilename.find_last_of('.'));
+		XkString ext = inFilename.substr(p + 1);
 		if (ext == "vert")
 			outShaderStage = VK_SHADER_STAGE_VERTEX_BIT;
 		else if (ext == "frag")
@@ -158,7 +160,7 @@ public:
 	* @param inFilename SPV file path
 	* @param inSpirvSource Spirv source buffer
 	*/
-	static void SaveShaderFile(const std::string& inFilename, const std::vector<unsigned int>& inSpirvSource)
+	static void SaveShaderFile(const XkString& inFilename, const std::vector<unsigned int>& inSpirvSource)
 	{
 		std::ofstream out;
 		out.open(inFilename.c_str(), std::ios::binary | std::ios::out);
@@ -204,11 +206,11 @@ public:
 	*/
 	bool CompileToSpirv(VkShaderStageFlagBits stage,
 		const std::vector<uint8_t>& glsl_source,
-		const std::string& entry_point,
-		const std::string& shader_variant_preamble,
-		const std::vector<std::string>& shader_variant_processes,
+		const XkString& entry_point,
+		const XkString& shader_variant_preamble,
+		const std::vector<XkString>& shader_variant_processes,
 		std::vector<std::uint32_t>& spirv,
-		std::string& info_log)
+		XkString& info_log)
 	{
 		auto FindShaderLanguage = [](VkShaderStageFlagBits stage) -> EShLanguage
 		{
@@ -255,7 +257,7 @@ public:
 		EShMessages messages = static_cast<EShMessages>(EShMsgDefault | EShMsgVulkanRules | EShMsgSpvRules);
 
 		EShLanguage language = FindShaderLanguage(stage);
-		std::string source = std::string(glsl_source.begin(), glsl_source.end());
+		XkString source = XkString(glsl_source.begin(), glsl_source.end());
 
 		const char* file_name_list[1] = { "" };
 		const char* shader_source = reinterpret_cast<const char*>(source.data());
@@ -275,7 +277,7 @@ public:
 
 		if (!shader.parse(GetDefaultResources(), 100, false, messages, includeDir))
 		{
-			info_log = std::string(shader.getInfoLog()) + "\n" + std::string(shader.getInfoDebugLog());
+			info_log = XkString(shader.getInfoLog()) + "\n" + XkString(shader.getInfoDebugLog());
 			return false;
 		}
 
@@ -286,19 +288,19 @@ public:
 		// Link program.
 		if (!program.link(messages))
 		{
-			info_log = std::string(program.getInfoLog()) + "\n" + std::string(program.getInfoDebugLog());
+			info_log = XkString(program.getInfoLog()) + "\n" + XkString(program.getInfoDebugLog());
 			return false;
 		}
 
 		// Save any info log that was generated.
 		if (shader.getInfoLog())
 		{
-			info_log += std::string(shader.getInfoLog()) + "\n" + std::string(shader.getInfoDebugLog()) + "\n";
+			info_log += XkString(shader.getInfoLog()) + "\n" + XkString(shader.getInfoDebugLog()) + "\n";
 		}
 
 		if (program.getInfoLog())
 		{
-			info_log += std::string(program.getInfoLog()) + "\n" + std::string(program.getInfoDebugLog());
+			info_log += XkString(program.getInfoLog()) + "\n" + XkString(program.getInfoDebugLog());
 		}
 
 		glslang::TIntermediate* intermediate = program.getIntermediate(language);
@@ -323,41 +325,42 @@ public:
 	};
 };
 
-glslang::EShTargetLanguage FShaderCompiler::EnvTargetLanguage = glslang::EShTargetLanguage::EShTargetNone;
-glslang::EShTargetLanguageVersion FShaderCompiler::EnvTargetLanguageVersion = static_cast<glslang::EShTargetLanguageVersion>(0);
+glslang::EShTargetLanguage XkShaderCompiler::EnvTargetLanguage = glslang::EShTargetLanguage::EShTargetNone;
+glslang::EShTargetLanguageVersion XkShaderCompiler::EnvTargetLanguageVersion = static_cast<glslang::EShTargetLanguageVersion>(0);
 
-enum class ERenderFlags : uint16_t
+enum class EXkRenderFlags : uint16_t
 {
-	VertexIndexed = 1 << 0, // binary 0001
-	Instanced = 1 << 1,
-	ScreenRect = 1 << 2,
-	TwoSided = 1 << 3,
-	NoDepthTest = 1 << 4,
-	Shadow = 1 << 5,
-	Skydome = 1 << 6,
-	Background = 1 << 7,
-	DeferredScene = 1 << 8,
-	DeferredLighting = 1 << 9,
-	None = 1 << 15,
+	None = 1 << 0, // None means Vertex only in Deferred Shading
+	VertexIndexed = 1 << 1,
+	Instanced = 1 << 2,
+	ScreenRect = 1 << 3,
+	TwoSided = 1 << 4,
+	NoDepthTest = 1 << 5,
+	Shadow = 1 << 6,
+	Skydome = 1 << 7,
+	Background = 1 << 8,
+	ForwardShading = 1 << 9,
+	DeferredScene = 1 << 10,
+	DeferredLighting = 1 << 11,
 };
 
-inline ERenderFlags operator|(ERenderFlags a, ERenderFlags b)
+inline EXkRenderFlags operator|(EXkRenderFlags a, EXkRenderFlags b)
 {
-	return static_cast<ERenderFlags>(static_cast<uint16_t>(a) | static_cast<uint16_t>(b));
+	return static_cast<EXkRenderFlags>(static_cast<uint16_t>(a) | static_cast<uint16_t>(b));
 }
 
-inline ERenderFlags operator&(ERenderFlags a, ERenderFlags b)
+inline EXkRenderFlags operator&(EXkRenderFlags a, EXkRenderFlags b)
 {
-	return static_cast<ERenderFlags>(static_cast<uint16_t>(a) & static_cast<uint16_t>(b));
+	return static_cast<EXkRenderFlags>(static_cast<uint16_t>(a) & static_cast<uint16_t>(b));
 }
 
-inline bool operator==(ERenderFlags a, ERenderFlags b)
+inline bool operator==(EXkRenderFlags a, EXkRenderFlags b)
 {
 	return ((static_cast<uint16_t>(a) & static_cast<uint16_t>(b))) == static_cast<uint16_t>(b);
 }
 
 /** Model MVP matrices */
-struct FUniformBufferBase {
+struct XkUniformBufferObject {
 	glm::mat4 Model;
 	glm::mat4 View;
 	glm::mat4 Proj;
@@ -366,13 +369,16 @@ struct FUniformBufferBase {
 /** Model transform matrix.*/
 // @TODO: we use a global transform for all render object currently
 // It's great to use model's own transform
-struct FUniformBufferTransfrom {
-	glm::mat4 Model;
-	glm::vec4 Info;
+struct XkTransfrom {
+	glm::vec3 Location;
+	glm::vec3 Rotation;
+	glm::vec3 Scale3D;
+
+	glm::quat Quaternion;
 };
 
 /** The instance of mesh data block*/
-struct FInstanceData {
+struct XkInstanceData {
 	glm::vec3 InstancePosition;
 	glm::vec3 InstanceRotation;
 	glm::float32 InstancePScale;
@@ -380,7 +386,7 @@ struct FInstanceData {
 };
 
 /** The vertex of mesh data block*/
-struct FVertex {
+struct XkVertex {
 	glm::vec3 Position;
 	glm::vec3 Normal;
 	glm::vec3 Color;
@@ -390,7 +396,7 @@ struct FVertex {
 	static VkVertexInputBindingDescription GetBindingDescription() {
 		VkVertexInputBindingDescription bindingDescription{};
 		bindingDescription.binding = VERTEX_BUFFER_BIND_ID;
-		bindingDescription.stride = sizeof(FVertex);
+		bindingDescription.stride = sizeof(XkVertex);
 		bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
 		return bindingDescription;
@@ -402,22 +408,22 @@ struct FVertex {
 		attributeDescriptions[0].binding = VERTEX_BUFFER_BIND_ID;
 		attributeDescriptions[0].location = 0;
 		attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
-		attributeDescriptions[0].offset = offsetof(FVertex, Position);
+		attributeDescriptions[0].offset = offsetof(XkVertex, Position);
 
 		attributeDescriptions[1].binding = VERTEX_BUFFER_BIND_ID;
 		attributeDescriptions[1].location = 1;
 		attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-		attributeDescriptions[1].offset = offsetof(FVertex, Normal);
+		attributeDescriptions[1].offset = offsetof(XkVertex, Normal);
 
 		attributeDescriptions[2].binding = VERTEX_BUFFER_BIND_ID;
 		attributeDescriptions[2].location = 2;
 		attributeDescriptions[2].format = VK_FORMAT_R32G32B32_SFLOAT;
-		attributeDescriptions[2].offset = offsetof(FVertex, Color);
+		attributeDescriptions[2].offset = offsetof(XkVertex, Color);
 
 		attributeDescriptions[3].binding = VERTEX_BUFFER_BIND_ID;
 		attributeDescriptions[3].location = 3;
 		attributeDescriptions[3].format = VK_FORMAT_R32G32_SFLOAT;
-		attributeDescriptions[3].offset = offsetof(FVertex, TexCoord);
+		attributeDescriptions[3].offset = offsetof(XkVertex, TexCoord);
 
 		return attributeDescriptions;
 	}
@@ -426,12 +432,12 @@ struct FVertex {
 	static std::array<VkVertexInputBindingDescription, 2> GetBindingInstancedDescriptions() {
 		VkVertexInputBindingDescription bindingDescription0{};
 		bindingDescription0.binding = VERTEX_BUFFER_BIND_ID;
-		bindingDescription0.stride = sizeof(FVertex);
+		bindingDescription0.stride = sizeof(XkVertex);
 		bindingDescription0.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
 		VkVertexInputBindingDescription bindingDescription1{};
 		bindingDescription1.binding = INSTANCE_BUFFER_BIND_ID;
-		bindingDescription1.stride = sizeof(FInstanceData);
+		bindingDescription1.stride = sizeof(XkInstanceData);
 		bindingDescription1.inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
 
 		return { bindingDescription0, bindingDescription1 };
@@ -443,67 +449,79 @@ struct FVertex {
 		attributeDescriptions[0].binding = VERTEX_BUFFER_BIND_ID;
 		attributeDescriptions[0].location = 0;
 		attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
-		attributeDescriptions[0].offset = offsetof(FVertex, Position);
+		attributeDescriptions[0].offset = offsetof(XkVertex, Position);
 
 		attributeDescriptions[1].binding = VERTEX_BUFFER_BIND_ID;
 		attributeDescriptions[1].location = 1;
 		attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-		attributeDescriptions[1].offset = offsetof(FVertex, Normal);
+		attributeDescriptions[1].offset = offsetof(XkVertex, Normal);
 
 		attributeDescriptions[2].binding = VERTEX_BUFFER_BIND_ID;
 		attributeDescriptions[2].location = 2;
 		attributeDescriptions[2].format = VK_FORMAT_R32G32B32_SFLOAT;
-		attributeDescriptions[2].offset = offsetof(FVertex, Color);
+		attributeDescriptions[2].offset = offsetof(XkVertex, Color);
 
 		attributeDescriptions[3].binding = VERTEX_BUFFER_BIND_ID;
 		attributeDescriptions[3].location = 3;
 		attributeDescriptions[3].format = VK_FORMAT_R32G32_SFLOAT;
-		attributeDescriptions[3].offset = offsetof(FVertex, TexCoord);
+		attributeDescriptions[3].offset = offsetof(XkVertex, TexCoord);
 
 		attributeDescriptions[4].binding = INSTANCE_BUFFER_BIND_ID;
 		attributeDescriptions[4].location = 4;
 		attributeDescriptions[4].format = VK_FORMAT_R32G32B32_SFLOAT;
-		attributeDescriptions[4].offset = offsetof(FInstanceData, InstancePosition);
+		attributeDescriptions[4].offset = offsetof(XkInstanceData, InstancePosition);
 
 		attributeDescriptions[5].binding = INSTANCE_BUFFER_BIND_ID;
 		attributeDescriptions[5].location = 5;
 		attributeDescriptions[5].format = VK_FORMAT_R32G32B32_SFLOAT;
-		attributeDescriptions[5].offset = offsetof(FInstanceData, InstanceRotation);
+		attributeDescriptions[5].offset = offsetof(XkInstanceData, InstanceRotation);
 
 		attributeDescriptions[6].binding = INSTANCE_BUFFER_BIND_ID;
 		attributeDescriptions[6].location = 6;
 		attributeDescriptions[6].format = VK_FORMAT_R32_SFLOAT;
-		attributeDescriptions[6].offset = offsetof(FInstanceData, InstancePScale);
+		attributeDescriptions[6].offset = offsetof(XkInstanceData, InstancePScale);
 
 		attributeDescriptions[7].binding = INSTANCE_BUFFER_BIND_ID;
 		attributeDescriptions[7].location = 7;
 		attributeDescriptions[7].format = VK_FORMAT_R8_UINT;
-		attributeDescriptions[7].offset = offsetof(FInstanceData, InstanceTexIndex);
+		attributeDescriptions[7].offset = offsetof(XkInstanceData, InstanceTexIndex);
 
 		return attributeDescriptions;
 	}
 
-	bool operator==(const FVertex& other) const {
+	bool operator==(const XkVertex& other) const {
 		return Position == other.Position && Normal == other.Normal && Color == other.Color && TexCoord == other.TexCoord;
 	}
 };
 
 namespace std {
-	template<> struct hash<FVertex> {
-		size_t operator()(FVertex const& vertex) const {
+	template<> struct hash<XkVertex> {
+		size_t operator()(XkVertex const& vertex) const {
 			return ((hash<glm::vec3>()(vertex.Position) ^ (hash<glm::vec3>()(vertex.Color) << 1)) >> 1) ^ (hash<glm::vec2>()(vertex.TexCoord) << 1);
 		}
 	};
 }
 
-/** Object data struct, to procedural generate object instance*/
-struct FObjectDesc
+/* Description of the rule that procedural generated object apply.*/
+struct XkDesc
 {
-	FObjectDesc() : ObjectID(GenerateObjectID()) {}
+	XkDesc() : ObjectID(GenerateObjectID()) {}
 
+	XkTransfrom Transfrom;
 	uint32_t ObjectID;
 
-	std::string ProfabName = "";
+	static uint32_t GenerateObjectID()
+	{
+		static uint32_t currentID = 0;
+		return currentID++;
+	}
+};
+
+/** Object data struct, to procedural generate object instance*/
+struct XkObjectDesc : public XkDesc
+{
+	XkString ProfabName = "";
+	EXkRenderFlags RenderFlags = EXkRenderFlags::None;
 
 	//~ Begin procedural instance generation arguments
 	uint32_t InstanceCount = 0;
@@ -519,13 +537,7 @@ struct FObjectDesc
 	float MaxRotPitch = 0.0f;
 	//~ End procedural instance generation arguments
 
-	static uint32_t GenerateObjectID()
-	{
-		static uint32_t currentID = 0;
-		return currentID++;
-	}
-
-	static void GenerateInstance(std::vector<FInstanceData>& OutData, const FObjectDesc& Object)
+	static void GenerateInstance(std::vector<XkInstanceData>& OutData, const XkObjectDesc& Object)
 	{
 		OutData.resize(Object.InstanceCount);
 		for (uint32_t i = 0; i < Object.InstanceCount; i++) {
@@ -559,14 +571,53 @@ struct FObjectDesc
 };
 
 /** Light data struct, to procedural generate light instance*/
-struct FLightDesc : public FObjectDesc
+struct XkLightDesc : public XkDesc
 {
-	// @TODO: Implement light instance generation
+	glm::vec3 Position;
+	uint8_t Type;
+	glm::vec3 Color;
+	float Intensity;
+	glm::vec3 Direction;
+	float Radius;
+	glm::vec4 ExtraData;
 };
 
-struct FMesh 
+/** Camera data struct.*/
+struct XkCameraDesc : public XkDesc
 {
-	std::vector<FVertex> Vertices;                       // Vertex
+	glm::vec3 Position;
+	glm::vec3 Lookat;
+	float Speed;
+	float FOV;
+	float zNear;
+	float zFar;
+
+	float ArmLength;
+	float Yaw;
+	float Pitch;
+	float Roll;
+
+	XkCameraDesc& operator= (const XkCameraDesc& rhs)
+	{
+		Transfrom = rhs.Transfrom;
+
+		Position = rhs.Position;
+		Lookat = rhs.Lookat;
+		Speed = rhs.Speed;
+		FOV = rhs.FOV;
+		zNear = rhs.zNear;
+		zFar = rhs.zFar;
+		ArmLength = rhs.ArmLength;
+		Yaw = rhs.Yaw;
+		Pitch = rhs.Pitch;
+		Roll = rhs.Roll;
+		return *this;
+	}
+};
+
+struct XkMesh 
+{
+	std::vector<XkVertex> Vertices;                       // Vertex
 	std::vector<uint32_t> Indices;                       // Index
 	VkBuffer VertexBuffer;                               // Vertex buffer
 	VkDeviceMemory VertexBufferMemory;                   // Vertex buffer memory
@@ -578,10 +629,10 @@ struct FMesh
 	VkDeviceMemory InstancedBufferMemory;                // Instanced buffer memory
 };
 
-typedef FMesh FInstancedMesh;
+typedef XkMesh XkInstancedMesh;
 
 /** Meshlet data block*/
-struct FMeshlet 
+struct XkMeshlet 
 {
 	uint32_t VertexOffset;
 	uint32_t VertexCount;
@@ -595,21 +646,21 @@ struct FMeshlet
 };
 
 /** Meshlet group set data block, all meshlets make up a model mesh data.*/
-struct FMeshletSet 
+struct XkMeshletSet 
 {
-	std::vector<FMeshlet> Meshlets;
+	std::vector<XkMeshlet> Meshlets;
 	std::vector<uint32_t> MeshletVertices;
 	std::vector<uint8_t> MeshletTriangles;
 };
 
-struct FMeshIndirect : public FMesh
+struct XkMeshIndirect : public XkMesh
 {
-	FMeshletSet MeshletSet;
+	XkMeshletSet MeshletSet;
 };
 
-typedef FMeshIndirect FInstancedMeshIndirect;
+typedef XkMeshIndirect XkInstancedMeshIndirect;
 
-struct FMaterial 
+struct XkMaterial 
 {
 	std::vector<VkImage> TextureImages;
 	std::vector<VkDeviceMemory> TextureImageMemorys;
@@ -623,9 +674,9 @@ struct FMaterial
 	VkDescriptorSetLayout* DescriptorSetLayout; 
 };
 
-struct FRenderBase
+struct XkRenderBase
 {
-	FMaterial Material;
+	XkMaterial Material;
 	uint32_t InstanceCount;
 	
 	// @TODO: use model's own transform
@@ -636,45 +687,55 @@ struct FRenderBase
 };
 
 /** RenderObject for a single draw call.*/
-struct FRenderObject : public FRenderBase
+struct XkRenderObject : public XkRenderBase
 {
-	FMesh Mesh;
+	XkMesh Mesh;
 };
 
-struct FRenderInstancedObject : public FRenderBase
+struct XkRenderInstancedObject : public XkRenderBase
 {
-	FInstancedMesh Mesh;
+	XkInstancedMesh Mesh;
 };
 
-struct FRenderObjectIndirectBase : public FRenderBase
+struct XkRenderObjectIndirectBase : public XkRenderBase
 {
 	VkBuffer IndirectCommandsBuffer;
 	VkDeviceMemory IndirectCommandsBufferMemory;
 	std::vector<VkDrawIndexedIndirectCommand> IndirectCommands;
 };
 
-struct FRenderObjectIndirect : public FRenderObjectIndirectBase
+struct XkRenderObjectIndirect : public XkRenderObjectIndirectBase
 {
-	FMeshIndirect Mesh;
+	XkMeshIndirect Mesh;
 };
 
-struct FRenderInstancedObjectIndirect : public FRenderObjectIndirectBase
+struct XkRenderInstancedObjectIndirect : public XkRenderObjectIndirectBase
 {
-	FInstancedMeshIndirect Mesh;
+	XkInstancedMeshIndirect Mesh;
 };
 
-typedef FRenderObject FRenderDeferredObject;
-typedef FRenderInstancedObject FRenderDeferredInstancedObject;
+typedef XkRenderObject FRenderDeferredObject;
+typedef XkRenderInstancedObject FRenderDeferredInstancedObject;
 
 /** Common light data struct.*/
-struct FLight
+struct XkLight
 {
+	XkLight() : Position(glm::vec4(0.0f)), Color(glm::vec4(1.0f)), Direction(glm::vec4(0.0f, 0.0f, 1.0f, 1.0f)), LightInfo(glm::vec4(0.0f)) {};
+
+	XkLight(const XkLightDesc& Desc)
+	{
+		Position = glm::vec4(Desc.Position, (float)Desc.Type);
+		Color = glm::vec4(Desc.Color, Desc.Intensity);
+		Direction = glm::vec4(Desc.Direction, Desc.Radius);
+		LightInfo = Desc.ExtraData;
+	}
+
 	glm::vec4 Position;
 	glm::vec4 Color; // rgb for Color, a for intensity
 	glm::vec4 Direction;
 	glm::vec4 LightInfo;
 
-	FLight& operator=(const FLight& rhs)
+	XkLight& operator=(const XkLight& rhs)
 	{
 		Position = rhs.Position;
 		Color = rhs.Color;
@@ -683,23 +744,6 @@ struct FLight
 		return *this;
 	}
 };
-
-struct FLightObject : public FLight, FObjectDesc
-{
-
-};
-
-/** Camera data struct.*/
-struct FCamera
-{
-	glm::vec3 Position;
-	glm::vec3 LookAt;
-	glm::vec3 Up;
-	float FOV;
-	float zNear;
-	float zFar;
-};
-
 
 const std::vector<const char*> ValidationLayers = { "VK_LAYER_KHRONOS_validation" };
 #if ENABLE_BINDLESS
@@ -739,7 +783,7 @@ static void DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMesse
 
 
 /** All hardware device data struct*/
-struct FQueueFamilyIndices
+struct XkQueueFamilyIndices
 {
 	std::optional<uint32_t> GraphicsFamily;
 	std::optional<uint32_t> PresentFamily;
@@ -752,7 +796,7 @@ struct FQueueFamilyIndices
 
 
 /** All support hardware device details data struct*/
-struct FSwapChainSupportDetails
+struct XkSwapChainSupportDetails
 {
 	VkSurfaceCapabilitiesKHR Capabilities;
 	std::vector<VkSurfaceFormatKHR> Formats;
@@ -764,17 +808,11 @@ struct FSwapChainSupportDetails
  * ZeldaEngine: A tiny real time vulkan based 3D engine with modern graphics
  * All implementations in this class.
  */
-class FZeldaEngineApp
+class XkZeldaEngineApp
 {
-	struct FGlobalInput {
+	struct XkGlobalInput {
 		bool bGameMode;
-		glm::vec3 CameraPos;
-		glm::vec3 CameraLookat;
-		glm::vec3 CameraUp;
-		float CameraSpeed;
-		float CameraFOV;
-		float zNear;
-		float zFar;
+
 		float CurrentTime;
 		float DeltaTime;
 		bool bPlayStageRoll;
@@ -782,39 +820,37 @@ class FZeldaEngineApp
 		bool bPlayLightRoll;
 		float RollLight;
 
-		//~ Begin camera transactional members
-		float CameraArm;
-		float CameraYaw;
-		float CameraPitch;
+		double LastMouseX, LastMouseY;
+		bool bInitMouse;
+		
+		XkCameraDesc* MainCamera;
 		bool bCameraFocus;
 		bool bCameraMoving;
-		bool bInitMouse;
-		double LastMouseX, LastMouseY;
-		//~ End camera transactional members
+
+		void InitCamera(XkCameraDesc* Camera) { MainCamera = Camera; }
 
 		void ResetToFocus()
 		{
 			bGameMode = false;
-			CameraPos = glm::vec3(2.0, 2.0, 2.0);
-			CameraLookat = glm::vec3(0.0, 0.0, 0.5);
-			CameraUp = glm::vec3(0.0, 0.0, 1.0);
-			CameraSpeed = 2.5;
-			CameraFOV = 45.0;
-			zNear = 0.1f;
-			zFar = 45.0f;
+			MainCamera->Position = glm::vec3(2.0, 2.0, 2.0);
+			MainCamera->Lookat = glm::vec3(0.0, 0.0, 0.5);
+			MainCamera->Speed = 2.5;
+			MainCamera->FOV = 45.0;
+			MainCamera->zNear = 0.1f;
+			MainCamera->zFar = 45.0f;
 
-			glm::mat4 transform = glm::lookAt(CameraPos, CameraLookat, glm::vec3(0.0f, 0.0f, 1.0f));
+			glm::mat4 transform = glm::lookAt(MainCamera->Position, MainCamera->Lookat, glm::vec3(0.0f, 0.0f, 1.0f));
 			glm::quat rotation(transform);
-			glm::vec3 Direction = glm::normalize(CameraLookat - CameraPos);
-			CameraYaw = 30.0; //glm::degrees(glm::atan(Direction.x, Direction.y));
-			CameraPitch = 60.0; //glm::degrees(glm::asin(Direction.z));
-			CameraArm = 10.0;
+			glm::vec3 Direction = glm::normalize(MainCamera->Lookat - MainCamera->Position);
+			MainCamera->Yaw = 30.0; //glm::degrees(glm::atan(Direction.x, Direction.y));
+			MainCamera->Pitch = 60.0; //glm::degrees(glm::asin(Direction.z));
+			MainCamera->ArmLength = 10.0;
 			bCameraMoving = false;
 			bCameraFocus = true;
 
-			CameraPos.x = cos(glm::radians(CameraYaw)) * cos(glm::radians(CameraPitch)) * CameraArm;
-			CameraPos.y = sin(glm::radians(CameraYaw)) * cos(glm::radians(CameraPitch)) * CameraArm;
-			CameraPos.z = sin(glm::radians(CameraPitch)) * CameraArm;
+			MainCamera->Position.x = cos(glm::radians(MainCamera->Yaw)) * cos(glm::radians(MainCamera->Pitch)) * MainCamera->ArmLength;
+			MainCamera->Position.y = sin(glm::radians(MainCamera->Yaw)) * cos(glm::radians(MainCamera->Pitch)) * MainCamera->ArmLength;
+			MainCamera->Position.z = sin(glm::radians(MainCamera->Pitch)) * MainCamera->ArmLength;
 		}
 
 		void ResetAnimation()
@@ -827,7 +863,7 @@ class FZeldaEngineApp
 	} GlobalInput;
 
 	/** Global constants*/
-	struct FGlobalConstants {
+	struct XkGlobalConstants {
 		float BaseColorOverride;
 		float MetallicOverride;
 		float SpecularOverride;
@@ -846,15 +882,15 @@ class FZeldaEngineApp
 	} GlobalConstants;
 
 	/** Scene viewport data struct.*/
-	struct FView {
+	struct XkView {
 		glm::mat4 ViewProjSpace;
 		glm::mat4 ShadowmapSpace;
 		glm::mat4 LocalToWorld;
 		glm::vec4 CameraInfo;
 		glm::vec4 ViewportInfo;
-		FLight DirectionalLights[MAX_DIRECTIONAL_LIGHTS_NUM];
-		FLight PointLights[MAX_POINT_LIGHTS_NUM];
-		FLight SpotLights[MAX_SPOT_LIGHTS_NUM];
+		XkLight DirectionalLights[MAX_DIRECTIONAL_LIGHTS_NUM];
+		XkLight PointLights[MAX_POINT_LIGHTS_NUM];
+		XkLight SpotLights[MAX_SPOT_LIGHTS_NUM];
 		// LightsCount: 
 		// [0] for number of DirectionalLights
 		// [1] for number of PointLights
@@ -865,7 +901,7 @@ class FZeldaEngineApp
 		glm::float32 zNear;
 		glm::float32 zFar;
 
-		FView& operator=(const FView& rhs)
+		XkView& operator=(const XkView& rhs)
 		{
 			ViewProjSpace = rhs.ViewProjSpace;
 			ShadowmapSpace = rhs.ShadowmapSpace;
@@ -891,11 +927,12 @@ class FZeldaEngineApp
 		}
 	} View;
 
-	struct FScene {
-		std::vector<FRenderObject> RenderObjects;
-		std::vector<FRenderInstancedObject> RenderInstancedObjects;
-		std::vector<FRenderObjectIndirect> RenderIndirectObjects;
-		std::vector<FRenderInstancedObjectIndirect> RenderIndirectInstancedObjects;
+	/** Hold all the render object proxy data.*/
+	struct XkScene {
+		std::vector<XkRenderObject> RenderObjects;
+		std::vector<XkRenderInstancedObject> RenderInstancedObjects;
+		std::vector<XkRenderObjectIndirect> RenderIndirectObjects;
+		std::vector<XkRenderInstancedObjectIndirect> RenderIndirectInstancedObjects;
 		std::vector<FRenderDeferredObject> RenderDeferredObjects;
 		std::vector<FRenderDeferredInstancedObject> RenderDeferredInstancedObjects;
 
@@ -922,30 +959,34 @@ class FZeldaEngineApp
 		}
 	} Scene;
 
-	struct FWorld
+	struct XkWorld
 	{
-		std::string FilePath = "Content/World.json";
+		XkString FilePath = "Content/World.json";
 
 		bool EnableSkydome = true;
 		bool OverrideSkydome = false;
-		std::string SkydomeFileName;
+		XkString SkydomeFileName;
 
-		bool OverrideCubeMap = false;
-		std::array<std::string, 6> CubeMapFileNames;
+		bool OverrideCubemap = false;
+		std::array<XkString, 6> CubemapFileNames;
 
 		bool EnableBackground = false;
 		bool OverrideBackground = false;
-		std::string BackgroundFileName;
+		XkString BackgroundFileName;
 
-		std::vector<FLight> DirectionalLights;
-		std::vector<FLight> PointLights;
-		std::vector<FLight> SpotLights;
-		std::vector<FLight> QuadLights;
+		XkCameraDesc MainCamera;
 
-		std::vector<FObjectDesc> ObjectDescs;
+		std::vector<XkLightDesc> DirectionalLights;
+		std::vector<XkLightDesc> PointLights;
+		std::vector<XkLightDesc> SpotLights;
+		std::vector<XkLightDesc> QuadLights;
+
+		std::vector<XkObjectDesc> ObjectDescs;
 
 		void Load()
 		{
+			// reset data before load it
+			Reset();
 			FILE* fp = fopen(FilePath.c_str(), "rb");
 			if (fp == nullptr) {
 				throw std::runtime_error("[WORLD] Failed to load file: " + FilePath);
@@ -957,33 +998,45 @@ class FZeldaEngineApp
 			JsonDocument.ParseStream(is);
 			fclose(fp);
 
-			EnableSkydome = JsonDocument["EnableSkydome"].GetBool();
-			OverrideSkydome = JsonDocument["OverrideSkydome"].GetBool();
-			SkydomeFileName = JsonDocument["SkydomeFileName"].GetString();
+			const auto& MainCameraObject = JsonDocument["MainCamera"];
+			MainCamera.Position = glm::vec3(MainCameraObject["Position"][0].GetFloat(), MainCameraObject["Position"][1].GetFloat(), MainCameraObject["Position"][2].GetFloat());
+			MainCamera.Lookat = glm::vec3(MainCameraObject["Lookat"][0].GetFloat(), MainCameraObject["Lookat"][1].GetFloat(), MainCameraObject["Lookat"][2].GetFloat());
+			MainCamera.FOV = MainCameraObject["FOV"].GetFloat();
+			MainCamera.Speed = MainCameraObject["Speed"].GetFloat();
+			MainCamera.zNear = MainCameraObject["zNear"].GetFloat();
+			MainCamera.zFar = MainCameraObject["zFar"].GetFloat();
 
-			OverrideCubeMap = JsonDocument["OverrideCubeMap"].GetBool();
-			const auto& CubeMapFileNamesArray = JsonDocument["CubeMapFileNames"].GetArray();
-			for (uint32_t i = 0; i < CubeMapFileNamesArray.Size(); i++) {
-				CubeMapFileNames[i] = CubeMapFileNamesArray[i].GetString();
+			const auto& SkydomeObject = JsonDocument["Skydome"];
+			EnableSkydome = SkydomeObject["EnableSkydome"].GetBool();
+			OverrideSkydome = SkydomeObject["OverrideSkydome"].GetBool();
+			SkydomeFileName = SkydomeObject["SkydomeFileName"].GetString();
+			OverrideCubemap = SkydomeObject["OverrideCubemap"].GetBool();
+			const auto& CubemapFileNamesArray = SkydomeObject["CubemapFileNames"].GetArray();
+			for (uint32_t i = 0; i < CubemapFileNamesArray.Size(); i++) {
+				CubemapFileNames[i] = CubemapFileNamesArray[i].GetString();
 			}
 
-			EnableBackground = JsonDocument["EnableBackground"].GetBool();
-			OverrideBackground = JsonDocument["OverrideBackground"].GetBool();
-			BackgroundFileName = JsonDocument["BackgroundFileName"].GetString();
+			const auto& BackgroundObject = JsonDocument["Background"];
+			EnableBackground = BackgroundObject["EnableBackground"].GetBool();
+			OverrideBackground = BackgroundObject["OverrideBackground"].GetBool();
+			BackgroundFileName = BackgroundObject["BackgroundFileName"].GetString();
 
-			auto PushLightsFromJson = [](std::vector<FLight>& OutLights, const auto& JsonArray)
+			auto PushLightsFromJson = [](std::vector<XkLightDesc>& OutLights, const auto& JsonArray)
 				{
 					for (uint32_t i = 0; i < JsonArray.Size(); i++) {
 						const auto& JsonObject = JsonArray[i];
-						FLight LocalLight;
+						XkLightDesc LocalLight;
 						const auto& PositionArray = JsonObject["Position"].GetArray();
-						LocalLight.Position = glm::vec4(PositionArray[0].GetFloat(), PositionArray[1].GetFloat(), PositionArray[2].GetFloat(), 1.0f);
+						LocalLight.Position = glm::vec3(PositionArray[0].GetFloat(), PositionArray[1].GetFloat(), PositionArray[2].GetFloat());
+						LocalLight.Type = JsonObject["Type"].GetUint();
 						const auto& ColorArray = JsonObject["Color"].GetArray();
-						LocalLight.Color = glm::vec4(ColorArray[0].GetFloat(), ColorArray[1].GetFloat(), ColorArray[2].GetFloat(), ColorArray[3].GetFloat());
+						LocalLight.Color = glm::vec3(ColorArray[0].GetFloat(), ColorArray[1].GetFloat(), ColorArray[2].GetFloat());
+						LocalLight.Intensity = JsonObject["Intensity"].GetFloat();
 						const auto& DirectionArray = JsonObject["Direction"].GetArray();
-						LocalLight.Direction = glm::vec4(DirectionArray[0].GetFloat(), DirectionArray[1].GetFloat(), DirectionArray[2].GetFloat(), 1.0f);
-						const auto& LightInfoArray = JsonObject["LightInfo"].GetArray();
-						LocalLight.LightInfo = glm::vec4(LightInfoArray[0].GetFloat(), LightInfoArray[1].GetFloat(), LightInfoArray[2].GetFloat(), LightInfoArray[3].GetFloat());
+						LocalLight.Direction = glm::vec3(DirectionArray[0].GetFloat(), DirectionArray[1].GetFloat(), DirectionArray[2].GetFloat());
+						LocalLight.Radius = JsonObject["Radius"].GetFloat();
+						const auto& ExtraDataArray = JsonObject["ExtraData"].GetArray();
+						LocalLight.ExtraData = glm::vec4(ExtraDataArray[0].GetFloat(), ExtraDataArray[1].GetFloat(), ExtraDataArray[2].GetFloat(), ExtraDataArray[3].GetFloat());
 						OutLights.push_back(LocalLight);
 					}
 				};
@@ -999,7 +1052,8 @@ class FZeldaEngineApp
 			const auto& ObjectsArray = JsonDocument["Objects"];
 			for (uint32_t i = 0; i < ObjectsArray.Size(); i++) {
 				const auto& JsonObject = ObjectsArray[i];
-				FObjectDesc LocalObject;
+				XkObjectDesc LocalObject;
+				LocalObject.RenderFlags = (EXkRenderFlags)JsonObject["RenderFlags"].GetUint();
 				LocalObject.ProfabName = JsonObject["ProfabName"].GetString();
 				LocalObject.InstanceCount = JsonObject["InstanceCount"].GetUint();
 				LocalObject.MinRadius = JsonObject["MinRadius"].GetFloat();
@@ -1022,46 +1076,67 @@ class FZeldaEngineApp
 			JsonDocument.SetObject();
 			rapidjson::Document::AllocatorType& JsonAllocator = JsonDocument.GetAllocator();
 
-			JsonDocument.AddMember("EnableSkydome", rapidjson::Value(EnableSkydome), JsonAllocator);
-			JsonDocument.AddMember("OverrideSkydome", rapidjson::Value(OverrideSkydome), JsonAllocator);
-			JsonDocument.AddMember("SkydomeFileName", rapidjson::Value(SkydomeFileName.c_str(), JsonAllocator), JsonAllocator);
+			XkCameraDesc& Camera = MainCamera;
+			rapidjson::Value CameraObject(rapidjson::kObjectType);
+			CameraObject.AddMember("Position", rapidjson::Value(rapidjson::kArrayType), JsonAllocator);
+			CameraObject["Position"].PushBack(Camera.Position.x, JsonAllocator);
+			CameraObject["Position"].PushBack(Camera.Position.y, JsonAllocator);
+			CameraObject["Position"].PushBack(Camera.Position.z, JsonAllocator);
+			CameraObject.AddMember("Lookat", rapidjson::Value(rapidjson::kArrayType), JsonAllocator);
+			CameraObject["Lookat"].PushBack(Camera.Lookat.x, JsonAllocator);
+			CameraObject["Lookat"].PushBack(Camera.Lookat.y, JsonAllocator);
+			CameraObject["Lookat"].PushBack(Camera.Lookat.z, JsonAllocator);
+			CameraObject.AddMember("Speed", rapidjson::Value(Camera.Speed), JsonAllocator);
+			CameraObject.AddMember("FOV", rapidjson::Value(Camera.FOV), JsonAllocator);
+			CameraObject.AddMember("zNear", rapidjson::Value(Camera.zNear), JsonAllocator);
+			CameraObject.AddMember("zFar", rapidjson::Value(Camera.zFar), JsonAllocator);
+			JsonDocument.AddMember("MainCamera", CameraObject, JsonAllocator);
 
-			JsonDocument.AddMember("OverrideCubeMap", rapidjson::Value(EnableSkydome), JsonAllocator);
-			rapidjson::Value CubeMapFileNamesArray(rapidjson::kArrayType);
-			for (const auto& fileName : CubeMapFileNames) {
+			rapidjson::Value SkydomeObject(rapidjson::kObjectType);
+			SkydomeObject.AddMember("EnableSkydome", rapidjson::Value(EnableSkydome), JsonAllocator);
+			SkydomeObject.AddMember("OverrideSkydome", rapidjson::Value(OverrideSkydome), JsonAllocator);
+			SkydomeObject.AddMember("SkydomeFileName", rapidjson::Value(SkydomeFileName.c_str(), JsonAllocator), JsonAllocator);
+			SkydomeObject.AddMember("OverrideCubemap", rapidjson::Value(EnableSkydome), JsonAllocator);
+			rapidjson::Value CubemapFileNamesArray(rapidjson::kArrayType);
+			for (const auto& fileName : CubemapFileNames) {
 				rapidjson::Value strVal(fileName.c_str(), JsonAllocator);
-				CubeMapFileNamesArray.PushBack(strVal, JsonAllocator);
+				CubemapFileNamesArray.PushBack(strVal, JsonAllocator);
 			}
-			JsonDocument.AddMember("CubeMapFileNames", CubeMapFileNamesArray, JsonAllocator);
+			SkydomeObject.AddMember("CubemapFileNames", CubemapFileNamesArray, JsonAllocator);
+			JsonDocument.AddMember("Skydome", SkydomeObject, JsonAllocator);
 
-			JsonDocument.AddMember("EnableBackground", rapidjson::Value(EnableBackground), JsonAllocator);
-			JsonDocument.AddMember("OverrideBackground", rapidjson::Value(OverrideBackground), JsonAllocator);
-			JsonDocument.AddMember("BackgroundFileName", rapidjson::Value(BackgroundFileName.c_str(), JsonAllocator), JsonAllocator);
+			rapidjson::Value BackgroundObject(rapidjson::kObjectType);
+			BackgroundObject.AddMember("EnableBackground", rapidjson::Value(EnableBackground), JsonAllocator);
+			BackgroundObject.AddMember("OverrideBackground", rapidjson::Value(OverrideBackground), JsonAllocator);
+			BackgroundObject.AddMember("BackgroundFileName", rapidjson::Value(BackgroundFileName.c_str(), JsonAllocator), JsonAllocator);
+			JsonDocument.AddMember("Background", BackgroundObject, JsonAllocator);
 
-			auto PushLightsToJsonArray = [&JsonDocument, &JsonAllocator](rapidjson::Value& OutArray, const std::vector<FLight>& Lights) {
+			auto PushLightsToJsonArray = [&JsonDocument, &JsonAllocator](rapidjson::Value& OutArray, const std::vector<XkLightDesc>& Lights) {
 				for (const auto& light : Lights) {
 					rapidjson::Value lightObj(rapidjson::kObjectType);
 					lightObj.AddMember("Position", rapidjson::Value(rapidjson::kArrayType), JsonAllocator);
 					lightObj["Position"].PushBack(light.Position.x, JsonAllocator);
 					lightObj["Position"].PushBack(light.Position.y, JsonAllocator);
 					lightObj["Position"].PushBack(light.Position.z, JsonAllocator);
+					lightObj.AddMember("Type", rapidjson::Value(light.Type), JsonAllocator);
 
 					lightObj.AddMember("Color", rapidjson::Value(rapidjson::kArrayType), JsonAllocator);
 					lightObj["Color"].PushBack(light.Color.x, JsonAllocator);
 					lightObj["Color"].PushBack(light.Color.y, JsonAllocator);
 					lightObj["Color"].PushBack(light.Color.z, JsonAllocator);
-					lightObj["Color"].PushBack(light.Color.w, JsonAllocator);
+					lightObj.AddMember("Intensity", rapidjson::Value(light.Intensity), JsonAllocator);
 
 					lightObj.AddMember("Direction", rapidjson::Value(rapidjson::kArrayType), JsonAllocator);
 					lightObj["Direction"].PushBack(light.Direction.x, JsonAllocator);
 					lightObj["Direction"].PushBack(light.Direction.y, JsonAllocator);
 					lightObj["Direction"].PushBack(light.Direction.z, JsonAllocator);
+					lightObj.AddMember("Radius", rapidjson::Value(light.Radius), JsonAllocator);
 
-					lightObj.AddMember("LightInfo", rapidjson::Value(rapidjson::kArrayType), JsonAllocator);
-					lightObj["LightInfo"].PushBack(light.LightInfo.x, JsonAllocator);
-					lightObj["LightInfo"].PushBack(light.LightInfo.y, JsonAllocator);
-					lightObj["LightInfo"].PushBack(light.LightInfo.z, JsonAllocator);
-					lightObj["LightInfo"].PushBack(light.LightInfo.w, JsonAllocator);
+					lightObj.AddMember("ExtraData", rapidjson::Value(rapidjson::kArrayType), JsonAllocator);
+					lightObj["ExtraData"].PushBack(light.ExtraData.x, JsonAllocator);
+					lightObj["ExtraData"].PushBack(light.ExtraData.y, JsonAllocator);
+					lightObj["ExtraData"].PushBack(light.ExtraData.z, JsonAllocator);
+					lightObj["ExtraData"].PushBack(light.ExtraData.w, JsonAllocator);
 
 					OutArray.PushBack(lightObj, JsonAllocator);
 				}
@@ -1079,6 +1154,7 @@ class FZeldaEngineApp
 			rapidjson::Value ObjectsArray(rapidjson::kArrayType);
 			for (const auto& objDesc : ObjectDescs) {
 				rapidjson::Value JsonObject(rapidjson::kObjectType);
+				JsonObject.AddMember("RenderFlags", rapidjson::Value((uint16_t)objDesc.RenderFlags), JsonAllocator);
 				JsonObject.AddMember("ProfabName", rapidjson::Value(objDesc.ProfabName.c_str(), JsonAllocator), JsonAllocator);
 				JsonObject.AddMember("InstanceCount", rapidjson::Value(objDesc.InstanceCount), JsonAllocator);
 				JsonObject.AddMember("MinRadius", rapidjson::Value(objDesc.MinRadius), JsonAllocator);
@@ -1095,7 +1171,7 @@ class FZeldaEngineApp
 			}
 			JsonDocument.AddMember("Objects", ObjectsArray, JsonAllocator);
 			
-			std::vector<FObjectDesc> Objects;
+			std::vector<XkObjectDesc> Objects;
 			rapidjson::StringBuffer buffer;
 			rapidjson::PrettyWriter<rapidjson::StringBuffer> writer(buffer);
 			JsonDocument.Accept(writer);
@@ -1116,8 +1192,8 @@ class FZeldaEngineApp
 			OverrideSkydome = true;
 			SkydomeFileName = "Content/Textures/skydome.png";
 
-			OverrideCubeMap = true;
-			CubeMapFileNames = {
+			OverrideCubemap = true;
+			CubemapFileNames = {
 			"Content/Textures/cubemap_X0.png",
 			"Content/Textures/cubemap_X1.png",
 			"Content/Textures/cubemap_Y2.png",
@@ -1139,7 +1215,7 @@ class FZeldaEngineApp
 	} World;
 
 	/** GBuffer for Deferred shading*/
-	struct FGBuffer {
+	struct XkGBuffer {
 		// Depth Stencil RGBAFloat
 		VkFormat DepthStencilFormat;
 		VkImage DepthStencilImage;
@@ -1217,11 +1293,11 @@ class FZeldaEngineApp
 	} GBuffer;
 
 	/** ShadowmapPass vulkan resources*/
-	struct FShadowmapPass {
-		std::vector<FRenderObject*> RenderObjects;
-		std::vector<FRenderInstancedObject*> RenderInstancedObjects;
-		std::vector<FRenderObjectIndirect*> RenderIndirectObjects;
-		std::vector<FRenderInstancedObjectIndirect*> RenderIndirectInstancedObjects;
+	struct XkShadowmapPass {
+		std::vector<XkRenderObject*> RenderObjects;
+		std::vector<XkRenderInstancedObject*> RenderInstancedObjects;
+		std::vector<XkRenderObjectIndirect*> RenderIndirectObjects;
+		std::vector<XkRenderInstancedObjectIndirect*> RenderIndirectInstancedObjects;
 		float zNear, zFar;
 		int32_t Width, Height;
 		VkFormat Format;
@@ -1242,7 +1318,7 @@ class FZeldaEngineApp
 	} ShadowmapPass;
 
 	/** BackgroundPass vulkan resources*/
-	struct FBackgroundPass {
+	struct XkBackgroundPass {
 		bool EnableBackground;
 		std::vector<VkImage> Images;
 		std::vector<VkDeviceMemory> ImageMemorys;
@@ -1257,9 +1333,9 @@ class FZeldaEngineApp
 	} BackgroundPass;
 
 	/** SkydomePass vulkan resources*/
-	struct FSkydomePass {
+	struct XkSkydomePass {
 		bool EnableSkydome;
-		FMesh SkydomeMesh;
+		XkMesh SkydomeMesh;
 		std::vector<VkImage> Images;
 		std::vector<VkDeviceMemory> ImageMemorys;
 		std::vector<VkImageView> ImageViews;
@@ -1273,17 +1349,17 @@ class FZeldaEngineApp
 	} SkydomePass;
 
 	/** 构建 BasePass 需要的 Vulkan 资源*/
-	struct FBasePass {
-		std::vector<FRenderObject*> RenderObjects;
-		std::vector<FRenderInstancedObject*> RenderInstancedObjects;
+	struct XkBasePass {
+		std::vector<XkRenderObject*> RenderObjects;
+		std::vector<XkRenderInstancedObject*> RenderInstancedObjects;
 		VkDescriptorSetLayout DescriptorSetLayout;
 		VkPipelineLayout PipelineLayout;
 		std::vector<VkPipeline> Pipelines;
 		std::vector<VkPipeline> PipelinesInstanced;
 
 #if ENABLE_INDIRECT_DRAW
-		std::vector<FRenderObjectIndirect*> RenderIndirectObjects;
-		std::vector<FRenderInstancedObjectIndirect*> RenderIndirectInstancedObjects;
+		std::vector<XkRenderObjectIndirect*> RenderIndirectObjects;
+		std::vector<XkRenderInstancedObjectIndirect*> RenderIndirectInstancedObjects;
 		VkDescriptorSetLayout IndirectDescriptorSetLayout;
 		VkPipelineLayout IndirectPipelineLayout;
 		std::vector<VkPipeline> IndirectPipelines;
@@ -1307,14 +1383,18 @@ class FZeldaEngineApp
 #endif
 	} BasePass;
 
-	struct FImGuiPass {
+	struct XkImGuiPass {
 		VkRenderPass RenderPass;
 		VkDescriptorPool DescriptorPool;
 
 		float RightBarSpace;
 		float BottomBarSpace;
 
-		uint8_t SelectNodeIndex = 0;
+		ImFont* RobotoSlabBold;
+		ImFont* RobotoSlabMedium;
+		ImFont* RobotoSlabRegular;
+		ImFont* RobotoSlabSemiBold;
+		ImFont* SourceCodeProMedium;
 	} ImGuiPass;
 
 	/* GLFW Window */
@@ -1331,7 +1411,7 @@ class FZeldaEngineApp
 	VkSurfaceKHR Surface;
 
 	/* Logical Device Queue Family Indices*/
-	FQueueFamilyIndices QueueFamilyIndices;
+	XkQueueFamilyIndices QueueFamilyIndices;
 	/* Physical Device of GPU hardware*/
 	VkPhysicalDevice PhysicalDevice = VK_NULL_HANDLE;
 	/* Logic hardware, refer to physical device*/
@@ -1432,6 +1512,7 @@ public:
 		stbi_image_free(iconImages[0].pixels);
 		stbi_image_free(iconImages[1].pixels);
 
+		GlobalInput.InitCamera(&World.MainCamera);
 		GlobalInput.ResetToFocus();
 		GlobalInput.ResetAnimation();
 		GlobalConstants.ResetConstants();
@@ -1458,7 +1539,7 @@ public:
 		CreateUniformBuffers(); // Create uniform buffers
 		CreateShadowmapPass(); // Create shadow depths render pass
 		CreateSkydomePass(); // Create sky dome sphere render pass
-		CreateBasePass(); // Create base scene forward render pass
+		CreateBasePass(); // Create base scene render pass
 		CreateBackgroundPass(); // Create background rect render pass
 		CreateCommandBuffer(); // Create command buffer from command before submit
 		CreateSyncObjects(); // Create sync fence to ensure next frame render after the last frame finished
@@ -1491,7 +1572,7 @@ public:
 	}
 
 	static void FramebufferResizeCallback(GLFWwindow* window, int width, int height) {
-		auto app = reinterpret_cast<FZeldaEngineApp*>(glfwGetWindowUserPointer(window));
+		auto app = reinterpret_cast<XkZeldaEngineApp*>(glfwGetWindowUserPointer(window));
 		app->bFramebufferResized = true;
 	}
 
@@ -1503,9 +1584,9 @@ public:
 			return;
 		}
 #endif
-		FZeldaEngineApp* app = reinterpret_cast<FZeldaEngineApp*>(glfwGetWindowUserPointer(window));
-		FGlobalInput* input = &app->GlobalInput;
-		FGlobalConstants* constants = &app->GlobalConstants;
+		XkZeldaEngineApp* app = reinterpret_cast<XkZeldaEngineApp*>(glfwGetWindowUserPointer(window));
+		XkGlobalInput* input = &app->GlobalInput;
+		XkGlobalConstants* constants = &app->GlobalConstants;
 
 		if (action == GLFW_PRESS && key == GLFW_KEY_F)
 		{
@@ -1572,14 +1653,13 @@ public:
 	static void MouseButtonCallback(GLFWwindow* window, int button, int action, int mods)
 	{
 #if ENABLE_IMGUI_EDITOR
-
 		if (ImGui::GetIO().WantCaptureKeyboard || ImGui::GetIO().WantCaptureMouse)
 		{
 			return;
 		}
 #endif
-		FZeldaEngineApp* app = reinterpret_cast<FZeldaEngineApp*>(glfwGetWindowUserPointer(window));
-		FGlobalInput* input = &app->GlobalInput;
+		XkZeldaEngineApp* app = reinterpret_cast<XkZeldaEngineApp*>(glfwGetWindowUserPointer(window));
+		XkGlobalInput* input = &app->GlobalInput;
 
 		if (action == GLFW_PRESS && button == GLFW_MOUSE_BUTTON_RIGHT)
 		{
@@ -1603,8 +1683,8 @@ public:
 			return;
 		}
 #endif
-		FZeldaEngineApp* app = reinterpret_cast<FZeldaEngineApp*>(glfwGetWindowUserPointer(window));
-		FGlobalInput* input = &app->GlobalInput;
+		XkZeldaEngineApp* app = reinterpret_cast<XkZeldaEngineApp*>(glfwGetWindowUserPointer(window));
+		XkGlobalInput* input = &app->GlobalInput;
 
 		if (!input->bCameraMoving)
 		{
@@ -1618,8 +1698,8 @@ public:
 			input->bInitMouse = false;
 		}
 
-		float CameraYaw = input->CameraYaw;
-		float CameraPitch = input->CameraPitch;
+		float Yaw = input->MainCamera->Yaw;
+		float Pitch = input->MainCamera->Pitch;
 
 		float xoffset = (float)(xpos - input->LastMouseX);
 		float yoffset = (float)(ypos - input->LastMouseY);
@@ -1631,23 +1711,23 @@ public:
 		xoffset *= sensitivityX;
 		yoffset *= sensitivityY;
 
-		CameraYaw -= xoffset;
-		CameraPitch += yoffset;
-		if (CameraPitch > 89.0)
-			CameraPitch = 89.0;
-		if (CameraPitch < -89.0)
-			CameraPitch = -89.0;
+		Yaw -= xoffset;
+		Pitch += yoffset;
+		if (Pitch > 89.0)
+			Pitch = 89.0;
+		if (Pitch < -89.0)
+			Pitch = -89.0;
 
 		if (input->bCameraFocus)
 		{
-			glm::vec3 CameraPos = input->CameraPos;
-			float CameraArm = input->CameraArm;
-			CameraPos.x = cos(glm::radians(CameraYaw)) * cos(glm::radians(CameraPitch)) * CameraArm;
-			CameraPos.y = sin(glm::radians(CameraYaw)) * cos(glm::radians(CameraPitch)) * CameraArm;
-			CameraPos.z = sin(glm::radians(CameraPitch)) * CameraArm;
-			input->CameraPos = CameraPos;
-			input->CameraYaw = CameraYaw;
-			input->CameraPitch = CameraPitch;
+			glm::vec3 Position = input->MainCamera->Position;
+			float ArmLength = input->MainCamera->ArmLength;
+			Position.x = cos(glm::radians(Yaw)) * cos(glm::radians(Pitch)) * ArmLength;
+			Position.y = sin(glm::radians(Yaw)) * cos(glm::radians(Pitch)) * ArmLength;
+			Position.z = sin(glm::radians(Pitch)) * ArmLength;
+			input->MainCamera->Position = Position;
+			input->MainCamera->Yaw = Yaw;
+			input->MainCamera->Pitch = Pitch;
 		}
 		else
 		{
@@ -1662,22 +1742,22 @@ public:
 			return;
 		}
 
-		FZeldaEngineApp* app = reinterpret_cast<FZeldaEngineApp*>(glfwGetWindowUserPointer(window));
-		FGlobalInput* input = &app->GlobalInput;
+		XkZeldaEngineApp* app = reinterpret_cast<XkZeldaEngineApp*>(glfwGetWindowUserPointer(window));
+		XkGlobalInput* input = &app->GlobalInput;
 
 		if (input->bCameraFocus)
 		{
-			glm::vec3 CameraPos = input->CameraPos;
-			glm::vec3 CameraLookat = input->CameraLookat;
-			glm::vec3 lookatToPos = CameraLookat - CameraPos;
+			glm::vec3 Position = input->MainCamera->Position;
+			glm::vec3 Lookat = input->MainCamera->Lookat;
+			glm::vec3 lookatToPos = Lookat - Position;
 			glm::vec3 Direction = glm::normalize(lookatToPos);
 			float CameraDeltaMove = (float)yoffset * 0.5f;
-			float camerArm = input->CameraArm;
+			float camerArm = input->MainCamera->ArmLength;
 			camerArm += CameraDeltaMove;
 			camerArm = glm::max(camerArm, 1.0f);
-			CameraPos = CameraLookat - camerArm * Direction;
-			input->CameraPos = CameraPos;
-			input->CameraArm = camerArm;
+			Position = Lookat - camerArm * Direction;
+			input->MainCamera->Position = Position;
+			input->MainCamera->ArmLength = camerArm;
 		}
 	}
 
@@ -1724,7 +1804,7 @@ public:
 		}
 
 		// update os inputs
-		UpdateInputs();
+		UpdateWorld();
 #if ENABLE_IMGUI_EDITOR
 		// update imgui	widgets
 		UpdateImGuiWidgets();
@@ -1982,7 +2062,7 @@ protected:
 	*/
 	void CreateSwapChain()
 	{
-		FSwapChainSupportDetails swapChainSupport = QuerySwapChainSupport(PhysicalDevice);
+		XkSwapChainSupportDetails swapChainSupport = QuerySwapChainSupport(PhysicalDevice);
 
 		VkSurfaceFormatKHR surfaceFormat = ChooseSwapSurfaceFormat(swapChainSupport.Formats);
 		VkPresentModeKHR presentMode = ChooseSwapPresentMode(swapChainSupport.PresentModes);
@@ -2005,7 +2085,7 @@ protected:
 		createInfo.imageArrayLayers = 1;
 		createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
-		FQueueFamilyIndices queue_family_indices = FindQueueFamilies(PhysicalDevice);
+		XkQueueFamilyIndices queue_family_indices = FindQueueFamilies(PhysicalDevice);
 		uint32_t queueFamilyIndices[] = { queue_family_indices.GraphicsFamily.value(), queue_family_indices.PresentFamily.value() };
 
 		if (queue_family_indices.GraphicsFamily != queue_family_indices.PresentFamily)
@@ -2187,7 +2267,7 @@ protected:
 	/** Create command pool to manage all commands, such as DrawCall or memory transfers */
 	void CreateCommandPool()
 	{
-		FQueueFamilyIndices queueFamilyIndices = FindQueueFamilies(PhysicalDevice);
+		XkQueueFamilyIndices queueFamilyIndices = FindQueueFamilies(PhysicalDevice);
 
 		VkCommandPoolCreateInfo poolCI{};
 		poolCI.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -2202,22 +2282,22 @@ protected:
 
 	void CreateShaderSPIRVs()
 	{
-		std::string file_path = __FILE__;
-		std::string dir_path = file_path.substr(0, file_path.rfind("\\"));
+		XkString file_path = __FILE__;
+		XkString dir_path = file_path.substr(0, file_path.rfind("\\"));
 		// @TODO: compile shaders with glslang
 		std::vector<uint8_t> Source; VkShaderStageFlagBits ShaderStage;
-		FShaderCompiler::ReadShaderFile(Source, ShaderStage, "Content/meshshader.mesh");
+		XkShaderCompiler::ReadShaderFile(Source, ShaderStage, "Content/meshshader.mesh");
 		std::vector<uint32_t> spirv;
-		std::string info_log;
-		FShaderCompiler ShaderCompiler;
+		XkString info_log;
+		XkShaderCompiler ShaderCompiler;
 		ShaderCompiler.CompileToSpirv(ShaderStage, Source, "main", "", {}, spirv, info_log);
-		FShaderCompiler::SaveShaderFile("Content/Meshshader.spv", spirv);
+		XkShaderCompiler::SaveShaderFile("Content/Meshshader.spv", spirv);
 	}
 
 	/** Create uniform buffers (UBO) */
 	void CreateUniformBuffers()
 	{
-		VkDeviceSize baseBufferSize = sizeof(FUniformBufferBase);
+		VkDeviceSize baseBufferSize = sizeof(XkUniformBufferObject);
 		BaseUniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
 		BaseUniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
 
@@ -2232,7 +2312,7 @@ protected:
 			//vkMapMemory(Device, BaseUniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersMapped[i]);
 		}
 
-		VkDeviceSize bufferSizeOfView = sizeof(FView);
+		VkDeviceSize bufferSizeOfView = sizeof(XkView);
 		ViewUniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
 		ViewUniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
 
@@ -2345,7 +2425,7 @@ protected:
 
 		//////////////////////////////////////////////////////////
 		// Create UniformBuffers and UniformBuffersMemory
-		VkDeviceSize bufferSize = sizeof(FUniformBufferBase);
+		VkDeviceSize bufferSize = sizeof(XkUniformBufferObject);
 		ShadowmapPass.UniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
 		ShadowmapPass.UniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
@@ -2358,12 +2438,12 @@ protected:
 
 		//////////////////////////////////////////////////////////
 		// Create DescriptorSetLayout
-		CreateDescriptorSetLayout(ShadowmapPass.DescriptorSetLayout, ERenderFlags::Shadow);
+		CreateDescriptorSetLayout(ShadowmapPass.DescriptorSetLayout, EXkRenderFlags::Shadow);
 
 		//////////////////////////////////////////////////////////
 		// Bind DescriptorSet
 		CreateDescriptorSet(ShadowmapPass.DescriptorSets, ShadowmapPass.DescriptorPool, ShadowmapPass.DescriptorSetLayout, 
-			std::vector<VkImageView>(), std::vector<VkSampler>{}, ERenderFlags::Shadow);
+			std::vector<VkImageView>(), std::vector<VkSampler>{}, EXkRenderFlags::Shadow);
 
 		CreatePipelineLayout(ShadowmapPass.PipelineLayout, ShadowmapPass.DescriptorSetLayout);
 
@@ -2376,7 +2456,7 @@ protected:
 			ShadowmapPass.RenderPass,
 			"Shaders/Shadowmap_VS.spv",
 			"Shaders/Shadowmap_FS.spv", 
-			ERenderFlags::Shadow);
+			EXkRenderFlags::Shadow);
 
 		CreateGraphicsPipelines(
 			ShadowmapPass.PipelinesInstanced,
@@ -2384,7 +2464,7 @@ protected:
 			ShadowmapPass.RenderPass,
 			"Shaders/ShadowmapInstanced_VS.spv",
 			"Shaders/Shadowmap_FS.spv",
-		ERenderFlags::Instanced | ERenderFlags::Shadow);
+		EXkRenderFlags::Instanced | EXkRenderFlags::Shadow);
 	}
 
 	void CreateBackgroundPass()
@@ -2400,23 +2480,23 @@ protected:
 			BackgroundPass.ImageViews[0],
 			BackgroundPass.ImageSamplers[0],
 			"Content/Textures/background.png");
-		CreateDescriptorSetLayout(BackgroundPass.DescriptorSetLayout, ERenderFlags::Background);
+		CreateDescriptorSetLayout(BackgroundPass.DescriptorSetLayout, EXkRenderFlags::Background);
 		CreateDescriptorSet(
 			BackgroundPass.DescriptorSets,
 			BackgroundPass.DescriptorPool,
 			BackgroundPass.DescriptorSetLayout,
-			BackgroundPass.ImageViews, BackgroundPass.ImageSamplers, ERenderFlags::Background);
+			BackgroundPass.ImageViews, BackgroundPass.ImageSamplers, EXkRenderFlags::Background);
 
 		uint32_t PipelineNum = 1;
 		BackgroundPass.Pipelines.resize(PipelineNum);
-		CreatePipelineLayout(BackgroundPass.PipelineLayout, BackgroundPass.DescriptorSetLayout, ERenderFlags::Background);
+		CreatePipelineLayout(BackgroundPass.PipelineLayout, BackgroundPass.DescriptorSetLayout, EXkRenderFlags::Background);
 		CreateGraphicsPipelines(
 			BackgroundPass.Pipelines,
 			BackgroundPass.PipelineLayout,
 			MainRenderPass,
 			"Shaders/Background_VS.spv",
 			"Shaders/Background_FS.spv",
-			ERenderFlags::Background | ERenderFlags::ScreenRect);
+			EXkRenderFlags::Background | EXkRenderFlags::ScreenRect);
 	}
 
 	void CreateSkydomePass()
@@ -2452,25 +2532,25 @@ protected:
 			SkydomePass.ImageViews[0],
 			SkydomePass.ImageSamplers[0],
 			"Content/Textures/skydome.png");
-		CreateDescriptorSetLayout(SkydomePass.DescriptorSetLayout, ERenderFlags::Skydome);
+		CreateDescriptorSetLayout(SkydomePass.DescriptorSetLayout, EXkRenderFlags::Skydome);
 		CreateDescriptorSet(
 			SkydomePass.DescriptorSets,
 			SkydomePass.DescriptorPool,
 			SkydomePass.DescriptorSetLayout,
 			SkydomePass.ImageViews, SkydomePass.ImageSamplers,
-			ERenderFlags::Skydome);
+			EXkRenderFlags::Skydome);
 
 		uint32_t PipelineNum = 1;
 		SkydomePass.Pipelines.resize(PipelineNum);
-		CreatePipelineLayout(SkydomePass.PipelineLayout, SkydomePass.DescriptorSetLayout, ERenderFlags::Skydome);
+		CreatePipelineLayout(SkydomePass.PipelineLayout, SkydomePass.DescriptorSetLayout, EXkRenderFlags::Skydome);
 		CreateGraphicsPipelines(
 			SkydomePass.Pipelines,
 			SkydomePass.PipelineLayout,
 			MainRenderPass,
 			"Shaders/Skydome_VS.spv",
 			"Shaders/Skydome_FS.spv",
-			ERenderFlags::VertexIndexed | ERenderFlags::Skydome);
-		std::string skydome_obj = "Content/Meshes/skydome.obj";
+			EXkRenderFlags::VertexIndexed | EXkRenderFlags::Skydome);
+		XkString skydome_obj = "Content/Meshes/skydome.obj";
 		CreateMesh(SkydomePass.SkydomeMesh.Vertices, SkydomePass.SkydomeMesh.Indices, skydome_obj);
 		CreateVertexBuffer(
 			SkydomePass.SkydomeMesh.VertexBuffer,
@@ -2497,14 +2577,14 @@ protected:
 				MainRenderPass,
 				"Shaders/Base_VS.spv",
 				"Shaders/Base_FS.spv",
-				ERenderFlags::VertexIndexed);
+				EXkRenderFlags::VertexIndexed);
 			CreateGraphicsPipelines(
 				BasePass.PipelinesInstanced,
 				BasePass.PipelineLayout,
 				MainRenderPass,
 				"Shaders/BaseInstanced_VS.spv",
 				"Shaders/Base_FS.spv",
-				ERenderFlags::Instanced);
+				EXkRenderFlags::Instanced);
 		}
 		//~ End of creating scene, including VBO, UBO, textures, etc.
 
@@ -2523,14 +2603,14 @@ protected:
 				MainRenderPass,
 				"Shaders/Base_VS.spv",
 				"Shaders/Base_FS.spv",
-				ERenderFlags::VertexIndexed);
+				EXkRenderFlags::VertexIndexed);
 			CreateGraphicsPipelines(
 				BasePass.PipelinesInstanced,
 				BasePass.PipelineLayout,
 				MainRenderPass,
 				"Shaders/BaseInstanced_VS.spv",
 				"Shaders/Base_FS.spv",
-				ERenderFlags::Instanced);
+				EXkRenderFlags::Instanced);
 		}
 		//~ End create indirect BasePass
 #endif
@@ -2686,7 +2766,7 @@ protected:
 				throw std::runtime_error("[CreateBaseDeferredPass] Failed to Create framebuffer!");
 			}
 
-			CreateDescriptorSetLayout(BasePass.DeferredSceneDescriptorSetLayout, ERenderFlags::DeferredScene);
+			CreateDescriptorSetLayout(BasePass.DeferredSceneDescriptorSetLayout, EXkRenderFlags::DeferredScene);
 			BasePass.DeferredScenePipelines.resize(GlobalConstants.SpecConstantsCount);
 			BasePass.DeferredScenePipelinesInstanced.resize(GlobalConstants.SpecConstantsCount);
 			CreatePipelineLayout(BasePass.DeferredScenePipelineLayout, BasePass.DeferredSceneDescriptorSetLayout);
@@ -2696,17 +2776,17 @@ protected:
 				BasePass.DeferredSceneRenderPass,
 				"Shaders/Base_VS.spv",
 				"Shaders/BaseScene_FS.spv",
-				ERenderFlags::VertexIndexed | ERenderFlags::DeferredScene);
+				EXkRenderFlags::VertexIndexed | EXkRenderFlags::DeferredScene);
 			CreateGraphicsPipelines(
 				BasePass.DeferredScenePipelinesInstanced,
 				BasePass.DeferredScenePipelineLayout,
 				BasePass.DeferredSceneRenderPass,
 				"Shaders/BaseInstanced_VS.spv",
 				"Shaders/BaseScene_FS.spv",
-				ERenderFlags::Instanced | ERenderFlags::DeferredScene);
+				EXkRenderFlags::Instanced | EXkRenderFlags::DeferredScene);
 
 			/** Create DescriptorSetLayout for Lighting*/
-			CreateDescriptorSetLayout(BasePass.DeferredLightingDescriptorSetLayout, ERenderFlags::DeferredLighting);
+			CreateDescriptorSetLayout(BasePass.DeferredLightingDescriptorSetLayout, EXkRenderFlags::DeferredLighting);
 
 			/** Create DescriptorPool and DescriptorSets for Lighting*/
 			CreateDescriptorSet(
@@ -2715,7 +2795,7 @@ protected:
 				BasePass.DeferredLightingDescriptorSetLayout,
 				GBuffer.ImageViews(),
 				GBuffer.Samplers(),
-				ERenderFlags::DeferredLighting);
+				EXkRenderFlags::DeferredLighting);
 
 			CreatePipelineLayout(BasePass.DeferredLightingPipelineLayout, BasePass.DeferredLightingDescriptorSetLayout);
 			BasePass.DeferredLightingPipelines.resize(GlobalConstants.SpecConstantsCount);
@@ -2725,7 +2805,7 @@ protected:
 				MainRenderPass,
 				"Shaders/Background_VS.spv",
 				"Shaders/BaseLighting_FS.spv",
-				ERenderFlags::ScreenRect | ERenderFlags::NoDepthTest | ERenderFlags::DeferredLighting);
+				EXkRenderFlags::ScreenRect | EXkRenderFlags::NoDepthTest | EXkRenderFlags::DeferredLighting);
 		}
 		//~ End create deferred BasePass
 #endif
@@ -2850,8 +2930,12 @@ protected:
 		IMGUI_CHECKVERSION();
 		ImGui::CreateContext();
 		ImGuiIO& io = ImGui::GetIO(); (void)io;
-		ImFont* font = io.Fonts->AddFontFromFileTTF("Content/AppData/RobotoSlab-SemiBold.ttf", 20.0f);
-		if (font)
+		ImGuiPass.RobotoSlabBold = io.Fonts->AddFontFromFileTTF("Content/AppData/RobotoSlab-Bold.ttf", 20.0f);
+		ImGuiPass.RobotoSlabMedium = io.Fonts->AddFontFromFileTTF("Content/AppData/RobotoSlab-Medium.ttf", 20.0f);
+		ImGuiPass.RobotoSlabRegular = io.Fonts->AddFontFromFileTTF("Content/AppData/RobotoSlab-Regular.ttf", 20.0f);
+		ImGuiPass.RobotoSlabSemiBold = io.Fonts->AddFontFromFileTTF("Content/AppData/RobotoSlab-SemiBold.ttf", 20.0f);
+		ImGuiPass.SourceCodeProMedium = io.Fonts->AddFontFromFileTTF("Content/AppData/SourceCodePro-Medium.ttf", 20.0f);
+		if (ImGuiPass.RobotoSlabSemiBold)
 		{
 			ImFontConfig fontConfig;
 			fontConfig.SizePixels = 18.0f;
@@ -3018,7 +3102,7 @@ protected:
 			for (size_t i = 0; i < ShadowmapPass.RenderObjects.size(); i++)
 			{
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ShadowmapPass.Pipelines[0]);
-				FRenderObject* renderObject = ShadowmapPass.RenderObjects[i];
+				XkRenderObject* renderObject = ShadowmapPass.RenderObjects[i];
 				VkBuffer objectVertexBuffers[] = { renderObject->Mesh.VertexBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
@@ -3031,7 +3115,7 @@ protected:
 			for (size_t i = 0; i < ShadowmapPass.RenderInstancedObjects.size(); i++)
 			{
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ShadowmapPass.PipelinesInstanced[0]);
-				FRenderInstancedObject* renderInstancedObject = ShadowmapPass.RenderInstancedObjects[i];
+				XkRenderInstancedObject* renderInstancedObject = ShadowmapPass.RenderInstancedObjects[i];
 				VkBuffer objectVertexBuffers[] = { renderInstancedObject->Mesh.VertexBuffer };
 				VkBuffer objectInstanceBuffers[] = { renderInstancedObject->Mesh.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
@@ -3048,7 +3132,7 @@ protected:
 				ShadowmapPass.PipelineLayout, 0, 1, &ShadowmapPass.DescriptorSets[CurrentFrame], 0, nullptr);
 			for (size_t i = 0; i < ShadowmapPass.RenderIndirectObjects.size(); i++)
 			{
-				FRenderObjectIndirect* RenderIndirectObject = ShadowmapPass.RenderIndirectObjects[i];
+				XkRenderObjectIndirect* RenderIndirectObject = ShadowmapPass.RenderIndirectObjects[i];
 				VkBuffer objectVertexBuffers[] = { RenderIndirectObject->Mesh.VertexBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
@@ -3083,7 +3167,7 @@ protected:
 				ShadowmapPass.PipelineLayout, 0, 1, &ShadowmapPass.DescriptorSets[CurrentFrame], 0, nullptr);
 			for (size_t i = 0; i < ShadowmapPass.RenderIndirectInstancedObjects.size(); i++)
 			{
-				FRenderInstancedObjectIndirect* RenderIndirectInstancedObject = ShadowmapPass.RenderIndirectInstancedObjects[i];
+				XkRenderInstancedObjectIndirect* RenderIndirectInstancedObject = ShadowmapPass.RenderIndirectInstancedObjects[i];
 				VkBuffer objectVertexBuffers[] = { RenderIndirectInstancedObject->Mesh.VertexBuffer };
 				VkBuffer objectInstanceBuffers[] = { RenderIndirectInstancedObject->Mesh.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
@@ -3266,7 +3350,7 @@ protected:
 			// 【主场景】渲染延迟渲染灯光
 			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BasePass.DeferredLightingPipelines[GlobalConstants.SpecConstants]);
 			vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BasePass.DeferredLightingPipelineLayout, 0, 1, &BasePass.DeferredLightingDescriptorSets[CurrentFrame], 0, nullptr);
-			vkCmdPushConstants(commandBuffer, BasePass.DeferredLightingPipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
+			vkCmdPushConstants(commandBuffer, BasePass.DeferredLightingPipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(XkGlobalConstants), &GlobalConstants);
 			vkCmdDraw(commandBuffer, 6, 1, 0, 0);
 #endif
 			// 【主场景】设置前向渲染视口
@@ -3277,7 +3361,7 @@ protected:
 			{
 				VkPipeline baseScenePassPipeline = BasePass.Pipelines[GlobalConstants.SpecConstants];
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, baseScenePassPipeline);
-				FRenderObject* renderObject = BasePass.RenderObjects[i];
+				XkRenderObject* renderObject = BasePass.RenderObjects[i];
 				VkBuffer objectVertexBuffers[] = { renderObject->Mesh.VertexBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
@@ -3287,7 +3371,7 @@ protected:
 					VK_PIPELINE_BIND_POINT_GRAPHICS,
 					BasePass.PipelineLayout, 0, 1,
 					&renderObject->Material.DescriptorSets[CurrentFrame], 0, nullptr);
-				vkCmdPushConstants(commandBuffer, BasePass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
+				vkCmdPushConstants(commandBuffer, BasePass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(XkGlobalConstants), &GlobalConstants);
 				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderObject->Mesh.Indices.size()), 1, 0, 0, 0);
 			}
 			// 【主场景】渲染 Instanced 场景
@@ -3295,7 +3379,7 @@ protected:
 			{
 				VkPipeline BaseScenePassPipelineInstanced = BasePass.PipelinesInstanced[GlobalConstants.SpecConstants];
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BaseScenePassPipelineInstanced);
-				FRenderInstancedObject* renderInstancedObject = BasePass.RenderInstancedObjects[i];
+				XkRenderInstancedObject* renderInstancedObject = BasePass.RenderInstancedObjects[i];
 				VkBuffer objectVertexBuffers[] = { renderInstancedObject->Mesh.VertexBuffer };
 				VkBuffer objectInstanceBuffers[] = { renderInstancedObject->Mesh.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
@@ -3307,7 +3391,7 @@ protected:
 					VK_PIPELINE_BIND_POINT_GRAPHICS,
 					BasePass.PipelineLayout, 0, 1,
 					&renderInstancedObject->Material.DescriptorSets[CurrentFrame], 0, nullptr);
-				vkCmdPushConstants(commandBuffer, BasePass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
+				vkCmdPushConstants(commandBuffer, BasePass.PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(XkGlobalConstants), &GlobalConstants);
 				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderInstancedObject->Mesh.Indices.size()), renderInstancedObject->InstanceCount, 0, 0, 0);
 			}
 #if ENABLE_INDIRECT_DRAW
@@ -3316,7 +3400,7 @@ protected:
 			{
 				VkPipeline indirectScenePassPipeline = BasePass.IndirectPipelines[GlobalConstants.SpecConstants];
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, indirectScenePassPipeline);
-				FRenderObjectIndirect* RenderIndirectObject = BasePass.RenderIndirectObjects[i];
+				XkRenderObjectIndirect* RenderIndirectObject = BasePass.RenderIndirectObjects[i];
 				VkBuffer objectVertexBuffers[] = { RenderIndirectObject->Mesh.VertexBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
@@ -3326,7 +3410,7 @@ protected:
 					VK_PIPELINE_BIND_POINT_GRAPHICS,
 					BasePass.IndirectPipelineLayout, 0, 1,
 					&RenderIndirectObject->Material.DescriptorSets[CurrentFrame], 0, nullptr);
-				vkCmdPushConstants(commandBuffer, BasePass.IndirectPipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
+				vkCmdPushConstants(commandBuffer, BasePass.IndirectPipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(XkGlobalConstants), &GlobalConstants);
 				uint32_t indirectDrawCount = static_cast<uint32_t>(RenderIndirectObject->IndirectCommands.size());
 				if (IsSupportMultiDrawIndirect(PhysicalDevice))
 				{
@@ -3373,7 +3457,7 @@ protected:
 			{
 				VkPipeline indirectScenePassPipelineInstanced = BasePass.IndirectPipelinesInstanced[GlobalConstants.SpecConstants];
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, indirectScenePassPipelineInstanced);
-				FRenderInstancedObjectIndirect* RenderIndirectInstancedObject = BasePass.RenderIndirectInstancedObjects[i];
+				XkRenderInstancedObjectIndirect* RenderIndirectInstancedObject = BasePass.RenderIndirectInstancedObjects[i];
 				VkBuffer objectVertexBuffers[] = { RenderIndirectInstancedObject->Mesh.VertexBuffer };
 				VkBuffer objectInstanceBuffers[] = { RenderIndirectInstancedObject->Mesh.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
@@ -3387,7 +3471,7 @@ protected:
 					VK_PIPELINE_BIND_POINT_GRAPHICS,
 					BasePass.IndirectPipelineLayout, 0, 1,
 					&RenderIndirectInstancedObject->Material.DescriptorSets[CurrentFrame], 0, nullptr);
-				vkCmdPushConstants(commandBuffer, BasePass.IndirectPipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(FGlobalConstants), &GlobalConstants);
+				vkCmdPushConstants(commandBuffer, BasePass.IndirectPipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(XkGlobalConstants), &GlobalConstants);
 				uint32_t indirectDrawCount = static_cast<uint32_t>(RenderIndirectInstancedObject->IndirectCommands.size());
 				if (IsSupportMultiDrawIndirect(PhysicalDevice))
 				{
@@ -3649,12 +3733,12 @@ protected:
 		// Clean up Scene
 		for (size_t i = 0; i < Scene.RenderObjects.size(); i++)
 		{
-			FRenderObject& renderObject = Scene.RenderObjects[i];
+			XkRenderObject& renderObject = Scene.RenderObjects[i];
 			DestroyRenderObject(renderObject);
 		}
 		for (size_t i = 0; i < Scene.RenderInstancedObjects.size(); i++)
 		{
-			FRenderInstancedObject& renderInstancedObject = Scene.RenderInstancedObjects[i];
+			XkRenderInstancedObject& renderInstancedObject = Scene.RenderInstancedObjects[i];
 
 			DestroyRenderObject(renderInstancedObject);
 
@@ -3663,7 +3747,7 @@ protected:
 		}
 		for (size_t i = 0; i < Scene.RenderIndirectObjects.size(); i++)
 		{
-			FRenderObjectIndirect& RenderIndirectObject = Scene.RenderIndirectObjects[i];
+			XkRenderObjectIndirect& RenderIndirectObject = Scene.RenderIndirectObjects[i];
 
 			DestroyRenderObject(RenderIndirectObject);
 
@@ -3672,7 +3756,7 @@ protected:
 		}
 		for (size_t i = 0; i < Scene.RenderIndirectInstancedObjects.size(); i++)
 		{
-			FRenderInstancedObjectIndirect& RenderIndirectInstancedObject = Scene.RenderIndirectInstancedObjects[i];
+			XkRenderInstancedObjectIndirect& RenderIndirectInstancedObject = Scene.RenderIndirectInstancedObjects[i];
 
 			DestroyRenderObject(RenderIndirectInstancedObject);
 
@@ -3790,13 +3874,14 @@ protected:
 public:
 	void CreateEngineWorld()
 	{
+		GlobalInput.MainCamera = &World.MainCamera;
 #if ENABLE_GENERATE_WORLD
 		World.EnableSkydome = true;
 		World.OverrideSkydome = true;
 		World.SkydomeFileName = "grassland_night.png";
 
-		World.OverrideCubeMap = true;
-		World.CubeMapFileNames = {
+		World.OverrideCubemap = true;
+		World.CubemapFileNames = {
 			"grassland_night_X0.png",
 			"grassland_night_X1.png",
 			"grassland_night_Y2.png",
@@ -3809,17 +3894,20 @@ public:
 		World.OverrideBackground = true;
 		World.BackgroundFileName = "background.png";
 
-		FObjectDesc terrain;
+		XkObjectDesc terrain;
+		terrain.RenderFlags = EXkRenderFlags::None;
 		terrain.ProfabName = "terrain";
 		terrain.InstanceCount = 1;
 		World.ObjectDescs.push_back(terrain);
 
-		FObjectDesc rock_01;
+		XkObjectDesc rock_01;
+		rock_01.RenderFlags = EXkRenderFlags::DeferredScene;
 		rock_01.ProfabName = "rock_01";
 		rock_01.InstanceCount = 1;
 		World.ObjectDescs.push_back(rock_01);
 
-		FObjectDesc rock_02;
+		XkObjectDesc rock_02;
+		rock_02.RenderFlags = EXkRenderFlags::DeferredScene;
 		rock_02.ProfabName = "rock_02";
 		rock_02.InstanceCount = 64;
 		rock_02.MinRadius = 1.0f;
@@ -3828,7 +3916,8 @@ public:
 		rock_02.MaxPScale = 0.5f;
 		World.ObjectDescs.push_back(rock_02);
 
-		FObjectDesc grass_01;
+		XkObjectDesc grass_01;
+		grass_01.RenderFlags = EXkRenderFlags::DeferredScene;
 		grass_01.ProfabName = "grass_01";
 		grass_01.InstanceCount = 10000;
 		grass_01.MinRadius = 2.0f;
@@ -3837,7 +3926,8 @@ public:
 		grass_01.MaxPScale = 0.5f;
 		World.ObjectDescs.push_back(grass_01);
 
-		FObjectDesc grass_02;
+		XkObjectDesc grass_02;
+		grass_02.RenderFlags = EXkRenderFlags::DeferredScene;
 		grass_02.ProfabName = "grass_02";
 		grass_02.InstanceCount = 10000;
 		grass_02.MinRadius = 1.0f;
@@ -3846,34 +3936,35 @@ public:
 		grass_02.MaxPScale = 0.5f;
 		World.ObjectDescs.push_back(grass_02);
 
-		FObjectDesc directional_light;
-		uint32_t DirectionalLightNum = 1;
-		directional_light.ProfabName = "directional_light";
-		directional_light.InstanceCount = 1;
-
-		FLight Moonlight;
-		Moonlight.Position = glm::vec4(20.0f, 0.0f, 20.0f, 0.0);
-		Moonlight.Color = glm::vec4(0.0, 0.1, 0.6, 15.0);
-		Moonlight.Direction = glm::vec4(glm::normalize(glm::vec3(Moonlight.Position.x, Moonlight.Position.y, Moonlight.Position.z)), 0.0);
-		Moonlight.LightInfo = glm::vec4(0.0, 0.0, 0.0, 0.0);
+		XkLightDesc Moonlight;
+		Moonlight.Position = glm::vec3(20.0f, 0.0f, 20.0f);
+		Moonlight.Type = 0;
+		Moonlight.Color = glm::vec3(0.0, 0.1, 0.6);
+		Moonlight.Intensity = 15.0;
+		Moonlight.Direction = glm::vec3(glm::normalize(glm::vec3(Moonlight.Position.x, Moonlight.Position.y, Moonlight.Position.z)));
+		Moonlight.Radius = 0.0;
+		Moonlight.ExtraData = glm::vec4(0.0, 0.0, 0.0, 0.0);
 		World.DirectionalLights.push_back(Moonlight);
 
 		uint32_t PointLightNum = 16;
 		for (uint32_t i = 0; i < PointLightNum; i++)
 		{
-			FLight PointLight;
-			float radians = FObjectDesc::RandRange(0.0f, 360.0f, i);
-			float distance = FObjectDesc::RandRange(0.1f, 0.6f, i);
+			XkLightDesc PointLight;
+			float radians = XkObjectDesc::RandRange(0.0f, 360.0f, i);
+			float distance = XkObjectDesc::RandRange(0.1f, 0.6f, i);
 			float X = sin(glm::radians(radians)) * distance;
 			float Y = cos(glm::radians(radians)) * distance;
 			float Z = 1.0;
-			PointLight.Position = glm::vec4(glm::vec3(X, Y, Z), 0.0);
-			float R = (((float)FObjectDesc::RandRange(50, 75, i) / 100.0f));
-			float G = (((float)FObjectDesc::RandRange(25, 50, i) / 100.0f));
+			PointLight.Position = glm::vec3(X, Y, Z);
+			PointLight.Type = 1;
+			float R = (((float)XkObjectDesc::RandRange(50, 75, i) / 100.0f));
+			float G = (((float)XkObjectDesc::RandRange(25, 50, i) / 100.0f));
 			float B = 0.0;
-			PointLight.Color = glm::vec4(R, G, B, 10.0);
-			PointLight.Direction = glm::vec4(0.0, 0.0, 1.0, 1.5);
-			PointLight.LightInfo = glm::vec4(0.0, 0.0, 0.0, 0.0);
+			PointLight.Color = glm::vec3(R, G, B);
+			PointLight.Intensity = 10.0;
+			PointLight.Direction = glm::vec3(0.0, 0.0, 1.0);
+			PointLight.Radius = 1.5;
+			PointLight.ExtraData = glm::vec4(0.0, 0.0, 0.0, 0.0);
 			World.PointLights.push_back(PointLight);
 		}
 #endif
@@ -3887,16 +3978,16 @@ public:
 
 		SkydomePass.EnableSkydome = World.EnableSkydome;
 		/* (1) Override skydome and background */
-		if (World.OverrideCubeMap)
+		if (World.OverrideCubemap)
 		{
 			CleanupCubeMaps();
 			CreateImageCubeContext(CubemapImage, CubemapImageMemory, CubemapImageView, CubemapSampler, CubemapMaxMips, {
-			ASSETS(World.CubeMapFileNames[0]),
-			ASSETS(World.CubeMapFileNames[1]),
-			ASSETS(World.CubeMapFileNames[2]),
-			ASSETS(World.CubeMapFileNames[3]),
-			ASSETS(World.CubeMapFileNames[4]),
-			ASSETS(World.CubeMapFileNames[5]) });
+			ASSETS(World.CubemapFileNames[0]),
+			ASSETS(World.CubemapFileNames[1]),
+			ASSETS(World.CubemapFileNames[2]),
+			ASSETS(World.CubemapFileNames[3]),
+			ASSETS(World.CubemapFileNames[4]),
+			ASSETS(World.CubemapFileNames[5]) });
 		}
 
 		if (World.OverrideSkydome)
@@ -3908,7 +3999,7 @@ public:
 				SkydomePass.ImageViews[0],
 				SkydomePass.ImageSamplers[0],
 				ASSETS(World.SkydomeFileName));
-			UpdateDescriptorSet(SkydomePass.DescriptorSets, SkydomePass.ImageViews, SkydomePass.ImageSamplers, ERenderFlags::Skydome);
+			UpdateDescriptorSet(SkydomePass.DescriptorSets, SkydomePass.ImageViews, SkydomePass.ImageSamplers, EXkRenderFlags::Skydome);
 		}
 
 		BackgroundPass.EnableBackground = World.EnableBackground;
@@ -3921,7 +4012,7 @@ public:
 				BackgroundPass.ImageViews[0],
 				BackgroundPass.ImageSamplers[0],
 				ASSETS(World.BackgroundFileName));
-			UpdateDescriptorSet(BackgroundPass.DescriptorSets, BackgroundPass.ImageViews, BackgroundPass.ImageSamplers, ERenderFlags::Background);
+			UpdateDescriptorSet(BackgroundPass.DescriptorSets, BackgroundPass.ImageViews, BackgroundPass.ImageSamplers, EXkRenderFlags::Background);
 		}
 
 		if (Scene.bReload)
@@ -3939,9 +4030,9 @@ public:
 		/* (2) Create base scene */
 		if (ENABLE_INDIRECT_DRAW)
 		{
-			FRenderObjectIndirect object;
-			std::string object_obj = "Content/Meshes/dragon.meshlet";
-			std::vector<std::string> object_imgs = {
+			XkRenderObjectIndirect object;
+			XkString object_obj = "Content/Meshes/dragon.meshlet";
+			std::vector<XkString> object_imgs = {
 				"Content/Textures/default_grey.png",	// BaseColor
 				"Content/Textures/default_black.png",	// Metallic
 				"Content/Textures/default_white.png",	// Roughness
@@ -3950,14 +4041,14 @@ public:
 				"Content/Textures/default_black.png",	// Emissive
 				"Content/Textures/default_white.png" };	// Mask
 
-			CreateRenderIndirectObject<FRenderObjectIndirect>(object, object_obj, object_imgs);
+			CreateRenderIndirectObject<XkRenderObjectIndirect>(object, object_obj, object_imgs);
 
 			object.IndirectCommands.clear();
 
 			for (uint32_t i = 0; i < object.Mesh.MeshletSet.Meshlets.size(); ++i)
 			{
-				const FMeshlet meshletSet = object.Mesh.MeshletSet.Meshlets[i];
-				// Member of FMeshlet:
+				const XkMeshlet meshletSet = object.Mesh.MeshletSet.Meshlets[i];
+				// Member of XkMeshlet:
 				//uint32_t VertexOffset;
 				//uint32_t VertexCount;
 				//uint32_t TriangleOffset;
@@ -3984,16 +4075,16 @@ public:
 			//indirectCmd.firstInstance = 0; /*firstInstance*/
 			//object.IndirectCommands.push_back(indirectCmd);
 
-			CreateRenderIndirectBuffer<FRenderObjectIndirect>(object);
+			CreateRenderIndirectBuffer<XkRenderObjectIndirect>(object);
 			Scene.RenderIndirectObjects.push_back(object);
 		}
 
-		for (const FObjectDesc& ObjectDesc : World.ObjectDescs)
+		for (const XkObjectDesc& ObjectDesc : World.ObjectDescs)
 		{
 			if (ObjectDesc.InstanceCount > 1)
 			{
-				std::vector<FInstanceData> Data;
-				FObjectDesc::GenerateInstance(Data, ObjectDesc);
+				std::vector<XkInstanceData> Data;
+				XkObjectDesc::GenerateInstance(Data, ObjectDesc);
 #if ENABLE_DEFEERED_SHADING
 				CreateRenderObjectsFromProfabs(
 					Scene.RenderDeferredInstancedObjects,
@@ -4005,7 +4096,7 @@ public:
 					*Scene.DeferredSceneDescriptorSetLayout, ObjectDesc.ProfabName);
 			}
 
-			UpdateDescriptorSet(BasePass.DeferredLightingDescriptorSets, GBuffer.ImageViews(), GBuffer.Samplers(), ERenderFlags::DeferredLighting);
+			UpdateDescriptorSet(BasePass.DeferredLightingDescriptorSets, GBuffer.ImageViews(), GBuffer.Samplers(), EXkRenderFlags::DeferredLighting);
 #else
 				CreateRenderObjectsFromProfabs(
 					Scene.RenderInstancedObjects,
@@ -4022,6 +4113,11 @@ public:
 		/* 
 		* (3) Create light here
 		*/
+	}
+
+	/** Update player inputs*/
+	void UpdateWorld()
+	{
 		for (uint32_t i = 0; i < World.DirectionalLights.size(); i++)
 		{
 			View.DirectionalLights[i] = World.DirectionalLights[i];
@@ -4035,11 +4131,7 @@ public:
 			View.SpotLights[i] = World.SpotLights[i];
 		}
 		View.LightsCount = glm::ivec4(World.DirectionalLights.size(), World.PointLights.size(), World.SpotLights.size(), CubemapMaxMips);
-	}
 
-	/** Update player inputs*/
-	void UpdateInputs()
-	{
 		float DeltaTime = (float)GlobalInput.DeltaTime;    // Time between current frame and last frame
 		float LastFrame = (float)GlobalInput.CurrentTime;  // Time of last frame
 
@@ -4050,17 +4142,17 @@ public:
 		GlobalInput.DeltaTime = DeltaTime;
 
 		bool bCameraFocus = GlobalInput.bCameraFocus;
-		glm::vec3 CameraPos = GlobalInput.CameraPos;
-		glm::vec3 CameraLookat = GlobalInput.CameraLookat;
+		glm::vec3 Position = GlobalInput.MainCamera->Position;
+		glm::vec3 Lookat = GlobalInput.MainCamera->Lookat;
 		glm::vec3 CameraForward = glm::vec3(-1.0, 0.0, 0.0);
 		glm::vec3 CameraUp = glm::vec3(0.0, 0.0, 1.0);
-		float CameraSpeed = GlobalInput.CameraSpeed;
-		float CameraYaw = GlobalInput.CameraYaw;
-		float CameraPitch = GlobalInput.CameraPitch;
-		glm::vec3 CameraDirection = glm::normalize(CameraLookat - CameraPos);
+		float Speed = GlobalInput.MainCamera->Speed;
+		float Yaw = GlobalInput.MainCamera->Yaw;
+		float Pitch = GlobalInput.MainCamera->Pitch;
+		glm::vec3 CameraDirection = glm::normalize(Lookat - Position);
 		const float CameraDeltaMove = 2.5f * DeltaTime; // adjust accordingly
 
-		// @TODO: WASD control camera
+		// @TODO: WASD control Camera
 	}
 
 #if ENABLE_IMGUI_EDITOR
@@ -4087,6 +4179,7 @@ public:
 			ImGuiPass.RightBarSpace = frameBufferWidth * 0.2f;
 			ImGuiPass.BottomBarSpace = frameBufferHeight * 0.2f;
 
+			ImGui::PushFont(ImGuiPass.RobotoSlabSemiBold);
 			ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
 			ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.05f, 0.05f, 0.05f, 1.0f));
 
@@ -4180,28 +4273,39 @@ public:
 			{
 				if (ImGui::TreeNodeEx("Main Camera", ImGuiTreeNodeFlags_Leaf))
 				{
-					ImGuiPass.SelectNodeIndex = 1;
 					ImGui::TreePop();
 				}
 				ImGui::TreePop();
 			}
 			if (ImGui::TreeNode("Lights"))
 			{
-				if (World.DirectionalLights.size() > 0 && ImGui::TreeNode("Directional Lights"))
+				for (size_t i = 0; i < World.DirectionalLights.size(); i++)
 				{
-					ImGui::TreePop();
+					if (ImGui::TreeNodeEx("Directional Light", ImGuiTreeNodeFlags_Leaf))
+					{
+						ImGui::TreePop();
+					}
 				}
-				if (World.PointLights.size() > 0 && ImGui::TreeNode("Point Lights"))
+				for (size_t i = 0; i < World.PointLights.size(); i++)
 				{
-					ImGui::TreePop();
+					if (ImGui::TreeNodeEx("Point Light", ImGuiTreeNodeFlags_Leaf))
+					{
+						ImGui::TreePop();
+					}
 				}
-				if (World.SpotLights.size() > 0 && ImGui::TreeNode("Point Lights"))
+				for (size_t i = 0; i < World.SpotLights.size(); i++)
 				{
-					ImGui::TreePop();
+					if (ImGui::TreeNodeEx("Spot Light", ImGuiTreeNodeFlags_Leaf))
+					{
+						ImGui::TreePop();
+					}
 				}
-				if (World.QuadLights.size() > 0 && ImGui::TreeNode("Mesh Lights"))
+				for (size_t i = 0; i < World.QuadLights.size(); i++)
 				{
-					ImGui::TreePop();
+					if (ImGui::TreeNodeEx("Quad Light", ImGuiTreeNodeFlags_Leaf))
+					{
+						ImGui::TreePop();
+					}
 				}
 				ImGui::TreePop();
 			}
@@ -4231,29 +4335,15 @@ public:
 			}
 			if (ImGui::TreeNode("BasePass"))
 			{
-				if (ImGui::TreeNode("DeferredObjects"))
+				for (size_t i = 0; i < World.ObjectDescs.size(); i++)
 				{
-					ImGui::TreePop();
-				}
-				if (ImGui::TreeNode("DeferredInstancedObjects"))
-				{
-					ImGui::TreePop();
-				}
-				if (ImGui::TreeNode("ForwardObjects"))
-				{
-					ImGui::TreePop();
-				}
-				if (ImGui::TreeNode("ForwardInstancedObjects"))
-				{
-					ImGui::TreePop();
-				}
-				if (ImGui::TreeNode("ForwardObjectIndirects"))
-				{
-					ImGui::TreePop();
-				}
-				if (ImGui::TreeNode("ForwardInstancedObjectIndirects"))
-				{
-					ImGui::TreePop();
+					const auto& ObjectDesc = World.ObjectDescs[i];
+					XkString ObjectName = ObjectDesc.ProfabName;
+					ObjectName[0] = std::toupper(ObjectName[0]); // upper the first string
+					if (ImGui::TreeNodeEx(ObjectName.c_str(), ImGuiTreeNodeFlags_Leaf))
+					{
+						ImGui::TreePop();
+					}
 				}
 				ImGui::TreePop();
 			}
@@ -4282,7 +4372,6 @@ public:
 			ImGui::Begin("Details", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_HorizontalScrollbar);
 			ImGui::Text("Select an item to view its details.");
 			ImGui::End();
-
 			// create a python IDE window
 			ImGui::SetNextWindowPos(ImVec2(0, windowHeight - bottomBarWidth));
 			ImGui::SetNextWindowSize(ImVec2(windowWidth - rightBarWidth, bottomBarWidth));
@@ -4291,7 +4380,9 @@ public:
 				"# This is a Python code example\n"
 				"print('Hello, world!')\n";
 			ImGui::Spacing();
+			ImGui::PushFont(ImGuiPass.SourceCodeProMedium);
 			ImGui::InputTextMultiline("Code", code, IM_ARRAYSIZE(code), ImVec2(-FLT_MIN, ImGui::GetTextLineHeight() * 16), ImGuiInputTextFlags_AllowTabInput);
+			ImGui::PopFont();
 			static char filePath[1024 * 16] = "Content/World/Untitled.json";
 			std::strncpy(filePath, World.FilePath.c_str(), sizeof(filePath) - 1);
 			if (ImGui::InputText("##FilePath", filePath, IM_ARRAYSIZE(filePath), ImGuiInputTextFlags_AllowTabInput))
@@ -4310,6 +4401,7 @@ public:
 
 			ImGui::PopStyleColor();
 			ImGui::PopStyleColor();
+			ImGui::PopFont();
 		}
 		else
 		{
@@ -4323,12 +4415,12 @@ public:
 	/** Update Uniform Buffer Object (UBO) */
 	void UpdateUniformBuffer(const uint32_t currentImageIdx)
 	{
-		glm::vec3 CameraPos = GlobalInput.CameraPos;
-		glm::vec3 CameraLookat = GlobalInput.CameraLookat;
-		glm::vec3 CameraUp = GlobalInput.CameraUp;
-		float CameraFOV = GlobalInput.CameraFOV;
-		float zNear = GlobalInput.zNear;
-		float zFar = GlobalInput.zFar;
+		glm::vec3 Position = GlobalInput.MainCamera->Position;
+		glm::vec3 Lookat = GlobalInput.MainCamera->Lookat;
+		glm::vec3 CameraUp = glm::vec3(0.0f, 0.0f, 1.0f);
+		float FOV = GlobalInput.MainCamera->FOV;
+		float zNear = GlobalInput.MainCamera->zNear;
+		float zFar = GlobalInput.MainCamera->zFar;
 
 		static auto StartTime = std::chrono::high_resolution_clock::now();
 		auto CurrentTime = std::chrono::high_resolution_clock::now();
@@ -4343,20 +4435,20 @@ public:
 
 		glm::vec3 center = glm::vec3(0.0f);
 
-		FLight* MainLight = &View.DirectionalLights[0];
+		XkLight* MainLight = &View.DirectionalLights[0];
 		glm::vec3 lightPos = glm::vec3(MainLight->Position.x, MainLight->Position.y, MainLight->Position.z);
 		float RollStage = GlobalInput.bPlayStageRoll ?
 			(GlobalInput.RollStage + GlobalInput.DeltaTime * glm::radians(15.0f)) : GlobalInput.RollStage;
 		GlobalInput.RollStage = RollStage;
 		glm::mat4 localToWorld = glm::rotate(glm::mat4(1.0f), RollStage, glm::vec3(0.0f, 0.0f, 1.0f));
 		glm::mat4 shadowView = glm::lookAt(lightPos, glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-		glm::mat4 shadowProjection = glm::perspective(glm::radians(CameraFOV), 1.0f, ShadowmapPass.zNear, ShadowmapPass.zFar);
+		glm::mat4 shadowProjection = glm::perspective(glm::radians(FOV), 1.0f, ShadowmapPass.zNear, ShadowmapPass.zFar);
 		shadowProjection[1][1] *= -1;
 
-		glm::mat4 cameraView = glm::lookAt(CameraPos, CameraLookat, CameraUp);
-		glm::mat4 cameraProj = glm::perspective(glm::radians(CameraFOV), SwapChainExtent.width / (float)SwapChainExtent.height, zNear, zFar);
+		glm::mat4 cameraView = glm::lookAt(Position, Lookat, CameraUp);
+		glm::mat4 cameraProj = glm::perspective(glm::radians(FOV), SwapChainExtent.width / (float)SwapChainExtent.height, zNear, zFar);
 
-		FUniformBufferBase BaseData{};
+		XkUniformBufferObject BaseData{};
 		BaseData.Model = localToWorld;
 		BaseData.View = cameraView;
 		BaseData.Proj = cameraProj;
@@ -4371,7 +4463,7 @@ public:
 		View.ViewProjSpace = cameraProj * cameraView;
 		View.ShadowmapSpace = shadowProjection * shadowView;
 		View.LocalToWorld = localToWorld;
-		View.CameraInfo = glm::vec4(CameraPos, CameraFOV);
+		View.CameraInfo = glm::vec4(Position, FOV);
 		View.ViewportInfo = glm::vec4(SwapChainExtent.width, SwapChainExtent.height, ImGuiPass.RightBarSpace, ImGuiPass.BottomBarSpace);
 		uint32_t PointLightNum = View.LightsCount[1];
 		for (uint32_t i = 0; i < PointLightNum; i++)
@@ -4392,7 +4484,7 @@ public:
 		memcpy(data_view, &View, sizeof(View));
 		vkUnmapMemory(Device, ViewUniformBuffersMemory[currentImageIdx]);
 
-		FUniformBufferBase UBOShadowData{};
+		XkUniformBufferObject UBOShadowData{};
 		UBOShadowData.Model = localToWorld;
 		UBOShadowData.View = shadowView;
 		UBOShadowData.Proj = shadowProjection;
@@ -4418,26 +4510,26 @@ public:
 #endif
 		for (size_t i = 0; i < Scene.RenderObjects.size(); i++)
 		{
-			FRenderObject* RenderObject = &Scene.RenderObjects[i];
+			XkRenderObject* RenderObject = &Scene.RenderObjects[i];
 			BasePass.RenderObjects.push_back(RenderObject);
 			ShadowmapPass.RenderObjects.push_back(RenderObject);
 		}
 		for (size_t i = 0; i < Scene.RenderInstancedObjects.size(); i++)
 		{
-			FRenderInstancedObject* RenderInstancedObject = &Scene.RenderInstancedObjects[i];
+			XkRenderInstancedObject* RenderInstancedObject = &Scene.RenderInstancedObjects[i];
 			BasePass.RenderInstancedObjects.push_back(RenderInstancedObject);
 			ShadowmapPass.RenderInstancedObjects.push_back(RenderInstancedObject);
 		}
 #if ENABLE_INDIRECT_DRAW
 		for (size_t i = 0; i < Scene.RenderIndirectObjects.size(); i++)
 		{
-			FRenderObjectIndirect* RenderIndirectObject = &Scene.RenderIndirectObjects[i];
+			XkRenderObjectIndirect* RenderIndirectObject = &Scene.RenderIndirectObjects[i];
 			BasePass.RenderIndirectObjects.push_back(RenderIndirectObject);
 			ShadowmapPass.RenderIndirectObjects.push_back(RenderIndirectObject);
 		}
 		for (size_t i = 0; i < Scene.RenderIndirectInstancedObjects.size(); i++)
 		{
-			FRenderInstancedObjectIndirect* RenderIndirectInstancedObject = &Scene.RenderIndirectInstancedObjects[i];
+			XkRenderInstancedObjectIndirect* RenderIndirectInstancedObject = &Scene.RenderIndirectInstancedObjects[i];
 			BasePass.RenderIndirectInstancedObjects.push_back(RenderIndirectInstancedObject);
 			ShadowmapPass.RenderIndirectInstancedObjects.push_back(RenderIndirectInstancedObject);
 		}
@@ -4462,13 +4554,13 @@ public:
 	void CreatePipelineLayout(
 		VkPipelineLayout& outPipelineLayout, 
 		const VkDescriptorSetLayout& inDescriptorSetLayout,
-		const ERenderFlags rFlags = ERenderFlags::None)
+		const EXkRenderFlags rFlags = EXkRenderFlags::None)
 	{
 		// 设置 push constants
 		VkPushConstantRange pushConstant;
 		// 这个PushConstant的范围从头开始
 		pushConstant.offset = 0;
-		pushConstant.size = sizeof(FGlobalConstants);
+		pushConstant.size = sizeof(XkGlobalConstants);
 		// 这是个全局PushConstant，所以希望各个着色器都能访问到
 		pushConstant.stageFlags = VK_SHADER_STAGE_ALL;
 
@@ -4491,9 +4583,9 @@ public:
 		std::vector<VkPipeline>& outPipelines,
 		const VkPipelineLayout& inPipelineLayout,
 		const VkRenderPass& inRenderPass,
-		const std::string& inVertFilename,
-		const std::string& inFragFilename,
-		const ERenderFlags rFlags = ERenderFlags::None)
+		const XkString& inVertFilename,
+		const XkString& inFragFilename,
+		const EXkRenderFlags rFlags = EXkRenderFlags::None)
 	{
 		/* create shaders */
 		auto vertShaderCode = LoadShaderSource(inVertFilename);
@@ -4513,14 +4605,14 @@ public:
 		VkPipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageCI, fragShaderStageCI };
 
 		/* vertex data description */
-		auto bindingDescription = FVertex::GetBindingDescription();
-		auto attributeDescriptions = FVertex::GetAttributeDescriptions();
-		auto bindingInstancedDescriptions = FVertex::GetBindingInstancedDescriptions();
-		auto attributeInstancedDescriptions = FVertex::GetAttributeInstancedDescriptions();
+		auto bindingDescription = XkVertex::GetBindingDescription();
+		auto attributeDescriptions = XkVertex::GetAttributeDescriptions();
+		auto bindingInstancedDescriptions = XkVertex::GetBindingInstancedDescriptions();
+		auto attributeInstancedDescriptions = XkVertex::GetAttributeInstancedDescriptions();
 
 		/* vertex buffer input */
 		VkPipelineVertexInputStateCreateInfo vertexInputCI{};
-		if (rFlags == ERenderFlags::Instanced)
+		if (rFlags == EXkRenderFlags::Instanced)
 		{
 			vertexInputCI.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 			vertexInputCI.vertexBindingDescriptionCount = static_cast<uint32_t>(bindingInstancedDescriptions.size());
@@ -4528,7 +4620,7 @@ public:
 			vertexInputCI.pVertexBindingDescriptions = bindingInstancedDescriptions.data();
 			vertexInputCI.pVertexAttributeDescriptions = attributeInstancedDescriptions.data();
 		}
-		else if (rFlags == ERenderFlags::ScreenRect)
+		else if (rFlags == EXkRenderFlags::ScreenRect)
 		{
 			vertexInputCI.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 			vertexInputCI.vertexBindingDescriptionCount = 0;
@@ -4564,13 +4656,13 @@ public:
 #endif
 		rasterizerCI.lineWidth = 1.0f;
 		rasterizerCI.cullMode = VK_CULL_MODE_BACK_BIT;
-		if (rFlags == ERenderFlags::TwoSided || rFlags == ERenderFlags::Shadow)
+		if (rFlags == EXkRenderFlags::TwoSided || rFlags == EXkRenderFlags::Shadow)
 		{
 			rasterizerCI.cullMode = VK_CULL_MODE_NONE;
 		}
 		rasterizerCI.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 		rasterizerCI.depthBiasEnable = VK_FALSE;
-		if (rFlags == ERenderFlags::Shadow)
+		if (rFlags == EXkRenderFlags::Shadow)
 		{
 			rasterizerCI.depthBiasEnable = VK_TRUE;
 		}
@@ -4586,13 +4678,13 @@ public:
 		depthStencilCI.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
 		depthStencilCI.depthTestEnable = VK_TRUE;
 		depthStencilCI.depthWriteEnable = VK_TRUE;
-		if (rFlags == ERenderFlags::NoDepthTest)
+		if (rFlags == EXkRenderFlags::NoDepthTest)
 		{
 			depthStencilCI.depthTestEnable = VK_FALSE;
 			depthStencilCI.depthWriteEnable = VK_FALSE;
 		}
 		depthStencilCI.depthCompareOp = VK_COMPARE_OP_LESS;
-		if (rFlags == ERenderFlags::Background || rFlags == ERenderFlags::Shadow)
+		if (rFlags == EXkRenderFlags::Background || rFlags == EXkRenderFlags::Shadow)
 		{
 			depthStencilCI.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
 		}
@@ -4618,7 +4710,7 @@ public:
 		colorBlendingCI.blendConstants[3] = 0.0f;
 		colorBlendingCI.attachmentCount = 1;
 		colorBlendingCI.pAttachments = &colorBlendAttachment;
-		if (rFlags == ERenderFlags::DeferredScene)
+		if (rFlags == EXkRenderFlags::DeferredScene)
 		{
 			std::array<VkPipelineColorBlendAttachmentState, 5> colorBlendAttachments;
 			colorBlendAttachments[0] = colorBlendAttachment;
@@ -4629,12 +4721,12 @@ public:
 			colorBlendingCI.attachmentCount = static_cast<uint32_t>(colorBlendAttachments.size());
 			colorBlendingCI.pAttachments = colorBlendAttachments.data();
 		}
-		else if (rFlags == ERenderFlags::DeferredLighting)
+		else if (rFlags == EXkRenderFlags::DeferredLighting)
 		{
 			colorBlendingCI.attachmentCount = 1;
 			colorBlendingCI.pAttachments = &colorBlendAttachment;
 		}
-		else if (rFlags == ERenderFlags::Shadow)
+		else if (rFlags == EXkRenderFlags::Shadow)
 		{
 			// No blend attachment states (no color attachments used)
 			colorBlendingCI.attachmentCount = 0;
@@ -4643,7 +4735,7 @@ public:
 		}
 
 		std::vector<VkDynamicState> dynamicStates = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
-		if (rFlags == ERenderFlags::Shadow)
+		if (rFlags == EXkRenderFlags::Shadow)
 		{
 			// Add depth bias to dynamic state, so we can change it at runtime
 			dynamicStates.push_back(VK_DYNAMIC_STATE_DEPTH_BIAS);
@@ -4656,7 +4748,7 @@ public:
 		VkGraphicsPipelineCreateInfo pipelineCI{};
 		pipelineCI.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
 		pipelineCI.stageCount = 2;
-		if (rFlags == ERenderFlags::Shadow)
+		if (rFlags == EXkRenderFlags::Shadow)
 		{
 			// Off screen pipeline (vertex shader only)
 			pipelineCI.stageCount = 1;
@@ -4702,13 +4794,13 @@ public:
 	}
 
 	/** Generic function for creating DescriptorSetLayout */
-	void CreateDescriptorSetLayout(VkDescriptorSetLayout& outDescriptorSetLayout, const ERenderFlags rFlags = ERenderFlags::None)
+	void CreateDescriptorSetLayout(VkDescriptorSetLayout& outDescriptorSetLayout, const EXkRenderFlags rFlags = EXkRenderFlags::None)
 	{
 		std::vector<VkDescriptorSetLayoutBinding> layoutBindings;
 		VkDescriptorSetLayoutCreateInfo layoutInfo{};
 		uint32_t samplerNumber = PBR_SAMPLER_NUMBER;
 		uint32_t bindingOffset = 0;
-		if (rFlags == ERenderFlags::Shadow)
+		if (rFlags == EXkRenderFlags::Shadow)
 		{
 			VkDescriptorSetLayoutBinding uboLayoutBinding{};
 			uboLayoutBinding.binding = 0;
@@ -4720,7 +4812,7 @@ public:
 			layoutBindings.resize(1);
 			layoutBindings[0] = uboLayoutBinding;
 		}
-		else if (rFlags == ERenderFlags::Skydome)
+		else if (rFlags == EXkRenderFlags::Skydome)
 		{
 			samplerNumber = SKY_SAMPLER_NUMBER;
 			bindingOffset = 2;
@@ -4754,7 +4846,7 @@ public:
 				layoutBindings[i + bindingOffset] = samplerLayoutBinding;
 			}
 		}
-		else if (rFlags == ERenderFlags::Background)
+		else if (rFlags == EXkRenderFlags::Background)
 		{
 			samplerNumber = BG_SAMPLER_NUMBER;
 			bindingOffset = 1;
@@ -4780,7 +4872,7 @@ public:
 				layoutBindings[i + bindingOffset] = samplerLayoutBinding;
 			}
 		}
-		else if (rFlags == ERenderFlags::DeferredLighting)
+		else if (rFlags == EXkRenderFlags::DeferredLighting)
 		{
 			samplerNumber = GBUFFER_SAMPLER_NUMBER;
 			VkDescriptorSetLayoutBinding viewLayoutBinding{};
@@ -4887,13 +4979,13 @@ public:
 	/** Generic function for creating DescriptorSets */
 	void CreateDescriptorSet(std::vector<VkDescriptorSet>& outDescriptorSets, VkDescriptorPool& outDescriptorPool,
 		const VkDescriptorSetLayout& inDescriptorSetLayout, const std::vector<VkImageView>& inImageViews, const std::vector<VkSampler>& inSamplers,
-		const ERenderFlags rFlags = ERenderFlags::None)
+		const EXkRenderFlags rFlags = EXkRenderFlags::None)
 	{
 		std::vector<VkDescriptorPoolSize> poolSizes;
 		VkDescriptorPoolCreateInfo poolCI{};
 		uint32_t samplerNumber = static_cast<uint32_t>(inSamplers.size());
 		uint32_t bindingOffset = 0;
-		if (rFlags == ERenderFlags::Shadow)
+		if (rFlags == EXkRenderFlags::Shadow)
 		{
 			samplerNumber = 0;
 			bindingOffset = 1;
@@ -4901,7 +4993,7 @@ public:
 			poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 			poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
 		}
-		else if (rFlags == ERenderFlags::Skydome)
+		else if (rFlags == EXkRenderFlags::Skydome)
 		{
 			bindingOffset = 2;
 
@@ -4916,7 +5008,7 @@ public:
 				poolSizes[i + bindingOffset].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
 			}
 		}
-		else if (rFlags == ERenderFlags::Background)
+		else if (rFlags == EXkRenderFlags::Background)
 		{
 			bindingOffset = 1;
 
@@ -4929,7 +5021,7 @@ public:
 				poolSizes[i + bindingOffset].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
 			}
 		}
-		else if (rFlags == ERenderFlags::DeferredLighting)
+		else if (rFlags == EXkRenderFlags::DeferredLighting)
 		{
 			bindingOffset = 3;
 
@@ -4999,13 +5091,13 @@ public:
 		std::vector<VkDescriptorSet>& outDescriptorSets,
 		const std::vector<VkImageView>& inImageViews,
 		const std::vector<VkSampler>& inSamplers,
-		const ERenderFlags rFlags = ERenderFlags::None)
+		const EXkRenderFlags rFlags = EXkRenderFlags::None)
 	{
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
 		{
 			uint32_t samplerNumber = static_cast<uint32_t>(inSamplers.size());
 			uint32_t bindingOffset = 0;
-			if (rFlags == ERenderFlags::Shadow)
+			if (rFlags == EXkRenderFlags::Shadow)
 			{
 				bindingOffset = 1;
 				std::vector<VkWriteDescriptorSet> descriptorWrites{};
@@ -5013,7 +5105,7 @@ public:
 				VkDescriptorBufferInfo bufferInfo{};
 				bufferInfo.buffer = ShadowmapPass.UniformBuffers[i];
 				bufferInfo.offset = 0;
-				bufferInfo.range = sizeof(FUniformBufferBase);
+				bufferInfo.range = sizeof(XkUniformBufferObject);
 				descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 				descriptorWrites[0].dstSet = outDescriptorSets[i];
 				descriptorWrites[0].dstBinding = 0;
@@ -5024,7 +5116,7 @@ public:
 
 				vkUpdateDescriptorSets(Device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
 			}
-			else if (rFlags == ERenderFlags::Skydome)
+			else if (rFlags == EXkRenderFlags::Skydome)
 			{
 				bindingOffset = 2;
 				std::vector<VkWriteDescriptorSet> descriptorWrites{};
@@ -5034,7 +5126,7 @@ public:
 				VkDescriptorBufferInfo baseBufferInfo{};
 				baseBufferInfo.buffer = BaseUniformBuffers[i];
 				baseBufferInfo.offset = 0;
-				baseBufferInfo.range = sizeof(FUniformBufferBase);
+				baseBufferInfo.range = sizeof(XkUniformBufferObject);
 
 				descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 				descriptorWrites[0].dstSet = outDescriptorSets[i];
@@ -5080,7 +5172,7 @@ public:
 
 				vkUpdateDescriptorSets(Device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
 			}
-			else if (rFlags == ERenderFlags::Background)
+			else if (rFlags == EXkRenderFlags::Background)
 			{
 				bindingOffset = 1;
 				std::vector<VkWriteDescriptorSet> descriptorWrites{};
@@ -5122,7 +5214,7 @@ public:
 
 				vkUpdateDescriptorSets(Device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
 			}
-			else if (rFlags == ERenderFlags::DeferredLighting)
+			else if (rFlags == EXkRenderFlags::DeferredLighting)
 			{
 				bindingOffset = 3;
 				std::vector<VkWriteDescriptorSet> descriptorWrites{};
@@ -5131,7 +5223,7 @@ public:
 				VkDescriptorBufferInfo viewBufferInfo{};
 				viewBufferInfo.buffer = ViewUniformBuffers[i];
 				viewBufferInfo.offset = 0;
-				viewBufferInfo.range = sizeof(FView);
+				viewBufferInfo.range = sizeof(XkView);
 
 				descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 				descriptorWrites[0].dstSet = outDescriptorSets[i];
@@ -5198,7 +5290,7 @@ public:
 				VkDescriptorBufferInfo baseBufferInfo{};
 				baseBufferInfo.buffer = BaseUniformBuffers[i];
 				baseBufferInfo.offset = 0;
-				baseBufferInfo.range = sizeof(FUniformBufferBase);
+				baseBufferInfo.range = sizeof(XkUniformBufferObject);
 
 				descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 				descriptorWrites[0].dstSet = outDescriptorSets[i];
@@ -5212,7 +5304,7 @@ public:
 				VkDescriptorBufferInfo viewBufferInfo{};
 				viewBufferInfo.buffer = ViewUniformBuffers[i];
 				viewBufferInfo.offset = 0;
-				viewBufferInfo.range = sizeof(FView);
+				viewBufferInfo.range = sizeof(XkView);
 
 				descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 				descriptorWrites[1].dstSet = outDescriptorSets[i];
@@ -5282,7 +5374,7 @@ public:
 		VkDeviceMemory& outMemory,
 		VkImageView& outImageView,
 		VkSampler& outSampler,
-		const std::string& filename, bool sRGB = true)
+		const XkString& filename, bool sRGB = true)
 	{
 		int texWidth, texHeight, texChannels, mipLevels;
 		std::vector<uint8_t> pixels;
@@ -5336,7 +5428,7 @@ public:
 		VkImageView& outImageView,
 		VkSampler& outSampler,
 		uint32_t& outMaxMipLevels,
-		const std::vector<std::string>& filenames)
+		const std::vector<XkString>& filenames)
 	{
 		// https://matheowis.github.io/HDRI-to-CubeMap/
 		int texWidth, texHeight, texChannels, mipLevels;
@@ -5575,7 +5667,7 @@ public:
 	}
 
 	template <typename T>
-	void CreateRenderObject(T& outObject, const std::string& objfile, const std::vector<std::string>& pngfiles, const VkDescriptorSetLayout& inDescriptorSetLayout)
+	void CreateRenderObject(T& outObject, const XkString& objfile, const std::vector<XkString>& pngfiles, const VkDescriptorSetLayout& inDescriptorSetLayout)
 	{
 		CreateMesh(outObject.Mesh.Vertices, outObject.Mesh.Indices, objfile);
 		outObject.Material.TextureImages.resize(pngfiles.size());
@@ -5608,7 +5700,7 @@ public:
 			outObject.Material.TextureImageViews,
 			outObject.Material.TextureImageSamplers);
 
-		VkDeviceSize BufferSize = sizeof(FUniformBufferTransfrom);
+		VkDeviceSize BufferSize = sizeof(XkTransfrom);
 		outObject.TransfromUniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
 		outObject.TransfromUniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
 
@@ -5620,9 +5712,10 @@ public:
 				outObject.TransfromUniformBuffersMemory[i]);
 		}
 
-		FUniformBufferTransfrom Transfrom{};
-		Transfrom.Model = glm::mat4();
-		Transfrom.Info = glm::vec4(0);
+		XkTransfrom Transfrom{};
+		Transfrom.Location = glm::vec3(0.0f);
+		Transfrom.Rotation = glm::vec3(0.0f);
+		Transfrom.Scale3D = glm::vec3(1.0f);
 
 		void* data_ubo;
 		vkMapMemory(Device, outObject.TransfromUniformBuffersMemory[CurrentFrame], 0, sizeof(Transfrom), 0, &data_ubo);
@@ -5656,7 +5749,7 @@ public:
 	};
 
 	template <typename T>
-	void CreateRenderIndirectObject(T& outObject, const std::string& objfile, const std::vector<std::string>& pngfiles)
+	void CreateRenderIndirectObject(T& outObject, const XkString& objfile, const std::vector<XkString>& pngfiles)
 	{
 		CreateMeshlet(outObject.Mesh.Vertices, outObject.Mesh.Indices,
 			outObject.Mesh.MeshletSet.Meshlets, outObject.Mesh.MeshletSet.MeshletVertices, outObject.Mesh.MeshletSet.MeshletTriangles, objfile);
@@ -5676,7 +5769,7 @@ public:
 				pngfiles[i], sRGB);
 		}
 
-		std::vector<FVertex> tmpVertices = outObject.Mesh.Vertices;
+		std::vector<XkVertex> tmpVertices = outObject.Mesh.Vertices;
 		outObject.Mesh.Vertices.resize(outObject.Mesh.MeshletSet.MeshletVertices.size());
 		for (uint32_t i = 0; i < outObject.Mesh.MeshletSet.MeshletVertices.size(); i++)
 		{
@@ -5687,7 +5780,7 @@ public:
 		uint32_t triangleOffset = 0;
 		for (uint32_t i = 0; i < outObject.Mesh.MeshletSet.Meshlets.size(); i++)
 		{
-			FMeshlet meshlet = outObject.Mesh.MeshletSet.Meshlets[i];
+			XkMeshlet meshlet = outObject.Mesh.MeshletSet.Meshlets[i];
 			triangleCount += meshlet.TriangleCount;
 			triangleOffset += meshlet.TriangleOffset;
 		}
@@ -5712,10 +5805,10 @@ public:
 	};
 
 	template <typename T>
-	void CreateInstancedBuffer(T& outObject, const std::vector<FInstanceData>& inInstanceData)
+	void CreateInstancedBuffer(T& outObject, const std::vector<XkInstanceData>& inInstanceData)
 	{
 		outObject.InstanceCount = static_cast<uint32_t>(inInstanceData.size());
-		VkDeviceSize bufferSize = inInstanceData.size() * sizeof(FInstanceData);
+		VkDeviceSize bufferSize = inInstanceData.size() * sizeof(XkInstanceData);
 		VkBuffer stagingBuffer;
 		VkDeviceMemory stagingBufferMemory;
 		CreateBuffer(
@@ -5833,9 +5926,9 @@ protected:
 		}
 	}
 
-	FSwapChainSupportDetails QuerySwapChainSupport(VkPhysicalDevice Device)
+	XkSwapChainSupportDetails QuerySwapChainSupport(VkPhysicalDevice Device)
 	{
-		FSwapChainSupportDetails details;
+		XkSwapChainSupportDetails details;
 
 		vkGetPhysicalDeviceSurfaceCapabilitiesKHR(Device, Surface, &details.Capabilities);
 
@@ -5871,7 +5964,7 @@ protected:
 	/** Check if the hardware is suitable */
 	bool IsDeviceSuitable(VkPhysicalDevice Device)
 	{
-		FQueueFamilyIndices queue_family_indices = FindQueueFamilies(Device);
+		XkQueueFamilyIndices queue_family_indices = FindQueueFamilies(Device);
 
 		uint32_t extensionCount;
 		vkEnumerateDeviceExtensionProperties(Device, nullptr, &extensionCount, nullptr);
@@ -5879,7 +5972,7 @@ protected:
 		std::vector<VkExtensionProperties> availableExtensions(extensionCount);
 		vkEnumerateDeviceExtensionProperties(Device, nullptr, &extensionCount, availableExtensions.data());
 
-		std::set<std::string> requiredExtensions(DeviceExtensions.begin(), DeviceExtensions.end());
+		std::set<XkString> requiredExtensions(DeviceExtensions.begin(), DeviceExtensions.end());
 
 		for (const auto& extension : availableExtensions)
 		{
@@ -5891,7 +5984,7 @@ protected:
 		bool swapChainAdequate = false;
 		if (extensionsSupported)
 		{
-			FSwapChainSupportDetails swapChainSupport = QuerySwapChainSupport(Device);
+			XkSwapChainSupportDetails swapChainSupport = QuerySwapChainSupport(Device);
 			swapChainAdequate = !swapChainSupport.Formats.empty() && !swapChainSupport.PresentModes.empty();
 		}
 
@@ -5904,9 +5997,9 @@ protected:
 	/** Queue Family
 	 * Find all supported Vulkan hardware devices
 	*/
-	FQueueFamilyIndices FindQueueFamilies(VkPhysicalDevice Device)
+	XkQueueFamilyIndices FindQueueFamilies(VkPhysicalDevice Device)
 	{
-		FQueueFamilyIndices queue_family_indices;
+		XkQueueFamilyIndices queue_family_indices;
 
 		uint32_t queueFamilyCount = 0;
 		vkGetPhysicalDeviceQueueFamilyProperties(Device, &queueFamilyCount, nullptr);
@@ -6061,19 +6154,19 @@ protected:
 	}
 
 	/** Read vertices and indices from a file */
-	void CreateMesh(std::vector<FVertex>& outVertices, std::vector<uint32_t>& outIndices, const std::string& filename)
+	void CreateMesh(std::vector<XkVertex>& outVertices, std::vector<uint32_t>& outIndices, const XkString& filename)
 	{
 		LoadMeshAsset(filename, outVertices, outIndices);
 	}
 
-	void CreateMeshlet(std::vector<FVertex>& outVertices, std::vector<uint32_t>& outIndices,
-		std::vector<FMeshlet>& outMeshlets, std::vector<uint32_t>& outMeshletVertices, std::vector<uint8_t>& outMeshletTriangles, const std::string& filename)
+	void CreateMeshlet(std::vector<XkVertex>& outVertices, std::vector<uint32_t>& outIndices,
+		std::vector<XkMeshlet>& outMeshlets, std::vector<uint32_t>& outMeshletVertices, std::vector<uint8_t>& outMeshletTriangles, const XkString& filename)
 	{
 		LoadMeshletAsset(filename, outVertices, outIndices, outMeshlets, outMeshletVertices, outMeshletTriangles);
 	}
 
 	/** Create vertex buffer VBO */
-	void CreateVertexBuffer(VkBuffer& outBuffer, VkDeviceMemory& outMemory, const std::vector<FVertex>& inVertices)
+	void CreateVertexBuffer(VkBuffer& outBuffer, VkDeviceMemory& outMemory, const std::vector<XkVertex>& inVertices)
 	{
 		// Create VertexBuffer based on the size of Vertices
 		VkDeviceSize bufferSize = sizeof(inVertices[0]) * inVertices.size();
@@ -6403,19 +6496,19 @@ protected:
 	}
 
 	template <typename T>
-	void CreateRenderObjectsFromProfabs(std::vector<T>& outRenderObjects, const VkDescriptorSetLayout& inLayout, const std::string& inAssetName, const std::vector<FInstanceData>& inInstanceData = {})
+	void CreateRenderObjectsFromProfabs(std::vector<T>& outRenderObjects, const VkDescriptorSetLayout& inLayout, const XkString& inAssetName, const std::vector<XkInstanceData>& inInstanceData = {})
 	{
-		std::string asset_set_dir = "Profabs";
+		XkString asset_set_dir = "Profabs";
 		for (const auto& folder : std::filesystem::directory_iterator(asset_set_dir))
 		{
-			std::string asset_name = folder.path().filename().generic_string();
-			std::string asset_set = folder.path().generic_string();
+			XkString asset_name = folder.path().filename().generic_string();
+			XkString asset_set = folder.path().generic_string();
 			if (inAssetName != asset_name)
 			{
 				continue;
 			}
-			std::string models_dir = asset_set + std::string("/models/");
-			std::string textures_dir = asset_set + std::string("/textures/");
+			XkString models_dir = asset_set + XkString("/models/");
+			XkString textures_dir = asset_set + XkString("/textures/");
 			if (!std::filesystem::is_directory(models_dir) ||
 				!std::filesystem::is_directory(textures_dir))
 			{
@@ -6423,46 +6516,46 @@ protected:
 			}
 			for (const auto& Model : std::filesystem::directory_iterator(models_dir))
 			{
-				std::string model_file = Model.path().generic_string();
-				std::string model_file_name = model_file.substr(model_file.find_last_of("/\\") + 1);
-				std::string::size_type const p(model_file_name.find_last_of('.'));
-				std::string model_name = model_file_name.substr(0, p);
-				std::string model_suffix = model_file_name.substr(p + 1);
+				XkString model_file = Model.path().generic_string();
+				XkString model_file_name = model_file.substr(model_file.find_last_of("/\\") + 1);
+				XkString::size_type const p(model_file_name.find_last_of('.'));
+				XkString model_name = model_file_name.substr(0, p);
+				XkString model_suffix = model_file_name.substr(p + 1);
 				if (model_suffix != "obj") {
 					continue;
 				}
-				std::string texture_bc = textures_dir + model_name + std::string("_bc.png");
+				XkString texture_bc = textures_dir + model_name + XkString("_bc.png");
 				if (!std::filesystem::exists(texture_bc)) {
-					texture_bc = std::string("Content/Textures/default_grey.png");
+					texture_bc = XkString("Content/Textures/default_grey.png");
 				}
-				std::string texture_m = textures_dir + model_name + std::string("_m.png");
+				XkString texture_m = textures_dir + model_name + XkString("_m.png");
 				if (!std::filesystem::exists(texture_m)) {
-					texture_m = std::string("Content/Textures/default_black.png");
+					texture_m = XkString("Content/Textures/default_black.png");
 				}
-				std::string texture_r = textures_dir + model_name + std::string("_r.png");
+				XkString texture_r = textures_dir + model_name + XkString("_r.png");
 				if (!std::filesystem::exists(texture_r)) {
-					texture_r = std::string("Content/Textures/default_white.png");
+					texture_r = XkString("Content/Textures/default_white.png");
 				}
-				std::string texture_n = textures_dir + model_name + std::string("_n.png");
+				XkString texture_n = textures_dir + model_name + XkString("_n.png");
 				if (!std::filesystem::exists(texture_n)) {
-					texture_n = std::string("Content/Textures/default_normal.png");
+					texture_n = XkString("Content/Textures/default_normal.png");
 				}
-				std::string texture_ao = textures_dir + model_name + std::string("_ao.png");
+				XkString texture_ao = textures_dir + model_name + XkString("_ao.png");
 				if (!std::filesystem::exists(texture_ao)) {
-					texture_ao = std::string("Content/Textures/default_white.png");
+					texture_ao = XkString("Content/Textures/default_white.png");
 				}
-				std::string texture_ev = textures_dir + model_name + std::string("_ev.png");
+				XkString texture_ev = textures_dir + model_name + XkString("_ev.png");
 				if (!std::filesystem::exists(texture_ev)) {
-					texture_ev = std::string("Content/Textures/default_black.png");
+					texture_ev = XkString("Content/Textures/default_black.png");
 				}
-				std::string texture_ms = textures_dir + model_name + std::string("_ms.png");
+				XkString texture_ms = textures_dir + model_name + XkString("_ms.png");
 				if (!std::filesystem::exists(texture_ms)) {
-					texture_ms = std::string("Content/Textures/default_white.png");
+					texture_ms = XkString("Content/Textures/default_white.png");
 				}
 
 				T asset;
-				std::string asset_obj = model_file;
-				std::vector<std::string> asset_imgs = {
+				XkString asset_obj = model_file;
+				std::vector<XkString> asset_imgs = {
 					texture_bc,
 					texture_m,
 					texture_r,
@@ -6483,7 +6576,7 @@ protected:
 
 private:
 	/** Load the compiled shader binary SPV file into a memory buffer */
-	static std::vector<char> LoadShaderSource(const std::string& filename)
+	static std::vector<char> LoadShaderSource(const XkString& filename)
 	{
 		std::ifstream file(filename, std::ios::ate | std::ios::binary);
 
@@ -6505,7 +6598,7 @@ private:
 	}
 
 	/** Load pixel information from an image file */
-	static void LoadTextureAsset(const std::string& filename, std::vector<uint8_t>& outPixels, int& outWidth, int& outHeight, int& outChannels, int& outMipLevels)
+	static void LoadTextureAsset(const XkString& filename, std::vector<uint8_t>& outPixels, int& outWidth, int& outHeight, int& outChannels, int& outMipLevels)
 	{
 		stbi_hdr_to_ldr_scale(2.2f);
 		stbi_uc* pixels = stbi_load(filename.c_str(), &outWidth, &outHeight, &outChannels, STBI_rgb_alpha);
@@ -6522,23 +6615,23 @@ private:
 	}
 
 	/** Load vertex information from a model file */
-	static void LoadMeshAsset(const std::string& filename, std::vector<FVertex>& outVertices, std::vector<uint32_t>& outIndices)
+	static void LoadMeshAsset(const XkString& filename, std::vector<XkVertex>& outVertices, std::vector<uint32_t>& outIndices)
 	{
 		tinyobj::attrib_t attrib;
 		std::vector<tinyobj::shape_t> shapes;
 		std::vector<tinyobj::material_t> materials;
-		std::string warn, err;
+		XkString warn, err;
 
 		if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, filename.c_str())) {
 			assert(0);
 			throw std::runtime_error("[LoadMeshAsset] Fail to load obj:" + warn + err);
 		}
 
-		std::unordered_map<FVertex, uint32_t> uniqueVertices{};
+		std::unordered_map<XkVertex, uint32_t> uniqueVertices{};
 
 		for (const auto& shape : shapes) {
 			for (const auto& index : shape.mesh.indices) {
-				FVertex vertex{};
+				XkVertex vertex{};
 
 				vertex.Position = {
 					attrib.vertices[3 * index.vertex_index + 0],
@@ -6570,10 +6663,10 @@ private:
 	}
 
 	/** Load meshlet struct data file*/
-	static void LoadMeshletAsset(const std::string& filename, std::vector<FVertex>& outVertices, std::vector<uint32_t>& outIndices,
-		std::vector<FMeshlet>& outMeshlets, std::vector<uint32_t>& outMeshletVertices, std::vector<uint8_t>& outMeshletTriangles)
+	static void LoadMeshletAsset(const XkString& filename, std::vector<XkVertex>& outVertices, std::vector<uint32_t>& outIndices,
+		std::vector<XkMeshlet>& outMeshlets, std::vector<uint32_t>& outMeshletVertices, std::vector<uint8_t>& outMeshletTriangles)
 	{
-		typedef FMeshlet Meshlet;
+		typedef XkMeshlet Meshlet;
 		// Begin Copy Data Struct from ZeldaMeshlet~
 		struct Vertex {
 			float x, y, z;
@@ -6653,7 +6746,7 @@ private:
 				}
 			}
 			
-			std::vector<FMeshlet> meshlets;
+			std::vector<XkMeshlet> meshlets;
 			std::vector<uint32_t> meshletVertices;
 			std::vector<uint8_t> meshletTriangles;
 			std::vector<Vertex> vertices;
@@ -6671,7 +6764,7 @@ private:
 
 		std::vector<Vertex> tempVertices = cache.vertices;
 		for (uint32_t i = 0; i < tempVertices.size(); ++i) {
-			FVertex vertex;
+			XkVertex vertex;
 			vertex.Position = {
 				tempVertices[i].x,
 				tempVertices[i].y,
@@ -6696,29 +6789,29 @@ private:
 	}
 	
 	// Find file in Profabs folder.
-	std::string ProfabsAsset(const std::string& inFilename)
+	XkString ProfabsAsset(const XkString& inFilename)
 	{
 		if (std::filesystem::exists(inFilename))
 		{
 			return inFilename;
 		}
-		std::string file_name_with_suffix = inFilename.substr(inFilename.find_last_of("/\\") + 1);
-		std::string::size_type const p(file_name_with_suffix.find_last_of('.'));
-		std::string file_name = file_name_with_suffix.substr(0, p);
+		XkString file_name_with_suffix = inFilename.substr(inFilename.find_last_of("/\\") + 1);
+		XkString::size_type const p(file_name_with_suffix.find_last_of('.'));
+		XkString file_name = file_name_with_suffix.substr(0, p);
 
-		std::string asset_set_dir = "Profabs";
+		XkString asset_set_dir = "Profabs";
 		for (const auto& folder : std::filesystem::directory_iterator(asset_set_dir))
 		{
-			std::string asset_name = folder.path().filename().generic_string();
-			std::string asset_set = folder.path().generic_string();
-			std::string models_dir = asset_set + std::string("/models/");
-			std::string textures_dir = asset_set + std::string("/textures/");
+			XkString asset_name = folder.path().filename().generic_string();
+			XkString asset_set = folder.path().generic_string();
+			XkString models_dir = asset_set + XkString("/models/");
+			XkString textures_dir = asset_set + XkString("/textures/");
 			if (std::filesystem::is_directory(models_dir))
 			{
 				for (const auto& model : std::filesystem::directory_iterator(models_dir))
 				{
-					std::string model_file = model.path().generic_string();
-					std::string model_file_name_with_suffix = model_file.substr(model_file.find_last_of("/\\") + 1);
+					XkString model_file = model.path().generic_string();
+					XkString model_file_name_with_suffix = model_file.substr(model_file.find_last_of("/\\") + 1);
 					if (model_file_name_with_suffix == file_name_with_suffix)
 					{
 						return model_file;
@@ -6729,8 +6822,8 @@ private:
 			{
 				for (const auto& texture : std::filesystem::directory_iterator(textures_dir))
 				{
-					std::string texture_file = texture.path().generic_string();
-					std::string texture_file_name_with_suffix = texture_file.substr(texture_file.find_last_of("/\\") + 1);
+					XkString texture_file = texture.path().generic_string();
+					XkString texture_file_name_with_suffix = texture_file.substr(texture_file.find_last_of("/\\") + 1);
 					if (texture_file_name_with_suffix == file_name_with_suffix)
 					{
 						return texture_file;
@@ -6786,7 +6879,7 @@ private:
 	/** Callback function for printing debug information, can be used to handle debug messages */
 	static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, VkDebugUtilsMessageTypeFlagsEXT messageType, const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData)
 	{
-		std::string output = std::string("[LOG]: ") + std::string(pCallbackData->pMessage);
+		XkString output = XkString("[LOG]: ") + XkString(pCallbackData->pMessage);
 		std::cerr << output.c_str() << std::endl;
 #ifdef NDEBUG
 		OutputDebugString(output.c_str());
@@ -6798,7 +6891,7 @@ private:
 
 int main()
 {
-	FZeldaEngineApp EngineApp;
+	XkZeldaEngineApp EngineApp;
 
 	try {
 		EngineApp.Run();

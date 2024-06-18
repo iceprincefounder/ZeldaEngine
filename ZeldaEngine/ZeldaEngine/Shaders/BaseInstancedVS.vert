@@ -5,7 +5,7 @@ layout(set = 0, binding = 0) uniform uniformbuffer
 	mat4 model;
 	mat4 view;
 	mat4 proj;
-} ubo;
+} MVP;
 
 // Vertex attributes
 layout(location = 0) in vec3 inPosition;
@@ -68,9 +68,9 @@ void main()
 {
 	mat4 rotMat = MakeRotMatrix(inInstanceRotation);
 	vec3 position = (inPosition * inInstancePScale) * mat3(rotMat) + inInstancePosition;
-	gl_Position = ubo.proj * ubo.view * ubo.model * vec4(position, 1.0);
-	outPosition = (ubo.model * vec4(position, 1.0)).rgb;
-	outNormal = (ubo.model * vec4(normalize(inNormal), 1.0)).rgb * mat3(rotMat);
+	gl_Position = MVP.proj * MVP.view * MVP.model * vec4(position, 1.0);
+	outPosition = (MVP.model * vec4(position, 1.0)).rgb;
+	outNormal = (MVP.model * vec4(normalize(inNormal), 1.0)).rgb * mat3(rotMat);
 	outColor = Hue2RGB(float(inInstanceTexIndex) * 1.71f);
 	outTexCoord = inTexCoord;
 }

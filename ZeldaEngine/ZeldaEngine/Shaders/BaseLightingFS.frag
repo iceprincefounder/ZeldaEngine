@@ -10,7 +10,7 @@ struct light
 	vec4 position;
 	/* color.w represents light intensity */
 	vec4 color;
-	/* direction.w represents range */
+	/* direction.w represents radius */
 	vec4 direction;
 	/* (only used for spot lights) info.x represents light inner cone angle, info.y represents light outer cone angle */
 	vec4 info;
