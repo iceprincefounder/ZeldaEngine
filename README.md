@@ -1,7 +1,12 @@
 ![zelda_engine_logo](https://github.com/iceprincefounder/ZeldaEngine/assets/16664056/120ab100-87a1-4801-b66f-966816b93a5f)
 
 # Why to do this
-*At my beginning of learning vulkan, I found it too hard to read and run the examples, there are too many headers / modules / functions to search the definition and try to understand, for my own sanity, I decide to create a tiny engine with all implementations in one file, make it as simple as possible, as clean as possible. So here we are, named with my favorite game: ZeldaEngine.*
+*At my beginning of learning vulkan, I found it too hard to read and run the examples, for my own sanity, I decide to create a tiny engine with all implementations in one file with super easy cmake build, make it as simple as possible, as clean as possible. So here we are, named with my favorite game: ZeldaEngine.*
+
+# What this engine gone be
+- *Fully programmatically driven data, you can use Python to generate scenes in real time and send them directly to the engine.*
+- *Fully GPU-driven rendering, using the most aggressive technology, exploring the possibilities of future engines. (WIP)*
+
 
 # Zelda Engine ©XUKAI
 A tiny realtime vulkan based 3D engine with modern graphics, all implementations in the [📄ZeldaEngine.cpp](ZeldaEngine/ZeldaEngine/ZeldaEngine.cpp) file.
