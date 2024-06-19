@@ -1,5 +1,15 @@
 // Copyright ©XUKAI. All Rights Reserved.
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h> // 如果需要使用更高级的网络功能，如getaddrinfo等
+// 注意：链接时需要libws2_32.a库
+#else
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
+#endif
+
 #define GLFW_INCLUDE_VULKAN
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE // Depth buffer range, OpenGL default -1.0 to 1.0, but Vulakn default as 0.0 to 1.0
@@ -40,6 +50,7 @@
 #include <chrono>
 #include <unordered_map>
 #include <random>
+#include <thread>
 
 #include "imgui.h"
 #include "backends/imgui_impl_glfw.h"
@@ -73,7 +84,7 @@
 // @see https://dev.to/gasim/implementing-bindless-design-in-vulkan-34no
 #define ENABLE_BINDLESS false
 #define ENABLE_IMGUI_EDITOR true
-#define ENABLE_GENERATE_WORLD true
+#define ENABLE_GENERATE_WORLD false
 
 #define ASSETS(x) ProfabsAsset(x)
 
@@ -502,6 +513,7 @@ namespace std {
 	};
 }
 
+
 /* Description of the rule that procedural generated object apply.*/
 struct XkDesc
 {
@@ -927,6 +939,26 @@ class XkZeldaEngineApp
 		}
 	} View;
 
+	struct XkSocketListener
+	{
+#ifdef _WIN32
+		WSADATA wsaData;
+		SOCKET ListenSocket = INVALID_SOCKET;
+		SOCKET ClientSocket = INVALID_SOCKET;
+		std::string receivedData;
+#else
+#endif
+		void Release()
+		{
+#ifdef _WIN32
+			closesocket(ClientSocket);
+			closesocket(ListenSocket);
+			WSACleanup();
+#else
+#endif
+		}
+	} SocketListener;
+
 	/** Hold all the render object proxy data.*/
 	struct XkScene {
 		std::vector<XkRenderObject> RenderObjects;
@@ -983,20 +1015,31 @@ class XkZeldaEngineApp
 
 		std::vector<XkObjectDesc> ObjectDescs;
 
-		void Load()
+		void Load(const std::string& RawData = std::string())
 		{
 			// reset data before load it
 			Reset();
-			FILE* fp = fopen(FilePath.c_str(), "rb");
-			if (fp == nullptr) {
-				throw std::runtime_error("[WORLD] Failed to load file: " + FilePath);
-				return;
-			}
-			std::vector<char> readBuffer(65720);
-			rapidjson::FileReadStream is(fp, readBuffer.data(), sizeof(readBuffer));
+
 			rapidjson::Document JsonDocument;
-			JsonDocument.ParseStream(is);
-			fclose(fp);
+			if (RawData.empty())
+			{
+				FILE* fp = fopen(FilePath.c_str(), "rb");
+				if (fp == nullptr) {
+					throw std::runtime_error("[WORLD] Failed to load file: " + FilePath);
+					return;
+				}
+				std::vector<char> readBuffer(65720);
+				rapidjson::FileReadStream is(fp, readBuffer.data(), sizeof(readBuffer));
+				JsonDocument.ParseStream(is);
+				fclose(fp);
+			}
+			else
+			{
+				if (JsonDocument.Parse(RawData.c_str()).HasParseError()) {
+					throw std::runtime_error("[WORLD] JSON parse error");
+					return;
+				}
+			}
 
 			const auto& MainCameraObject = JsonDocument["MainCamera"];
 			MainCamera.Position = glm::vec3(MainCameraObject["Position"][0].GetFloat(), MainCameraObject["Position"][1].GetFloat(), MainCameraObject["Position"][2].GetFloat());
@@ -1521,6 +1564,104 @@ public:
 		glfwSetMouseButtonCallback(Window, MouseButtonCallback);
 		glfwSetCursorPosCallback(Window, MousePositionCallback);
 		glfwSetScrollCallback(Window, MouseScrollCallback);
+
+		// we raise a thread to listen to the python IDE
+		std::thread listenThread([this]
+			{
+#ifdef _WIN32
+				struct addrinfo* result = NULL;
+				struct addrinfo hints;
+				int iResult, iSendResult;
+				iResult = WSAStartup(MAKEWORD(2, 2), &SocketListener.wsaData);
+				if (iResult != 0) {
+					std::cerr << "[Socket] WSAStartup failed: " << iResult << std::endl;
+					return;
+				}
+
+				ZeroMemory(&hints, sizeof(hints));
+				hints.ai_family = AF_INET; // IPv4
+				hints.ai_socktype = SOCK_STREAM; // Stream socket
+				hints.ai_protocol = IPPROTO_TCP; // TCP
+				hints.ai_flags = AI_PASSIVE; // For wild card IP address
+
+				// Resolve the local address and port to be used by the server
+				iResult = getaddrinfo(NULL, "8080", &hints, &result);
+				if (iResult != 0) {
+					std::cerr << "[Socket] getaddrinfo failed: " << iResult << std::endl;
+					WSACleanup();
+					return;
+				}
+
+				SocketListener.ListenSocket = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
+				if (SocketListener.ListenSocket == INVALID_SOCKET) {
+					std::cerr << "[Socket] socket failed: " << WSAGetLastError() << std::endl;
+					freeaddrinfo(result);
+					WSACleanup();
+					return;
+				}
+
+				iResult = bind(SocketListener.ListenSocket, result->ai_addr, (int)result->ai_addrlen);
+				if (iResult == SOCKET_ERROR) {
+					std::cerr << "[Socket] bind failed: " << WSAGetLastError() << std::endl;
+					freeaddrinfo(result);
+					closesocket(SocketListener.ListenSocket);
+					WSACleanup();
+					return;
+				}
+
+				freeaddrinfo(result);
+
+				iResult = listen(SocketListener.ListenSocket, SOMAXCONN);
+				if (iResult == SOCKET_ERROR) {
+					std::cerr << "[Socket] listen failed: " << WSAGetLastError() << std::endl;
+					closesocket(SocketListener.ListenSocket);
+					WSACleanup();
+					return;
+				}
+
+				std::cout << "[Socket] Listening on port 8080..." << std::endl;
+
+				// Accept a client socket
+				while (true)
+				{
+					SocketListener.ClientSocket = accept(SocketListener.ListenSocket, NULL, NULL);
+					if (SocketListener.ClientSocket == INVALID_SOCKET)
+					{
+						std::cerr << "[Socket] accept failed: " << WSAGetLastError() << std::endl;
+						continue; // 继续监听下一个连接，而不是退出程序
+					}
+
+					// accept data
+					char recvbuf[65720];
+					int recvbuflen = 65720;
+					iResult = recv(SocketListener.ClientSocket, recvbuf, recvbuflen, 0);
+					if (iResult > 0) {
+						std::cout << "[Socket] Received: " << std::string(recvbuf, 0, iResult) << std::endl;
+						SocketListener.receivedData = std::string(recvbuf, iResult);
+						RecreateWorldAndScene();
+					}
+					else if (iResult == 0)
+						std::cout << "[Socket] Connection closing..." << std::endl;
+					else {
+						std::cerr << "[Socket] recv failed: " << WSAGetLastError() << std::endl;
+						closesocket(SocketListener.ClientSocket);
+						WSACleanup();
+						return;
+					}
+
+					// Shutdown the connection since we're done
+					iResult = shutdown(SocketListener.ClientSocket, SD_SEND);
+					if (iResult == SOCKET_ERROR) {
+						std::cerr << "[Socket] shutdown failed: " << WSAGetLastError() << std::endl;
+					}
+				}
+
+				SocketListener.Release();
+#else
+				// @TODO: Implement for macOS and Linux
+#endif				
+			});
+		listenThread.detach(); // Detach the thread to run independently
 	}
 
 	/** Init Vulkan render pipeline */
@@ -1569,6 +1710,9 @@ public:
 	{
 		glfwDestroyWindow(Window);
 		glfwTerminate();
+
+		// Release the socket listener
+		SocketListener.Release();
 	}
 
 	static void FramebufferResizeCallback(GLFWwindow* window, int width, int height) {
@@ -4113,6 +4257,13 @@ public:
 		/* 
 		* (3) Create light here
 		*/
+	}
+
+	void RecreateWorldAndScene()
+	{
+		// we write a json file to a path and tell the engine to load it
+		World.Load(SocketListener.receivedData);
+		Scene.bReload = true;
 	}
 
 	/** Update player inputs*/
@@ -6886,6 +7037,7 @@ private:
 #endif
 		return VK_FALSE;
 	}
+
 };
 
 

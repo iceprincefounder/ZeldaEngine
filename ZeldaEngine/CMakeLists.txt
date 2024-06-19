@@ -125,8 +125,11 @@ function(BuildEngine ENGINE_NAME)
 	endif(APPLE)
 	# @Note: fix glslang libraries link issue
 	# https://stackoverflow.com/questions/38234986/how-to-use-glslang
-	target_link_libraries(${ENGINE_NAME} glfw glm glslang SPIRV glslang-default-resource-limits)
-
+	target_link_libraries(${ENGINE_NAME} glfw glm glslang SPIRV glslang-default-resource-limits Ws2_32)
+	# window socket library
+	if(WIN32)
+	target_link_libraries(${ENGINE_NAME} Ws2_32)
+	endif(WIN32)
 endfunction(BuildEngine)
 
 # Function for building engine tools
