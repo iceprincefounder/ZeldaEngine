@@ -119,16 +119,16 @@ function(BuildEngine ENGINE_NAME)
 		#set(SUBSYSTEM_LINKER_OPTIONS "/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup")
 		set(SUBSYSTEM_LINKER_OPTIONS "/SUBSYSTEM:CONSOLE") # with debug log window
 		set_target_properties(${ENGINE_NAME} PROPERTIES LINK_FLAGS ${SUBSYSTEM_LINKER_OPTIONS} VS_DEBUGGER_WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-	endif(WIN32)
+	endif(WIN32 AND ${CMAKE_GENERATOR} MATCHES "Visual Studio")
 	if(APPLE AND ${CMAKE_GENERATOR} STREQUAL "Xcode")
 		set_target_properties(${ENGINE_NAME} PROPERTIES XCODE_GENERATE_SCHEME TRUE XCODE_SCHEME_WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-	endif(APPLE)
+	endif(APPLE AND ${CMAKE_GENERATOR} STREQUAL "Xcode")
 	# @Note: fix glslang libraries link issue
 	# https://stackoverflow.com/questions/38234986/how-to-use-glslang
-	target_link_libraries(${ENGINE_NAME} glfw glm glslang SPIRV glslang-default-resource-limits Ws2_32)
+	target_link_libraries(${ENGINE_NAME} glfw glm glslang SPIRV glslang-default-resource-limits)
 	# window socket library
 	if(WIN32)
-	target_link_libraries(${ENGINE_NAME} Ws2_32)
+		target_link_libraries(${ENGINE_NAME} Ws2_32)
 	endif(WIN32)
 endfunction(BuildEngine)
 
@@ -165,6 +165,34 @@ function(BuildToolkit TOOLKIT_NAME)
 	target_link_libraries(${TOOLKIT_NAME} glfw glm meshoptimizer tinyobjloader)
 endfunction(BuildToolkit)
 
+# Function for building shared library
+function(BuildSharedLib SHAREDLIB_NAME)
+	# a python lib source name
+	SET(SHAREDLIB_PY_NAME ${SHAREDLIB_NAME}Lib)
+	SET(LIB_FOLDER ${CMAKE_CURRENT_SOURCE_DIR}/${SHAREDLIB_NAME})
+	message(STATUS "Generating tool file in ${LIB_FOLDER}")
+	SET (MAIN_CPP ${LIB_FOLDER}/${SHAREDLIB_PY_NAME}.cpp)
+
+	if(EXISTS ${LIB_FOLDER}/main.cpp)
+		SET(MAIN_CPP ${LIB_FOLDER}/main.cpp)
+	endif()
+	if(EXISTS ${LIB_FOLDER}/${SHAREDLIB_PY_NAME}.h)
+		SET(MAIN_HEADER ${LIB_FOLDER}/${SHAREDLIB_PY_NAME}.h)
+	endif()
+
+	add_library(${SHAREDLIB_PY_NAME} STATIC SHARED ${MAIN_CPP})
+	target_sources(${SHAREDLIB_PY_NAME} PUBLIC ${MAIN_HEADER})
+	if(WIN32)
+		add_compile_options("$<$<C_COMPILER_ID:MSVC>:/utf-8>")
+		add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
+		target_link_libraries(${SHAREDLIB_PY_NAME} PRIVATE Ws2_32)
+	endif(WIN32)
+	target_link_libraries(${SHAREDLIB_PY_NAME} PRIVATE glfw glm meshoptimizer tinyobjloader)
+	# option name for shared library
+	set_target_properties(${SHAREDLIB_PY_NAME} PROPERTIES OUTPUT_NAME ${SHAREDLIB_PY_NAME})
+endfunction(BuildSharedLib)
+
 BuildEngine(ZeldaEngine)
 BuildToolkit(ZeldaMeshlet)
 BuildToolkit(ZeldaPython)
+BuildSharedLib(ZeldaPython)

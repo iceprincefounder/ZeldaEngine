@@ -943,6 +943,9 @@ class XkZeldaEngineApp
 	{
 #ifdef _WIN32
 		WSADATA wsaData;
+		char recvbuf[65720];
+		int recvbuflen = 65720;
+
 		SOCKET ListenSocket = INVALID_SOCKET;
 		SOCKET ClientSocket = INVALID_SOCKET;
 		std::string receivedData;
@@ -1632,12 +1635,10 @@ public:
 					}
 
 					// accept data
-					char recvbuf[65720];
-					int recvbuflen = 65720;
-					iResult = recv(SocketListener.ClientSocket, recvbuf, recvbuflen, 0);
+					iResult = recv(SocketListener.ClientSocket, SocketListener.recvbuf, SocketListener.recvbuflen, 0);
 					if (iResult > 0) {
-						std::cout << "[Socket] Received: " << std::string(recvbuf, 0, iResult) << std::endl;
-						SocketListener.receivedData = std::string(recvbuf, iResult);
+						std::cout << "[Socket] Received: " << std::string(SocketListener.recvbuf, 0, iResult) << std::endl;
+						SocketListener.receivedData = std::string(SocketListener.recvbuf, iResult);
 						RecreateWorldAndScene();
 					}
 					else if (iResult == 0)

@@ -2,6 +2,11 @@
 import json
 import socket
 
+# @TODO: bind DLL failed! Try PyBind11
+# from ctypes import cdll
+# lib = cdll.LoadLibrary('D:/ZeldaEngine/build/Debug/ZeldaPythonLib.dll')
+# lib.hello_world()
+
 def sendDataToEngine(data, port=8080):
     try:
         # 创建一个socket对象
@@ -82,5 +87,5 @@ xkWorld["DirectionalLights"].append(xkLight)
 xkWorld["Objects"].append(xkObject)
 
 # 使用函数发送数据
-json_str = json.dumps(xkWorld)
-sendDataToEngine(json_str)
+# json_str = json.dumps(xkWorld)
+# sendDataToEngine(json_str)
