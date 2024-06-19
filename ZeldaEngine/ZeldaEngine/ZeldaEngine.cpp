@@ -941,6 +941,7 @@ class XkZeldaEngineApp
 
 	struct XkSocketListener
 	{
+        std::string receivedData;
 #ifdef _WIN32
 		WSADATA wsaData;
 		char recvbuf[65720];
@@ -948,7 +949,6 @@ class XkZeldaEngineApp
 
 		SOCKET ListenSocket = INVALID_SOCKET;
 		SOCKET ClientSocket = INVALID_SOCKET;
-		std::string receivedData;
 #else
 #endif
 		void Release()
@@ -1930,7 +1930,7 @@ public:
 			bFramebufferResized = false;
 
 			// @TODO: recreate swap chain on macOS
-			//RecreateSwapChain();
+			RecreateSwapChain();
 			return;
 		}
 		// Wait for the previous frame to finish rendering
