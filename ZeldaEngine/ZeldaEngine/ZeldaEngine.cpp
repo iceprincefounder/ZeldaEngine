@@ -2,8 +2,7 @@
 
 #ifdef _WIN32
 #include <winsock2.h>
-#include <ws2tcpip.h> // 如果需要使用更高级的网络功能，如getaddrinfo等
-// 注意：链接时需要libws2_32.a库
+#include <ws2tcpip.h>
 #else
 #include <sys/socket.h>
 #include <netinet/in.h>
