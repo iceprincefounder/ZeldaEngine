@@ -63,8 +63,8 @@
 #include "rapidjson/prettywriter.h"
 
 #define MAX_FRAMES_IN_FLIGHT 2
-#define VIEWPORT_WIDTH 1920
-#define VIEWPORT_HEIGHT 1080
+#define VIEWPORT_WIDTH 1080
+#define VIEWPORT_HEIGHT 720
 #define PBR_SAMPLER_NUMBER 7 // BC + M + R + N + AO + Emissive + Mask
 #define BG_SAMPLER_NUMBER 1
 #define SKY_SAMPLER_NUMBER 1
@@ -4331,8 +4331,8 @@ public:
 			ImGuiPass.BottomBarSpace = frameBufferHeight * 0.2f;
 
 			ImGui::PushFont(ImGuiPass.RobotoSlabSemiBold);
-			ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
-			ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.05f, 0.05f, 0.05f, 1.0f));
+			ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
+			ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
 
 			// create menu bar
 			ImGui::PushStyleColor(ImGuiCol_MenuBarBg, ImVec4(0.05f, 0.05f, 0.05f, 1.0f));
