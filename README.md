@@ -16,7 +16,7 @@ A tiny realtime vulkan based 3D engine with modern graphics, all implementations
 | master |✅|✅|⛔️|
 
 ## ✨Feature: Dear Imgui Editor
-<img width="1192" alt="Dear Imgui Window" src="https://github.com/iceprincefounder/ZeldaEngine/assets/16664056/8e5a12c8-bb95-40ca-8362-aae2bff63a0f">
+<img width="1192" alt="Dear Imgui Window" src="https://github.com/iceprincefounder/ZeldaEngine/assets/16664056/5bfdae4e-c5f9-4a77-a64f-afa74b47c89c">
 
 ## ✨Feature: GPU-driven & Mesh Shader
 <img width="1192" alt="GPU-driven & Mesh Shade" src="https://github.com/iceprincefounder/ZeldaEngine/assets/16664056/26339a31-73de-4192-aa02-e4ec85d605fd">
