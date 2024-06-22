@@ -1,5 +1,32 @@
 // Copyright ©XUKAI. All Rights Reserved.
 
+#include <iostream>
+#include <cassert>
+#include <cstring>
+#include <cstdlib>
+#include <cstdint>
+#include <algorithm>
+#include <stdexcept>
+#include <filesystem>
+#include <fstream>
+#include <regex>
+#include <limits>
+#include <optional>
+#include <vector>
+#include <set>
+#include <array>
+#include <chrono>
+#include <unordered_map>
+#include <random>
+#include <thread>
+
+#include "rapidjson/document.h"
+#include "rapidjson/writer.h"
+#include "rapidjson/stringbuffer.h"
+#include "rapidjson/filereadstream.h"
+#include "rapidjson/filewritestream.h"
+#include "rapidjson/prettywriter.h"
+
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -23,6 +50,8 @@
 #define TINYOBJLOADER_IMPLEMENTATION
 #include <tiny_obj_loader.h>
 
+#define ENABLE_GLSLANG_COMPILER true
+#if ENABLE_GLSLANG_COMPILER
 #include <glslang/Public/ShaderLang.h>
 #include <glslang/Public/ResourceLimits.h>
 #include <SPIRV/GLSL.std.450.h>
@@ -30,37 +59,14 @@
 #include <StandAlone/DirStackFileIncluder.h>
 #include <glslang/Include/ShHandle.h>
 #include <glslang/OSDependent/osinclude.h>
+#endif
 
-#include <iostream>
-#include <cassert>
-#include <cstring>
-#include <cstdlib>
-#include <cstdint>
-#include <algorithm>
-#include <stdexcept>
-#include <filesystem>
-#include <fstream>
-#include <regex>
-#include <limits>
-#include <optional>
-#include <vector>
-#include <set>
-#include <array>
-#include <chrono>
-#include <unordered_map>
-#include <random>
-#include <thread>
-
+#define ENABLE_IMGUI_EDITOR true
+#if ENABLE_IMGUI_EDITOR
 #include "imgui.h"
 #include "backends/imgui_impl_glfw.h"
 #include "backends/imgui_impl_vulkan.h"
-
-#include "rapidjson/document.h"
-#include "rapidjson/writer.h"
-#include "rapidjson/stringbuffer.h"
-#include "rapidjson/filereadstream.h"
-#include "rapidjson/filewritestream.h"
-#include "rapidjson/prettywriter.h"
+#endif
 
 #define MAX_FRAMES_IN_FLIGHT 2
 #define VIEWPORT_WIDTH 1080
@@ -82,8 +88,7 @@
 // @TODO: Implement Bindless Feature
 // @see https://dev.to/gasim/implementing-bindless-design-in-vulkan-34no
 #define ENABLE_BINDLESS false
-#define ENABLE_IMGUI_EDITOR true
-#define ENABLE_GENERATE_WORLD false
+#define ENABLE_GENERATE_WORLD true
 
 #define ASSETS(x) ProfabsAsset(x)
 
@@ -603,11 +608,34 @@ struct XkCameraDesc : public XkDesc
 	float zNear;
 	float zFar;
 
-	float ArmLength;
-	float Yaw;
-	float Pitch;
-	float Roll;
-
+	float GetArmLength() const { return glm::length(Position - Lookat); }
+	float GetYaw() const
+    {
+        glm::vec3 Direction = GetDirection();
+        return glm::degrees(glm::atan(Direction.x, Direction.y));
+    }
+	float GetPitch()
+    {
+        glm::vec3 Direction = GetDirection();
+        return glm::degrees(glm::asin(Direction.z));
+    }
+	float GetRoll() const { return 0.0; }
+	glm::mat4 GetTransform() const { return glm::lookAt(Position, Lookat, glm::vec3(0.0f, 0.0f, 1.0f)); }
+	glm::quat GetRotation() const { return glm::quat(GetTransform()); }
+	glm::vec3 GetDirection() const { return glm::normalize(Lookat - Position); }
+    void AddMovement(float DeltaYaw, float DeltaPitch)
+    {
+        float Yaw = GetYaw() + DeltaYaw;
+        float Pitch = GetPitch() + DeltaPitch;
+        
+        glm::vec3 Direction;
+        Direction.x = cos(glm::radians(Pitch)) * sin(glm::radians(Yaw));
+        Direction.y = cos(glm::radians(Yaw)) * cos(glm::radians(Pitch));
+        Direction.z = glm::sin(glm::radians(Pitch));
+        float ArmLength = GetArmLength();
+        Position = Lookat - Direction * ArmLength;
+    }
+    
 	XkCameraDesc& operator= (const XkCameraDesc& rhs)
 	{
 		Transfrom = rhs.Transfrom;
@@ -618,10 +646,6 @@ struct XkCameraDesc : public XkDesc
 		FOV = rhs.FOV;
 		zNear = rhs.zNear;
 		zFar = rhs.zFar;
-		ArmLength = rhs.ArmLength;
-		Yaw = rhs.Yaw;
-		Pitch = rhs.Pitch;
-		Roll = rhs.Roll;
 		return *this;
 	}
 };
@@ -843,25 +867,15 @@ class XkZeldaEngineApp
 		void ResetToFocus()
 		{
 			bGameMode = false;
-			MainCamera->Position = glm::vec3(2.0, 2.0, 2.0);
-			MainCamera->Lookat = glm::vec3(0.0, 0.0, 0.5);
+			MainCamera->Position = glm::vec3(5.0, 5.0, 5.0);
+			MainCamera->Lookat = glm::vec3(0.0, 0.0, 0.0);
 			MainCamera->Speed = 2.5;
 			MainCamera->FOV = 45.0;
 			MainCamera->zNear = 0.1f;
 			MainCamera->zFar = 45.0f;
 
-			glm::mat4 transform = glm::lookAt(MainCamera->Position, MainCamera->Lookat, glm::vec3(0.0f, 0.0f, 1.0f));
-			glm::quat rotation(transform);
-			glm::vec3 Direction = glm::normalize(MainCamera->Lookat - MainCamera->Position);
-			MainCamera->Yaw = 30.0; //glm::degrees(glm::atan(Direction.x, Direction.y));
-			MainCamera->Pitch = 60.0; //glm::degrees(glm::asin(Direction.z));
-			MainCamera->ArmLength = 10.0;
 			bCameraMoving = false;
 			bCameraFocus = true;
-
-			MainCamera->Position.x = cos(glm::radians(MainCamera->Yaw)) * cos(glm::radians(MainCamera->Pitch)) * MainCamera->ArmLength;
-			MainCamera->Position.y = sin(glm::radians(MainCamera->Yaw)) * cos(glm::radians(MainCamera->Pitch)) * MainCamera->ArmLength;
-			MainCamera->Position.z = sin(glm::radians(MainCamera->Pitch)) * MainCamera->ArmLength;
 		}
 
 		void ResetAnimation()
@@ -1435,11 +1449,13 @@ class XkZeldaEngineApp
 		float RightBarSpace;
 		float BottomBarSpace;
 
+#if ENABLE_IMGUI_EDITOR
 		ImFont* RobotoSlabBold;
 		ImFont* RobotoSlabMedium;
 		ImFont* RobotoSlabRegular;
 		ImFont* RobotoSlabSemiBold;
 		ImFont* SourceCodeProMedium;
+#endif
 	} ImGuiPass;
 
 	/* GLFW Window */
@@ -1842,9 +1858,6 @@ public:
 			input->bInitMouse = false;
 		}
 
-		float Yaw = input->MainCamera->Yaw;
-		float Pitch = input->MainCamera->Pitch;
-
 		float xoffset = (float)(xpos - input->LastMouseX);
 		float yoffset = (float)(ypos - input->LastMouseY);
 		input->LastMouseX = xpos;
@@ -1855,37 +1868,24 @@ public:
 		xoffset *= sensitivityX;
 		yoffset *= sensitivityY;
 
-		Yaw -= xoffset;
-		Pitch += yoffset;
-		if (Pitch > 89.0)
-			Pitch = 89.0;
-		if (Pitch < -89.0)
-			Pitch = -89.0;
-
 		if (input->bCameraFocus)
 		{
-			glm::vec3 Position = input->MainCamera->Position;
-			float ArmLength = input->MainCamera->ArmLength;
-			Position.x = cos(glm::radians(Yaw)) * cos(glm::radians(Pitch)) * ArmLength;
-			Position.y = sin(glm::radians(Yaw)) * cos(glm::radians(Pitch)) * ArmLength;
-			Position.z = sin(glm::radians(Pitch)) * ArmLength;
-			input->MainCamera->Position = Position;
-			input->MainCamera->Yaw = Yaw;
-			input->MainCamera->Pitch = Pitch;
+            input->MainCamera->AddMovement(xoffset, yoffset);
 		}
 		else
 		{
-			// @TODO: 鼠标右键控制相机的旋转
+			// @TODO: WASD move camera
 		}
 	}
 
 	static void MouseScrollCallback(GLFWwindow* window, double xoffset, double yoffset)
 	{
+#if ENABLE_IMGUI_EDITOR
 		if (ImGui::GetIO().WantCaptureKeyboard || ImGui::GetIO().WantCaptureMouse)
 		{
 			return;
 		}
-
+#endif
 		XkZeldaEngineApp* app = reinterpret_cast<XkZeldaEngineApp*>(glfwGetWindowUserPointer(window));
 		XkGlobalInput* input = &app->GlobalInput;
 
@@ -1896,12 +1896,11 @@ public:
 			glm::vec3 lookatToPos = Lookat - Position;
 			glm::vec3 Direction = glm::normalize(lookatToPos);
 			float CameraDeltaMove = (float)yoffset * 0.5f;
-			float camerArm = input->MainCamera->ArmLength;
+			float camerArm = input->MainCamera->GetArmLength();
 			camerArm += CameraDeltaMove;
 			camerArm = glm::max(camerArm, 1.0f);
 			Position = Lookat - camerArm * Direction;
 			input->MainCamera->Position = Position;
-			input->MainCamera->ArmLength = camerArm;
 		}
 	}
 
@@ -4291,18 +4290,7 @@ public:
 
 		GlobalInput.CurrentTime = CurrentFrame;
 		GlobalInput.DeltaTime = DeltaTime;
-
-		bool bCameraFocus = GlobalInput.bCameraFocus;
-		glm::vec3 Position = GlobalInput.MainCamera->Position;
-		glm::vec3 Lookat = GlobalInput.MainCamera->Lookat;
-		glm::vec3 CameraForward = glm::vec3(-1.0, 0.0, 0.0);
-		glm::vec3 CameraUp = glm::vec3(0.0, 0.0, 1.0);
-		float Speed = GlobalInput.MainCamera->Speed;
-		float Yaw = GlobalInput.MainCamera->Yaw;
-		float Pitch = GlobalInput.MainCamera->Pitch;
-		glm::vec3 CameraDirection = glm::normalize(Lookat - Position);
-		const float CameraDeltaMove = 2.5f * DeltaTime; // adjust accordingly
-
+        
 		// @TODO: WASD control Camera
 	}
 

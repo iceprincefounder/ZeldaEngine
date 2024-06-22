@@ -66,15 +66,6 @@ function(BuildEngine ENGINE_NAME)
 	endif()
 	# Set application icon
 	BuildAppIcon(MAIN_CPP ICONS ${CONTENT_DIR}/AppData/vulkan_renderer.ico ${CONTENT_DIR}/AppData/vulkan_renderer.icns)
-	if(WIN32)
-		add_compile_options("$<$<C_COMPILER_ID:MSVC>:/utf-8>")
-		add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
-		add_executable(${ENGINE_NAME} WIN32 ${MAIN_CPP} ${IMGUI_SOURCES})
-		target_link_libraries(${ENGINE_NAME} ${Vulkan_LIBRARY} ${WINLIBS})
-	else(WIN32)
-		add_executable(${ENGINE_NAME} ${MAIN_CPP} ${IMGUI_SOURCES})
-		target_link_libraries(${ENGINE_NAME})
-	endif(WIN32)
 
 	# Compile shader and copy texures
 	add_custom_command(
@@ -111,8 +102,22 @@ function(BuildEngine ENGINE_NAME)
 		${SHADERS_DIR}/BackgroundFS.frag ${SHADERS_DIR}/BackgroundVS.vert
 		${SHADERS_DIR}/SkydomeFS.frag ${SHADERS_DIR}/SkydomeVS.vert)
 	add_custom_target(${COMPILE_SHADER_TARGET} ALL DEPENDS SHADER_COMPILE SOURCES ${SHADER_SOURCES})
+
+	# add executable
+	if(WIN32)
+		add_compile_options("$<$<C_COMPILER_ID:MSVC>:/utf-8>")
+		add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
+		add_executable(${ENGINE_NAME} WIN32 ${MAIN_CPP} ${IMGUI_SOURCES})
+		target_link_libraries(${ENGINE_NAME} ${Vulkan_LIBRARY} ${WINLIBS})
+	else(WIN32)
+		# @TODO: fix Makefile compile issue on macOS
+		add_executable(${ENGINE_NAME} ${MAIN_CPP} ${IMGUI_SOURCES})
+		target_link_libraries(${ENGINE_NAME})
+	endif(WIN32)
+
+	# add shader compile dependency
 	add_dependencies (${ENGINE_NAME} ${COMPILE_SHADER_TARGET})
-	
+
 	set_target_properties(${ENGINE_NAME} PROPERTIES WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 	set_target_properties(${ENGINE_NAME} PROPERTIES CXX_STANDARD 17 CXX_EXTENSIONS OFF)
 	if(WIN32 AND ${CMAKE_GENERATOR} MATCHES "Visual Studio")
@@ -162,7 +167,7 @@ function(BuildToolkit TOOLKIT_NAME)
 	if(APPLE)
 		set_target_properties(${TOOLKIT_NAME} PROPERTIES XCODE_GENERATE_SCHEME TRUE XCODE_SCHEME_WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 	endif(APPLE)
-	target_link_libraries(${TOOLKIT_NAME} glfw glm meshoptimizer tinyobjloader)
+	target_link_libraries(${TOOLKIT_NAME} glfw glm meshoptimizer)
 endfunction(BuildToolkit)
 
 # Function for building shared library
@@ -187,7 +192,7 @@ function(BuildSharedLib SHAREDLIB_NAME)
 		add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
 		target_link_libraries(${SHAREDLIB_PY_NAME} PRIVATE Ws2_32)
 	endif(WIN32)
-	target_link_libraries(${SHAREDLIB_PY_NAME} PRIVATE glfw glm meshoptimizer tinyobjloader)
+	target_link_libraries(${SHAREDLIB_PY_NAME} PRIVATE glfw glm meshoptimizer)
 	# option name for shared library
 	set_target_properties(${SHAREDLIB_PY_NAME} PROPERTIES OUTPUT_NAME ${SHAREDLIB_PY_NAME})
 endfunction(BuildSharedLib)
