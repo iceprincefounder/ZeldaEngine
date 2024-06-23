@@ -160,5 +160,6 @@ for i in range(PointLightNum):
 
 
 # send data to engine
-json_str = json.dumps(xkWorld)
-sendDataToEngine(json_str)
+# json_str = json.dumps(xkWorld)
+# sendDataToEngine(json_str)
+

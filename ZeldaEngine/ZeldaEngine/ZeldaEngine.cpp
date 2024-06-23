@@ -69,8 +69,8 @@
 #endif
 
 #define MAX_FRAMES_IN_FLIGHT 2
-#define VIEWPORT_WIDTH 1080
-#define VIEWPORT_HEIGHT 720
+#define VIEWPORT_WIDTH 1920
+#define VIEWPORT_HEIGHT 1080
 #define PBR_SAMPLER_NUMBER 7 // BC + M + R + N + AO + Emissive + Mask
 #define BG_SAMPLER_NUMBER 1
 #define SKY_SAMPLER_NUMBER 1
@@ -87,10 +87,10 @@
 #define ENABLE_DEFEERED_SHADING true
 // @TODO: Implement Bindless Feature
 // @see https://dev.to/gasim/implementing-bindless-design-in-vulkan-34no
-#define ENABLE_BINDLESS false
+#define ENABLE_BINDLESS true
 #define ENABLE_GENERATE_WORLD true
 
-#define ASSETS(x) ProfabsAsset(x)
+#define ASSETS(x) AssetPathSearch(x)
 
 typedef std::string XkString;
 
@@ -375,7 +375,7 @@ inline bool operator==(EXkRenderFlags a, EXkRenderFlags b)
 }
 
 /** Model MVP matrices */
-struct XkUniformBufferObject {
+struct XkUniformBufferMVP {
 	glm::mat4 Model;
 	glm::mat4 View;
 	glm::mat4 Proj;
@@ -610,32 +610,33 @@ struct XkCameraDesc : public XkDesc
 
 	float GetArmLength() const { return glm::length(Position - Lookat); }
 	float GetYaw() const
-    {
-        glm::vec3 Direction = GetDirection();
-        return glm::degrees(glm::atan(Direction.x, Direction.y));
-    }
-	float GetPitch()
-    {
-        glm::vec3 Direction = GetDirection();
-        return glm::degrees(glm::asin(Direction.z));
-    }
+	{
+		glm::vec3 Direction = GetDirection();
+		return glm::degrees(glm::atan(Direction.x, Direction.y));
+	}
+	float GetPitch() const
+	{
+		glm::vec3 Direction = GetDirection();
+		return glm::degrees(glm::asin(Direction.z));
+	}
 	float GetRoll() const { return 0.0; }
 	glm::mat4 GetTransform() const { return glm::lookAt(Position, Lookat, glm::vec3(0.0f, 0.0f, 1.0f)); }
 	glm::quat GetRotation() const { return glm::quat(GetTransform()); }
 	glm::vec3 GetDirection() const { return glm::normalize(Lookat - Position); }
-    void AddMovement(float DeltaYaw, float DeltaPitch)
-    {
-        float Yaw = GetYaw() + DeltaYaw;
-        float Pitch = GetPitch() + DeltaPitch;
-        
-        glm::vec3 Direction;
-        Direction.x = cos(glm::radians(Pitch)) * sin(glm::radians(Yaw));
-        Direction.y = cos(glm::radians(Yaw)) * cos(glm::radians(Pitch));
-        Direction.z = glm::sin(glm::radians(Pitch));
-        float ArmLength = GetArmLength();
-        Position = Lookat - Direction * ArmLength;
-    }
-    
+	void AddMovement(const float DeltaYaw, const float DeltaPitch)
+	{
+		float Yaw = GetYaw() + DeltaYaw;
+		float Pitch = GetPitch() + DeltaPitch;
+		// Constrain the pitch
+		Pitch = glm::clamp(Pitch, -89.9f, 89.9f);
+		glm::vec3 Direction;
+		Direction.x = cos(glm::radians(Pitch)) * sin(glm::radians(Yaw));
+		Direction.y = cos(glm::radians(Yaw)) * cos(glm::radians(Pitch));
+		Direction.z = glm::sin(glm::radians(Pitch));
+		float ArmLength = GetArmLength();
+		Position = Lookat - Direction * ArmLength;
+	}
+	
 	XkCameraDesc& operator= (const XkCameraDesc& rhs)
 	{
 		Transfrom = rhs.Transfrom;
@@ -781,11 +782,7 @@ struct XkLight
 };
 
 const std::vector<const char*> ValidationLayers = { "VK_LAYER_KHRONOS_validation" };
-#if ENABLE_BINDLESS
-const std::vector<const char*> DeviceExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME };
-#else
 const std::vector<const char*> DeviceExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
-#endif
 
 #ifdef NDEBUG
 const bool bEnableValidationLayers = false;  // Build Configuration: Release
@@ -954,7 +951,7 @@ class XkZeldaEngineApp
 
 	struct XkSocketListener
 	{
-        std::string receivedData;
+		std::string receivedData;
 #ifdef _WIN32
 		WSADATA wsaData;
 		char recvbuf[65720];
@@ -988,8 +985,6 @@ class XkZeldaEngineApp
 		VkDescriptorSetLayout* IndirectDescriptorSetLayout = nullptr;
 		VkDescriptorSetLayout* DeferredSceneDescriptorSetLayout = nullptr;
 		VkDescriptorSetLayout* DeferredLightingDescriptorSetLayout = nullptr;
-
-		bool bReload = false;
 
 		void Reset()
 		{
@@ -1030,6 +1025,8 @@ class XkZeldaEngineApp
 		std::vector<XkLightDesc> QuadLights;
 
 		std::vector<XkObjectDesc> ObjectDescs;
+
+		bool bReloadScene = false;
 
 		void Load(const std::string& RawData = std::string())
 		{
@@ -1870,7 +1867,7 @@ public:
 
 		if (input->bCameraFocus)
 		{
-            input->MainCamera->AddMovement(xoffset, yoffset);
+			input->MainCamera->AddMovement(xoffset, -yoffset);
 		}
 		else
 		{
@@ -1908,14 +1905,14 @@ public:
 	void DrawFrame()
 	{
 		// if scene reload, wait for all frame finish rendering
-		if (Scene.bReload)
+		if (World.bReloadScene)
 		{
 			for (size_t i = 0; i < InFlightFences.size(); i++)
 			{
 				vkWaitForFences(Device, 1, &InFlightFences[i], VK_TRUE, UINT64_MAX);
 			}
 			CreateEngineScene();
-			Scene.bReload = false;
+			World.bReloadScene = false;
 		}
 
 		if(bFramebufferResized)
@@ -2015,7 +2012,7 @@ protected:
 		appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
 		appInfo.pEngineName = "Zelda Engine";
 		appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-		appInfo.apiVersion = VK_API_VERSION_1_0;
+		appInfo.apiVersion = VK_API_VERSION_1_3; // update API to newest version
 
 		VkInstanceCreateInfo createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -2152,11 +2149,19 @@ protected:
 #if ENABLE_BINDLESS
 		VkPhysicalDeviceDescriptorIndexingFeatures descriptorIndexingFeatures{};
 		descriptorIndexingFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
-		descriptorIndexingFeatures.pNext = nullptr;
+		descriptorIndexingFeatures.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+		descriptorIndexingFeatures.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+		descriptorIndexingFeatures.shaderUniformBufferArrayNonUniformIndexing = VK_TRUE;
+		descriptorIndexingFeatures.descriptorBindingUniformBufferUpdateAfterBind = VK_TRUE;
+		descriptorIndexingFeatures.shaderStorageBufferArrayNonUniformIndexing = VK_TRUE;
+		descriptorIndexingFeatures.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
+		descriptorIndexingFeatures.pNext = NULL;
 
 		VkPhysicalDeviceFeatures2 deviceFeatures2{};
 		deviceFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
 		deviceFeatures2.pNext = &descriptorIndexingFeatures;
+		// @TODO: fix Validation Error
+		deviceFeatures2.pNext = &deviceFeatures; // link deviceFeatures pNext
 
 		// Fetch all features from physical device
 		vkGetPhysicalDeviceFeatures2(PhysicalDevice, &deviceFeatures2);
@@ -2175,9 +2180,13 @@ protected:
 		createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
 		createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
 		createInfo.pQueueCreateInfos = queueCreateInfos.data();
-		createInfo.pEnabledFeatures = &deviceFeatures;
 #if ENABLE_BINDLESS
+		// if we use deviceFeatures2, we need to set pEnabledFeatures to NULL
+		// and link deviceFeatures to deviceFeatures2 pNext
+		createInfo.pEnabledFeatures = NULL;
 		createInfo.pNext = &deviceFeatures2;
+#else
+		createInfo.pEnabledFeatures = &deviceFeatures;
 #endif
 		createInfo.enabledExtensionCount = static_cast<uint32_t>(DeviceExtensions.size());
 		createInfo.ppEnabledExtensionNames = DeviceExtensions.data();
@@ -2440,7 +2449,7 @@ protected:
 	/** Create uniform buffers (UBO) */
 	void CreateUniformBuffers()
 	{
-		VkDeviceSize baseBufferSize = sizeof(XkUniformBufferObject);
+		VkDeviceSize baseBufferSize = sizeof(XkUniformBufferMVP);
 		BaseUniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
 		BaseUniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
 
@@ -2450,9 +2459,6 @@ protected:
 				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
 				BaseUniformBuffers[i],
 				BaseUniformBuffersMemory[i]);
-
-			// 这里会导致 memory stack overflow ，不应该在这里 vkMapMemory
-			//vkMapMemory(Device, BaseUniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersMapped[i]);
 		}
 
 		VkDeviceSize bufferSizeOfView = sizeof(XkView);
@@ -2568,7 +2574,7 @@ protected:
 
 		//////////////////////////////////////////////////////////
 		// Create UniformBuffers and UniformBuffersMemory
-		VkDeviceSize bufferSize = sizeof(XkUniformBufferObject);
+		VkDeviceSize bufferSize = sizeof(XkUniformBufferMVP);
 		ShadowmapPass.UniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
 		ShadowmapPass.UniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
@@ -2617,7 +2623,7 @@ protected:
 		BackgroundPass.ImageMemorys.resize(ImageNum);
 		BackgroundPass.ImageViews.resize(ImageNum);
 		BackgroundPass.ImageSamplers.resize(ImageNum);
-		CreateImageContext(
+		CreateTextureResource(
 			BackgroundPass.Images[0],
 			BackgroundPass.ImageMemorys[0],
 			BackgroundPass.ImageViews[0],
@@ -2654,7 +2660,7 @@ protected:
 		 * | X0(p-x) | X1(n-x) | Y2(p-z) | Y3(n-z) | Z4(n-y) | Z5(p-y)|
 		 * |    90   |   -90   |    0    |   180   |    0    |   180  |
 		 */
-		CreateImageCubeContext(CubemapImage, CubemapImageMemory, CubemapImageView, CubemapSampler, CubemapMaxMips, {
+		CreateTextureCubeResource(CubemapImage, CubemapImageMemory, CubemapImageView, CubemapSampler, CubemapMaxMips, {
 			"Content/Textures/cubemap_X0.png",
 			"Content/Textures/cubemap_X1.png",
 			"Content/Textures/cubemap_Y2.png",
@@ -2669,7 +2675,7 @@ protected:
 		SkydomePass.ImageViews.resize(ImageNum);
 		SkydomePass.ImageSamplers.resize(ImageNum);
 
-		CreateImageContext(
+		CreateTextureResource(
 			SkydomePass.Images[0],
 			SkydomePass.ImageMemorys[0],
 			SkydomePass.ImageViews[0],
@@ -2693,7 +2699,7 @@ protected:
 			"Shaders/Skydome_VS.spv",
 			"Shaders/Skydome_FS.spv",
 			EXkRenderFlags::VertexIndexed | EXkRenderFlags::Skydome);
-		XkString skydome_obj = "Content/Meshes/skydome.obj";
+		XkString skydome_obj = "Content/Models/skydome.obj";
 		CreateMesh(SkydomePass.SkydomeMesh.Vertices, SkydomePass.SkydomeMesh.Indices, skydome_obj);
 		CreateVertexBuffer(
 			SkydomePass.SkydomeMesh.VertexBuffer,
@@ -4114,7 +4120,7 @@ public:
 	}
 	void CreateEngineScene()
 	{
-		if (Scene.bReload)
+		if (World.bReloadScene)
 		{
 			CleanupBasePass();
 		}
@@ -4124,7 +4130,7 @@ public:
 		if (World.OverrideCubemap)
 		{
 			CleanupCubeMaps();
-			CreateImageCubeContext(CubemapImage, CubemapImageMemory, CubemapImageView, CubemapSampler, CubemapMaxMips, {
+			CreateTextureCubeResource(CubemapImage, CubemapImageMemory, CubemapImageView, CubemapSampler, CubemapMaxMips, {
 			ASSETS(World.CubemapFileNames[0]),
 			ASSETS(World.CubemapFileNames[1]),
 			ASSETS(World.CubemapFileNames[2]),
@@ -4136,7 +4142,7 @@ public:
 		if (World.OverrideSkydome)
 		{
 			CleanupSkydomeResource();
-			CreateImageContext(
+			CreateTextureResource(
 				SkydomePass.Images[0],
 				SkydomePass.ImageMemorys[0],
 				SkydomePass.ImageViews[0],
@@ -4149,7 +4155,7 @@ public:
 		if (World.OverrideBackground)
 		{
 			CleanupBackgroundResource();
-			CreateImageContext(
+			CreateTextureResource(
 				BackgroundPass.Images[0],
 				BackgroundPass.ImageMemorys[0],
 				BackgroundPass.ImageViews[0],
@@ -4158,7 +4164,7 @@ public:
 			UpdateDescriptorSet(BackgroundPass.DescriptorSets, BackgroundPass.ImageViews, BackgroundPass.ImageSamplers, EXkRenderFlags::Background);
 		}
 
-		if (Scene.bReload)
+		if (World.bReloadScene)
 		{
 			CreateBasePass();
 		}
@@ -4174,7 +4180,7 @@ public:
 		if (ENABLE_INDIRECT_DRAW)
 		{
 			XkRenderObjectIndirect object;
-			XkString object_obj = "Content/Meshes/dragon.meshlet";
+			XkString object_obj = "Content/Models/dragon.meshlet";
 			std::vector<XkString> object_imgs = {
 				"Content/Textures/default_grey.png",	// BaseColor
 				"Content/Textures/default_black.png",	// Metallic
@@ -4262,7 +4268,7 @@ public:
 	{
 		// we write a json file to a path and tell the engine to load it
 		World.Load(SocketListener.receivedData);
-		Scene.bReload = true;
+		World.bReloadScene = true;
 	}
 
 	/** Update player inputs*/
@@ -4290,7 +4296,7 @@ public:
 
 		GlobalInput.CurrentTime = CurrentFrame;
 		GlobalInput.DeltaTime = DeltaTime;
-        
+		
 		// @TODO: WASD control Camera
 	}
 
@@ -4331,7 +4337,7 @@ public:
 					if (ImGui::MenuItem("New")) 
 					{
 						World.Reset();
-						Scene.bReload = true;
+						World.bReloadScene = true;
 					}
 					if (ImGui::MenuItem("Save"))
 					{
@@ -4340,7 +4346,7 @@ public:
 					if (ImGui::MenuItem("Reload")) 
 					{
 						World.Load();
-						Scene.bReload = true;
+						World.bReloadScene = true;
 					}
 
 					if (ImGui::MenuItem("Exit")) { glfwSetWindowShouldClose(Window, true); }
@@ -4587,7 +4593,7 @@ public:
 		glm::mat4 cameraView = glm::lookAt(Position, Lookat, CameraUp);
 		glm::mat4 cameraProj = glm::perspective(glm::radians(FOV), SwapChainExtent.width / (float)SwapChainExtent.height, zNear, zFar);
 
-		XkUniformBufferObject BaseData{};
+		XkUniformBufferMVP BaseData{};
 		BaseData.Model = localToWorld;
 		BaseData.View = cameraView;
 		BaseData.Proj = cameraProj;
@@ -4623,7 +4629,7 @@ public:
 		memcpy(data_view, &View, sizeof(View));
 		vkUnmapMemory(Device, ViewUniformBuffersMemory[currentImageIdx]);
 
-		XkUniformBufferObject UBOShadowData{};
+		XkUniformBufferMVP UBOShadowData{};
 		UBOShadowData.Model = localToWorld;
 		UBOShadowData.View = shadowView;
 		UBOShadowData.Proj = shadowProjection;
@@ -5104,7 +5110,8 @@ public:
 				layoutBindings[i + 4] = samplerLayoutBinding;
 			}
 #if ENABLE_BINDLESS
-			layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+			// @TODO: Enable bindless descriptor set layout
+			// layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
 #endif
 		}
 		layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -5197,6 +5204,7 @@ public:
 			}
 
 #if ENABLE_BINDLESS
+			// @TODO: Enable bindless descriptor pool
 			//poolCI.flags = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
 #endif
 		}
@@ -5244,7 +5252,7 @@ public:
 				VkDescriptorBufferInfo bufferInfo{};
 				bufferInfo.buffer = ShadowmapPass.UniformBuffers[i];
 				bufferInfo.offset = 0;
-				bufferInfo.range = sizeof(XkUniformBufferObject);
+				bufferInfo.range = sizeof(XkUniformBufferMVP);
 				descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 				descriptorWrites[0].dstSet = outDescriptorSets[i];
 				descriptorWrites[0].dstBinding = 0;
@@ -5265,7 +5273,7 @@ public:
 				VkDescriptorBufferInfo baseBufferInfo{};
 				baseBufferInfo.buffer = BaseUniformBuffers[i];
 				baseBufferInfo.offset = 0;
-				baseBufferInfo.range = sizeof(XkUniformBufferObject);
+				baseBufferInfo.range = sizeof(XkUniformBufferMVP);
 
 				descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 				descriptorWrites[0].dstSet = outDescriptorSets[i];
@@ -5429,7 +5437,7 @@ public:
 				VkDescriptorBufferInfo baseBufferInfo{};
 				baseBufferInfo.buffer = BaseUniformBuffers[i];
 				baseBufferInfo.offset = 0;
-				baseBufferInfo.range = sizeof(XkUniformBufferObject);
+				baseBufferInfo.range = sizeof(XkUniformBufferMVP);
 
 				descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 				descriptorWrites[0].dstSet = outDescriptorSets[i];
@@ -5508,7 +5516,7 @@ public:
 	}
 
 	/** Read a path to a texture and create image, image view, and sampler resources */
-	void CreateImageContext(
+	void CreateTextureResource(
 		VkImage& outImage,
 		VkDeviceMemory& outMemory,
 		VkImageView& outImageView,
@@ -5561,7 +5569,7 @@ public:
 	}
 
 	/** Read a path to an HDR texture and create a CUBEMAP image resource */
-	void CreateImageCubeContext(
+	void CreateTextureCubeResource(
 		VkImage& outImage,
 		VkDeviceMemory& outMemory,
 		VkImageView& outImageView,
@@ -5608,7 +5616,7 @@ public:
 			imageInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
 
 			if (vkCreateImage(Device, &imageInfo, nullptr, &outImage) != VK_SUCCESS) {
-				throw std::runtime_error("[CreateImageCubeContext] Failed to Create image!");
+				throw std::runtime_error("[CreateTextureCubeResource] Failed to Create image!");
 			}
 
 			VkMemoryRequirements memRequirements;
@@ -5620,7 +5628,7 @@ public:
 			allocInfo.memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
 			if (vkAllocateMemory(Device, &allocInfo, nullptr, &outMemory) != VK_SUCCESS) {
-				throw std::runtime_error("[CreateImageCubeContext] Failed to allocate image memory!");
+				throw std::runtime_error("[CreateTextureCubeResource] Failed to allocate image memory!");
 			}
 
 			vkBindImageMemory(Device, outImage, outMemory, 0);
@@ -5792,7 +5800,7 @@ public:
 			viewInfo.subresourceRange.baseArrayLayer = 0;
 			viewInfo.subresourceRange.layerCount = 6;
 			if (vkCreateImageView(Device, &viewInfo, nullptr, &outImageView) != VK_SUCCESS) {
-				throw std::runtime_error("[CreateImageCubeContext] Failed to Create texture image View!");
+				throw std::runtime_error("[CreateTextureCubeResource] Failed to Create texture image View!");
 			}
 		}
 		CreateSampler(outSampler,
@@ -5806,22 +5814,22 @@ public:
 	}
 
 	template <typename T>
-	void CreateRenderObject(T& outObject, const XkString& objfile, const std::vector<XkString>& pngfiles, const VkDescriptorSetLayout& inDescriptorSetLayout)
+	void CreateRenderObject(T& outObject, const XkString& objfile, const std::vector<XkString>& pngFiles, const VkDescriptorSetLayout& inDescriptorSetLayout)
 	{
 		CreateMesh(outObject.Mesh.Vertices, outObject.Mesh.Indices, objfile);
-		outObject.Material.TextureImages.resize(pngfiles.size());
-		outObject.Material.TextureImageMemorys.resize(pngfiles.size());
-		outObject.Material.TextureImageViews.resize(pngfiles.size());
-		outObject.Material.TextureImageSamplers.resize(pngfiles.size());
-		for (size_t i = 0; i < pngfiles.size(); i++)
+		outObject.Material.TextureImages.resize(pngFiles.size());
+		outObject.Material.TextureImageMemorys.resize(pngFiles.size());
+		outObject.Material.TextureImageViews.resize(pngFiles.size());
+		outObject.Material.TextureImageSamplers.resize(pngFiles.size());
+		for (size_t i = 0; i < pngFiles.size(); i++)
 		{
 			bool sRGB = (i == 0);
-			CreateImageContext(
+			CreateTextureResource(
 				outObject.Material.TextureImages[i],
 				outObject.Material.TextureImageMemorys[i],
 				outObject.Material.TextureImageViews[i],
 				outObject.Material.TextureImageSamplers[i],
-				pngfiles[i], sRGB);
+				pngFiles[i], sRGB);
 		}
 
 		CreateVertexBuffer(
@@ -5888,24 +5896,24 @@ public:
 	};
 
 	template <typename T>
-	void CreateRenderIndirectObject(T& outObject, const XkString& objfile, const std::vector<XkString>& pngfiles)
+	void CreateRenderIndirectObject(T& outObject, const XkString& meshletFile, const std::vector<XkString>& pngFiles)
 	{
 		CreateMeshlet(outObject.Mesh.Vertices, outObject.Mesh.Indices,
-			outObject.Mesh.MeshletSet.Meshlets, outObject.Mesh.MeshletSet.MeshletVertices, outObject.Mesh.MeshletSet.MeshletTriangles, objfile);
+			outObject.Mesh.MeshletSet.Meshlets, outObject.Mesh.MeshletSet.MeshletVertices, outObject.Mesh.MeshletSet.MeshletTriangles, meshletFile);
 
-		outObject.Material.TextureImages.resize(pngfiles.size());
-		outObject.Material.TextureImageMemorys.resize(pngfiles.size());
-		outObject.Material.TextureImageViews.resize(pngfiles.size());
-		outObject.Material.TextureImageSamplers.resize(pngfiles.size());
-		for (size_t i = 0; i < pngfiles.size(); i++)
+		outObject.Material.TextureImages.resize(pngFiles.size());
+		outObject.Material.TextureImageMemorys.resize(pngFiles.size());
+		outObject.Material.TextureImageViews.resize(pngFiles.size());
+		outObject.Material.TextureImageSamplers.resize(pngFiles.size());
+		for (size_t i = 0; i < pngFiles.size(); i++)
 		{
 			bool sRGB = (i == 0);
-			CreateImageContext(
+			CreateTextureResource(
 				outObject.Material.TextureImages[i],
 				outObject.Material.TextureImageMemorys[i],
 				outObject.Material.TextureImageViews[i],
 				outObject.Material.TextureImageSamplers[i],
-				pngfiles[i], sRGB);
+				pngFiles[i], sRGB);
 		}
 
 		std::vector<XkVertex> tmpVertices = outObject.Mesh.Vertices;
@@ -6003,6 +6011,85 @@ public:
 		vkDestroyBuffer(Device, stagingBuffer, nullptr);
 		vkFreeMemory(Device, stagingBufferMemory, nullptr);
 	};
+
+	template <typename T>
+	void CreateRenderObjectsFromProfabs(std::vector<T>& outRenderObjects, const VkDescriptorSetLayout& inLayout, const XkString& inAssetName, const std::vector<XkInstanceData>& inInstanceData = {})
+	{
+		XkString asset_set_dir = "Profabs";
+		for (const auto& folder : std::filesystem::directory_iterator(asset_set_dir))
+		{
+			XkString asset_name = folder.path().filename().generic_string();
+			XkString asset_set = folder.path().generic_string();
+			if (inAssetName != asset_name)
+			{
+				continue;
+			}
+			XkString models_dir = asset_set + XkString("/models/");
+			XkString textures_dir = asset_set + XkString("/textures/");
+			if (!std::filesystem::is_directory(models_dir) ||
+				!std::filesystem::is_directory(textures_dir))
+			{
+				continue;
+			}
+			for (const auto& Model : std::filesystem::directory_iterator(models_dir))
+			{
+				XkString model_file = Model.path().generic_string();
+				XkString model_file_name = model_file.substr(model_file.find_last_of("/\\") + 1);
+				XkString::size_type const p(model_file_name.find_last_of('.'));
+				XkString model_name = model_file_name.substr(0, p);
+				XkString model_suffix = model_file_name.substr(p + 1);
+				if (model_suffix != "obj") {
+					continue;
+				}
+				XkString texture_bc = textures_dir + model_name + XkString("_bc.png");
+				if (!std::filesystem::exists(texture_bc)) {
+					texture_bc = XkString("Content/Textures/default_grey.png");
+				}
+				XkString texture_m = textures_dir + model_name + XkString("_m.png");
+				if (!std::filesystem::exists(texture_m)) {
+					texture_m = XkString("Content/Textures/default_black.png");
+				}
+				XkString texture_r = textures_dir + model_name + XkString("_r.png");
+				if (!std::filesystem::exists(texture_r)) {
+					texture_r = XkString("Content/Textures/default_white.png");
+				}
+				XkString texture_n = textures_dir + model_name + XkString("_n.png");
+				if (!std::filesystem::exists(texture_n)) {
+					texture_n = XkString("Content/Textures/default_normal.png");
+				}
+				XkString texture_ao = textures_dir + model_name + XkString("_ao.png");
+				if (!std::filesystem::exists(texture_ao)) {
+					texture_ao = XkString("Content/Textures/default_white.png");
+				}
+				XkString texture_ev = textures_dir + model_name + XkString("_ev.png");
+				if (!std::filesystem::exists(texture_ev)) {
+					texture_ev = XkString("Content/Textures/default_black.png");
+				}
+				XkString texture_ms = textures_dir + model_name + XkString("_ms.png");
+				if (!std::filesystem::exists(texture_ms)) {
+					texture_ms = XkString("Content/Textures/default_white.png");
+				}
+
+				T asset;
+				XkString asset_obj = model_file;
+				std::vector<XkString> asset_imgs = {
+					texture_bc,
+					texture_m,
+					texture_r,
+					texture_n,
+					texture_ao,
+					texture_ev,
+					texture_ms };
+
+				CreateRenderObject<T>(asset, asset_obj, asset_imgs, inLayout);
+				if (inInstanceData.size() > 0)
+				{
+					CreateInstancedBuffer<T>(asset, inInstanceData);
+				}
+				outRenderObjects.push_back(asset);
+			}
+		}
+	}
 protected:
 	/** Choose the format of the image to render to the SwapChain */
 	VkSurfaceFormatKHR ChooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats)
@@ -6633,86 +6720,6 @@ protected:
 			throw std::runtime_error("[CreateSampler] Failed to Create texture sampler!");
 		}
 	}
-
-	template <typename T>
-	void CreateRenderObjectsFromProfabs(std::vector<T>& outRenderObjects, const VkDescriptorSetLayout& inLayout, const XkString& inAssetName, const std::vector<XkInstanceData>& inInstanceData = {})
-	{
-		XkString asset_set_dir = "Profabs";
-		for (const auto& folder : std::filesystem::directory_iterator(asset_set_dir))
-		{
-			XkString asset_name = folder.path().filename().generic_string();
-			XkString asset_set = folder.path().generic_string();
-			if (inAssetName != asset_name)
-			{
-				continue;
-			}
-			XkString models_dir = asset_set + XkString("/models/");
-			XkString textures_dir = asset_set + XkString("/textures/");
-			if (!std::filesystem::is_directory(models_dir) ||
-				!std::filesystem::is_directory(textures_dir))
-			{
-				continue;
-			}
-			for (const auto& Model : std::filesystem::directory_iterator(models_dir))
-			{
-				XkString model_file = Model.path().generic_string();
-				XkString model_file_name = model_file.substr(model_file.find_last_of("/\\") + 1);
-				XkString::size_type const p(model_file_name.find_last_of('.'));
-				XkString model_name = model_file_name.substr(0, p);
-				XkString model_suffix = model_file_name.substr(p + 1);
-				if (model_suffix != "obj") {
-					continue;
-				}
-				XkString texture_bc = textures_dir + model_name + XkString("_bc.png");
-				if (!std::filesystem::exists(texture_bc)) {
-					texture_bc = XkString("Content/Textures/default_grey.png");
-				}
-				XkString texture_m = textures_dir + model_name + XkString("_m.png");
-				if (!std::filesystem::exists(texture_m)) {
-					texture_m = XkString("Content/Textures/default_black.png");
-				}
-				XkString texture_r = textures_dir + model_name + XkString("_r.png");
-				if (!std::filesystem::exists(texture_r)) {
-					texture_r = XkString("Content/Textures/default_white.png");
-				}
-				XkString texture_n = textures_dir + model_name + XkString("_n.png");
-				if (!std::filesystem::exists(texture_n)) {
-					texture_n = XkString("Content/Textures/default_normal.png");
-				}
-				XkString texture_ao = textures_dir + model_name + XkString("_ao.png");
-				if (!std::filesystem::exists(texture_ao)) {
-					texture_ao = XkString("Content/Textures/default_white.png");
-				}
-				XkString texture_ev = textures_dir + model_name + XkString("_ev.png");
-				if (!std::filesystem::exists(texture_ev)) {
-					texture_ev = XkString("Content/Textures/default_black.png");
-				}
-				XkString texture_ms = textures_dir + model_name + XkString("_ms.png");
-				if (!std::filesystem::exists(texture_ms)) {
-					texture_ms = XkString("Content/Textures/default_white.png");
-				}
-
-				T asset;
-				XkString asset_obj = model_file;
-				std::vector<XkString> asset_imgs = {
-					texture_bc,
-					texture_m,
-					texture_r,
-					texture_n,
-					texture_ao,
-					texture_ev,
-					texture_ms };
-
-				CreateRenderObject<T>(asset, asset_obj, asset_imgs, inLayout);
-				if (inInstanceData.size() > 0)
-				{
-					CreateInstancedBuffer<T>(asset, inInstanceData);
-				}
-				outRenderObjects.push_back(asset);
-			}
-		}
-	}
-
 private:
 	/** Load the compiled shader binary SPV file into a memory buffer */
 	static std::vector<char> LoadShaderSource(const XkString& filename)
@@ -6927,51 +6934,97 @@ private:
 		outIndices = cache.indices;
 	}
 	
-	// Find file in Profabs folder.
-	XkString ProfabsAsset(const XkString& inFilename)
+	// Find file search Profabs folder and Content folder.
+	XkString AssetPathSearch(const XkString& inFilename)
 	{
+		XkString Result = inFilename;
+		XkString FileNameWithSuffix = inFilename.substr(inFilename.find_last_of("/\\") + 1);
+		XkString::size_type const p(FileNameWithSuffix.find_last_of('.'));
+		XkString FileName = FileNameWithSuffix.substr(0, p);
+		auto searchAssetDir = [FileName, FileNameWithSuffix](XkString& OutAssetPath, const XkString& AssetDir) -> bool
+			{
+				for (const auto& folder : std::filesystem::directory_iterator(AssetDir))
+				{
+					XkString asset_name = folder.path().filename().generic_string();
+					XkString asset_set = folder.path().generic_string();
+					XkString models_dir = asset_set + XkString("/models/");
+					// "models" is not a asset name but a search folder name
+					if (asset_name == XkString("models"))
+					{
+						models_dir = asset_set;
+					}
+					XkString models_upper_dir = asset_set + XkString("/Models/");
+					// "Models" is not a asset name but a search folder name
+					if (asset_name == XkString("Models"))
+					{
+						models_upper_dir = asset_set;
+					}
+					// fix the upper case folder name
+					if (!std::filesystem::is_directory(models_dir) && std::filesystem::is_directory(models_upper_dir))
+					{
+						models_dir = models_upper_dir;
+					}
+					XkString textures_dir = asset_set + XkString("/textures/");
+					// "textures" is not a asset name but a search folder name
+					if (asset_name == XkString("textures"))
+					{
+						textures_dir = asset_set;
+					}
+					XkString textures_upper_dir = asset_set + XkString("/Textures/");
+					// "Textures" is not a asset name but a search folder name
+					if (asset_name == XkString("Textures"))
+					{
+						textures_upper_dir = asset_set;
+					}
+					// fix the upper case folder name
+					if (!std::filesystem::is_directory(textures_dir) && std::filesystem::is_directory(textures_upper_dir))
+					{
+						textures_dir = textures_upper_dir;
+					}
+					if (std::filesystem::is_directory(models_dir))
+					{
+						for (const auto& model : std::filesystem::directory_iterator(models_dir))
+						{
+							XkString model_file = model.path().generic_string();
+							XkString model_file_name_with_suffix = model_file.substr(model_file.find_last_of("/\\") + 1);
+							if (model_file_name_with_suffix == FileNameWithSuffix)
+							{
+								OutAssetPath = model_file;
+								return true;
+							}
+						}
+					}
+					if (std::filesystem::is_directory(textures_dir))
+					{
+						for (const auto& texture : std::filesystem::directory_iterator(textures_dir))
+						{
+							XkString texture_file = texture.path().generic_string();
+							XkString texture_file_name_with_suffix = texture_file.substr(texture_file.find_last_of("/\\") + 1);
+							if (texture_file_name_with_suffix == FileNameWithSuffix)
+							{
+								OutAssetPath = texture_file;
+								return true;
+							}
+
+						}
+					}
+				}
+				return false;
+			};
+
 		if (std::filesystem::exists(inFilename))
 		{
 			return inFilename;
 		}
-		XkString file_name_with_suffix = inFilename.substr(inFilename.find_last_of("/\\") + 1);
-		XkString::size_type const p(file_name_with_suffix.find_last_of('.'));
-		XkString file_name = file_name_with_suffix.substr(0, p);
-
-		XkString asset_set_dir = "Profabs";
-		for (const auto& folder : std::filesystem::directory_iterator(asset_set_dir))
+		if (searchAssetDir(Result, "Profabs"))
 		{
-			XkString asset_name = folder.path().filename().generic_string();
-			XkString asset_set = folder.path().generic_string();
-			XkString models_dir = asset_set + XkString("/models/");
-			XkString textures_dir = asset_set + XkString("/textures/");
-			if (std::filesystem::is_directory(models_dir))
-			{
-				for (const auto& model : std::filesystem::directory_iterator(models_dir))
-				{
-					XkString model_file = model.path().generic_string();
-					XkString model_file_name_with_suffix = model_file.substr(model_file.find_last_of("/\\") + 1);
-					if (model_file_name_with_suffix == file_name_with_suffix)
-					{
-						return model_file;
-					}
-				}
-			}
-			if (std::filesystem::is_directory(textures_dir))
-			{
-				for (const auto& texture : std::filesystem::directory_iterator(textures_dir))
-				{
-					XkString texture_file = texture.path().generic_string();
-					XkString texture_file_name_with_suffix = texture_file.substr(texture_file.find_last_of("/\\") + 1);
-					if (texture_file_name_with_suffix == file_name_with_suffix)
-					{
-						return texture_file;
-					}
-
-				}
-			}
+			return Result;
 		}
-		return inFilename;
+		if (searchAssetDir(Result, "Content"))
+		{
+			return Result;
+		}
+		return Result;
 	}
 
 	/** Select the content to print for Debug information */
