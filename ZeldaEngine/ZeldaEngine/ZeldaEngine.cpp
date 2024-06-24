@@ -19,6 +19,7 @@
 #include <unordered_map>
 #include <random>
 #include <thread>
+#include <type_traits>
 
 #include "rapidjson/document.h"
 #include "rapidjson/writer.h"
@@ -42,6 +43,7 @@
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/hash.hpp>
 
@@ -83,12 +85,14 @@
 #define VERTEX_BUFFER_BIND_ID 0
 #define INSTANCE_BUFFER_BIND_ID 1
 #define ENABLE_WIREFRAME false
-#define ENABLE_INDIRECT_DRAW false
-#define ENABLE_DEFEERED_SHADING true
+#define ENABLE_INDIRECT_DRAW true
+#define ENABLE_INDIRECT_DRAW_TEST true
+#define ENABLE_DEFERRED_SHADING true
 // @TODO: Implement Bindless Feature
 // @see https://dev.to/gasim/implementing-bindless-design-in-vulkan-34no
-#define ENABLE_BINDLESS true
+#define ENABLE_BINDLESS false
 #define ENABLE_GENERATE_WORLD true
+#define ENABLE_FUTURE_ENGINE true // experimental feature for future engine techniques
 
 #define ASSETS(x) AssetPathSearch(x)
 
@@ -390,6 +394,15 @@ struct XkTransfrom {
 	glm::vec3 Scale3D;
 
 	glm::quat Quaternion;
+
+	glm::mat4 GetMatrix() const
+	{
+		glm::mat4 LocalToWorld = glm::mat4(1.0f);
+		LocalToWorld = glm::scale(LocalToWorld, Scale3D);
+		LocalToWorld *= glm::mat4_cast(Quaternion);
+		LocalToWorld = glm::translate(LocalToWorld, Location);
+		return LocalToWorld;
+	}
 };
 
 /** The instance of mesh data block*/
@@ -653,6 +666,8 @@ struct XkCameraDesc : public XkDesc
 
 struct XkMesh 
 {
+	XkString FilePath;
+
 	std::vector<XkVertex> Vertices;                       // Vertex
 	std::vector<uint32_t> Indices;                       // Index
 	VkBuffer VertexBuffer;                               // Vertex buffer
@@ -678,7 +693,8 @@ struct XkMeshlet
 	float BoundsRadius;
 	float ConeApex[3];
 	float ConeAxis[3];
-	float ConeCutoff, Pad;
+	float ConeCutoff;
+	float Pad;
 };
 
 /** Meshlet group set data block, all meshlets make up a model mesh data.*/
@@ -696,8 +712,20 @@ struct XkMeshIndirect : public XkMesh
 
 typedef XkMeshIndirect XkInstancedMeshIndirect;
 
-struct XkMaterial 
+/* Uber shader used by BasePass.*/
+struct XkMaterialParameters
 {
+	float BaseColorOverride;
+	float MetallicOverride;
+	float SpecularOverride;
+	float RoughnessOverride;
+};
+
+struct XkMaterial
+{
+	// @TODO: save texture data into KTX format
+	std::vector<XkString> FilePaths;
+
 	std::vector<VkImage> TextureImages;
 	std::vector<VkDeviceMemory> TextureImageMemorys;
 	std::vector<VkImageView> TextureImageViews;
@@ -707,11 +735,14 @@ struct XkMaterial
 	std::vector<VkDescriptorSet> DescriptorSets;
 
 	// DescriptorSetLayout is define by each render pass
-	VkDescriptorSetLayout* DescriptorSetLayout; 
+	VkDescriptorSetLayout* DescriptorSetLayout;
+
+	XkMaterialParameters MaterialParameters;
 };
 
 struct XkRenderBase
 {
+	XkTransfrom Transfrom;
 	XkMaterial Material;
 	uint32_t InstanceCount;
 	
@@ -756,6 +787,11 @@ typedef XkRenderInstancedObject FRenderDeferredInstancedObject;
 /** Common light data struct.*/
 struct XkLight
 {
+	glm::vec4 Position;
+	glm::vec4 Color; // rgb for Color, a for intensity
+	glm::vec4 Direction;
+	glm::vec4 LightInfo;
+
 	XkLight() : Position(glm::vec4(0.0f)), Color(glm::vec4(1.0f)), Direction(glm::vec4(0.0f, 0.0f, 1.0f, 1.0f)), LightInfo(glm::vec4(0.0f)) {};
 
 	XkLight(const XkLightDesc& Desc)
@@ -766,11 +802,6 @@ struct XkLight
 		LightInfo = Desc.ExtraData;
 	}
 
-	glm::vec4 Position;
-	glm::vec4 Color; // rgb for Color, a for intensity
-	glm::vec4 Direction;
-	glm::vec4 LightInfo;
-
 	XkLight& operator=(const XkLight& rhs)
 	{
 		Position = rhs.Position;
@@ -780,6 +811,15 @@ struct XkLight
 		return *this;
 	}
 };
+
+#if ENABLE_FUTURE_ENGINE
+struct XkFutureObject
+{
+	XkMesh Mesh;
+	XkMeshletSet MeshletSet;
+};
+
+#endif
 
 const std::vector<const char*> ValidationLayers = { "VK_LAYER_KHRONOS_validation" };
 const std::vector<const char*> DeviceExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
@@ -982,10 +1022,13 @@ class XkZeldaEngineApp
 		std::vector<FRenderDeferredInstancedObject> RenderDeferredInstancedObjects;
 
 		VkDescriptorSetLayout* DescriptorSetLayout = nullptr;
+#if ENABLE_INDIRECT_DRAW
 		VkDescriptorSetLayout* IndirectDescriptorSetLayout = nullptr;
+#endif
+#if ENABLE_DEFERRED_SHADING
 		VkDescriptorSetLayout* DeferredSceneDescriptorSetLayout = nullptr;
 		VkDescriptorSetLayout* DeferredLightingDescriptorSetLayout = nullptr;
-
+#endif
 		void Reset()
 		{
 			RenderObjects.clear();
@@ -996,9 +1039,13 @@ class XkZeldaEngineApp
 			RenderDeferredInstancedObjects.clear();
 
 			DescriptorSetLayout = nullptr;
+#if ENABLE_INDIRECT_DRAW
 			IndirectDescriptorSetLayout = nullptr;
+#endif
+#if ENABLE_DEFERRED_SHADING
 			DeferredSceneDescriptorSetLayout = nullptr;
 			DeferredLightingDescriptorSetLayout = nullptr;
+#endif
 		}
 	} Scene;
 
@@ -1422,7 +1469,7 @@ class XkZeldaEngineApp
 		std::vector<VkPipeline> IndirectPipelinesInstanced;
 #endif
 
-#if ENABLE_DEFEERED_SHADING
+#if ENABLE_DEFERRED_SHADING
 		std::vector<FRenderDeferredObject*> RenderDeferredObjects;
 		std::vector<FRenderDeferredInstancedObject*> RenderDeferredInstancedObjects;
 		VkDescriptorSetLayout DeferredSceneDescriptorSetLayout;
@@ -2160,8 +2207,7 @@ protected:
 		VkPhysicalDeviceFeatures2 deviceFeatures2{};
 		deviceFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
 		deviceFeatures2.pNext = &descriptorIndexingFeatures;
-		// @TODO: fix Validation Error
-		deviceFeatures2.pNext = &deviceFeatures; // link deviceFeatures pNext
+		deviceFeatures2.features = deviceFeatures; // link deviceFeatures[VkPhysicalDeviceFeatures]
 
 		// Fetch all features from physical device
 		vkGetPhysicalDeviceFeatures2(PhysicalDevice, &deviceFeatures2);
@@ -2304,7 +2350,7 @@ protected:
 
 		for (size_t i = 0; i < SwapChainImages.size(); i++)
 		{
-			CreateImageView(SwapChainImageViews[i], SwapChainImages[i], SwapChainImageFormat);
+			RHICreateImageView(SwapChainImageViews[i], SwapChainImages[i], SwapChainImageFormat);
 		}
 	}
 
@@ -2327,7 +2373,7 @@ protected:
 		VkAttachmentDescription DepthAttachment{};
 		DepthAttachment.format = FindDepthFormat();
 		DepthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-#if !ENABLE_DEFEERED_SHADING
+#if !ENABLE_DEFERRED_SHADING
 		DepthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
 		DepthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 #else
@@ -2336,7 +2382,7 @@ protected:
 #endif
 		DepthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
 		DepthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-#if !ENABLE_DEFEERED_SHADING
+#if !ENABLE_DEFERRED_SHADING
 		DepthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 #else
 		DepthAttachment.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
@@ -2388,8 +2434,8 @@ protected:
 	{
 		// Create depth texture resources
 		VkFormat depthFormat = FindDepthFormat();
-		CreateImage(DepthImage, DepthImageMemory, SwapChainExtent.width, SwapChainExtent.height, depthFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-		CreateImageView(DepthImageView, DepthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
+		RHICreateImage(DepthImage, DepthImageMemory, SwapChainExtent.width, SwapChainExtent.height, depthFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		RHICreateImageView(DepthImageView, DepthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
 
 		SwapChainFramebuffers.resize(SwapChainImageViews.size());
 
@@ -2454,7 +2500,7 @@ protected:
 		BaseUniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
 
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-			CreateBuffer(baseBufferSize,
+			RHICreateBuffer(baseBufferSize,
 				VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
 				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
 				BaseUniformBuffers[i],
@@ -2466,7 +2512,7 @@ protected:
 		ViewUniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
 
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-			CreateBuffer(
+			RHICreateBuffer(
 				bufferSizeOfView,
 				VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
 				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -2484,15 +2530,15 @@ protected:
 		ShadowmapPass.Width = SHADOWMAP_DIM;
 		ShadowmapPass.Height = SHADOWMAP_DIM;
 		ShadowmapPass.Format = FindDepthFormat();
-		CreateImage(
+		RHICreateImage(
 			ShadowmapPass.Image,
 			ShadowmapPass.Memory,
 			ShadowmapPass.Width, ShadowmapPass.Height, ShadowmapPass.Format,
 			VK_IMAGE_TILING_OPTIMAL,
 			VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-		CreateImageView(ShadowmapPass.ImageView, ShadowmapPass.Image, ShadowmapPass.Format, VK_IMAGE_ASPECT_DEPTH_BIT);
-		CreateSampler(ShadowmapPass.Sampler,
+		RHICreateImageView(ShadowmapPass.ImageView, ShadowmapPass.Image, ShadowmapPass.Format, VK_IMAGE_ASPECT_DEPTH_BIT);
+		RHICreateSampler(ShadowmapPass.Sampler,
 			VK_FILTER_LINEAR,
 			VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
 			VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
@@ -2578,7 +2624,7 @@ protected:
 		ShadowmapPass.UniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
 		ShadowmapPass.UniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-			CreateBuffer(bufferSize,
+			RHICreateBuffer(bufferSize,
 				VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
 				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
 				ShadowmapPass.UniformBuffers[i],
@@ -2587,19 +2633,19 @@ protected:
 
 		//////////////////////////////////////////////////////////
 		// Create DescriptorSetLayout
-		CreateDescriptorSetLayout(ShadowmapPass.DescriptorSetLayout, EXkRenderFlags::Shadow);
+		RHICreateDescriptorSetLayout(ShadowmapPass.DescriptorSetLayout, EXkRenderFlags::Shadow);
 
 		//////////////////////////////////////////////////////////
 		// Bind DescriptorSet
-		CreateDescriptorSet(ShadowmapPass.DescriptorSets, ShadowmapPass.DescriptorPool, ShadowmapPass.DescriptorSetLayout, 
+		RHICreateDescriptorSet(ShadowmapPass.DescriptorSets, ShadowmapPass.DescriptorPool, ShadowmapPass.DescriptorSetLayout, 
 			std::vector<VkImageView>(), std::vector<VkSampler>{}, EXkRenderFlags::Shadow);
 
-		CreatePipelineLayout(ShadowmapPass.PipelineLayout, ShadowmapPass.DescriptorSetLayout);
+		RHICreatePipelineLayout(ShadowmapPass.PipelineLayout, ShadowmapPass.DescriptorSetLayout);
 
 		ShadowmapPass.Pipelines.resize(1);
 		ShadowmapPass.PipelinesInstanced.resize(1);
 
-		CreateGraphicsPipelines(
+		RHICreateGraphicsPipelines(
 			ShadowmapPass.Pipelines,
 			ShadowmapPass.PipelineLayout,
 			ShadowmapPass.RenderPass,
@@ -2607,7 +2653,7 @@ protected:
 			"Shaders/Shadowmap_FS.spv", 
 			EXkRenderFlags::Shadow);
 
-		CreateGraphicsPipelines(
+		RHICreateGraphicsPipelines(
 			ShadowmapPass.PipelinesInstanced,
 			ShadowmapPass.PipelineLayout,
 			ShadowmapPass.RenderPass,
@@ -2623,14 +2669,14 @@ protected:
 		BackgroundPass.ImageMemorys.resize(ImageNum);
 		BackgroundPass.ImageViews.resize(ImageNum);
 		BackgroundPass.ImageSamplers.resize(ImageNum);
-		CreateTextureResource(
+		RHICreateTextureResource(
 			BackgroundPass.Images[0],
 			BackgroundPass.ImageMemorys[0],
 			BackgroundPass.ImageViews[0],
 			BackgroundPass.ImageSamplers[0],
 			"Content/Textures/background.png");
-		CreateDescriptorSetLayout(BackgroundPass.DescriptorSetLayout, EXkRenderFlags::Background);
-		CreateDescriptorSet(
+		RHICreateDescriptorSetLayout(BackgroundPass.DescriptorSetLayout, EXkRenderFlags::Background);
+		RHICreateDescriptorSet(
 			BackgroundPass.DescriptorSets,
 			BackgroundPass.DescriptorPool,
 			BackgroundPass.DescriptorSetLayout,
@@ -2638,8 +2684,8 @@ protected:
 
 		uint32_t PipelineNum = 1;
 		BackgroundPass.Pipelines.resize(PipelineNum);
-		CreatePipelineLayout(BackgroundPass.PipelineLayout, BackgroundPass.DescriptorSetLayout, EXkRenderFlags::Background);
-		CreateGraphicsPipelines(
+		RHICreatePipelineLayout(BackgroundPass.PipelineLayout, BackgroundPass.DescriptorSetLayout, EXkRenderFlags::Background);
+		RHICreateGraphicsPipelines(
 			BackgroundPass.Pipelines,
 			BackgroundPass.PipelineLayout,
 			MainRenderPass,
@@ -2660,7 +2706,7 @@ protected:
 		 * | X0(p-x) | X1(n-x) | Y2(p-z) | Y3(n-z) | Z4(n-y) | Z5(p-y)|
 		 * |    90   |   -90   |    0    |   180   |    0    |   180  |
 		 */
-		CreateTextureCubeResource(CubemapImage, CubemapImageMemory, CubemapImageView, CubemapSampler, CubemapMaxMips, {
+		RHICreateTextureCubeResource(CubemapImage, CubemapImageMemory, CubemapImageView, CubemapSampler, CubemapMaxMips, {
 			"Content/Textures/cubemap_X0.png",
 			"Content/Textures/cubemap_X1.png",
 			"Content/Textures/cubemap_Y2.png",
@@ -2675,14 +2721,14 @@ protected:
 		SkydomePass.ImageViews.resize(ImageNum);
 		SkydomePass.ImageSamplers.resize(ImageNum);
 
-		CreateTextureResource(
+		RHICreateTextureResource(
 			SkydomePass.Images[0],
 			SkydomePass.ImageMemorys[0],
 			SkydomePass.ImageViews[0],
 			SkydomePass.ImageSamplers[0],
 			"Content/Textures/skydome.png");
-		CreateDescriptorSetLayout(SkydomePass.DescriptorSetLayout, EXkRenderFlags::Skydome);
-		CreateDescriptorSet(
+		RHICreateDescriptorSetLayout(SkydomePass.DescriptorSetLayout, EXkRenderFlags::Skydome);
+		RHICreateDescriptorSet(
 			SkydomePass.DescriptorSets,
 			SkydomePass.DescriptorPool,
 			SkydomePass.DescriptorSetLayout,
@@ -2691,8 +2737,8 @@ protected:
 
 		uint32_t PipelineNum = 1;
 		SkydomePass.Pipelines.resize(PipelineNum);
-		CreatePipelineLayout(SkydomePass.PipelineLayout, SkydomePass.DescriptorSetLayout, EXkRenderFlags::Skydome);
-		CreateGraphicsPipelines(
+		RHICreatePipelineLayout(SkydomePass.PipelineLayout, SkydomePass.DescriptorSetLayout, EXkRenderFlags::Skydome);
+		RHICreateGraphicsPipelines(
 			SkydomePass.Pipelines,
 			SkydomePass.PipelineLayout,
 			MainRenderPass,
@@ -2700,15 +2746,7 @@ protected:
 			"Shaders/Skydome_FS.spv",
 			EXkRenderFlags::VertexIndexed | EXkRenderFlags::Skydome);
 		XkString skydome_obj = "Content/Models/skydome.obj";
-		CreateMesh(SkydomePass.SkydomeMesh.Vertices, SkydomePass.SkydomeMesh.Indices, skydome_obj);
-		CreateVertexBuffer(
-			SkydomePass.SkydomeMesh.VertexBuffer,
-			SkydomePass.SkydomeMesh.VertexBufferMemory,
-			SkydomePass.SkydomeMesh.Vertices);
-		CreateIndexBuffer(
-			SkydomePass.SkydomeMesh.IndexBuffer,
-			SkydomePass.SkydomeMesh.IndexBufferMemory,
-			SkydomePass.SkydomeMesh.Indices);
+		CreateMeshVertexBuffers(SkydomePass.SkydomeMesh, skydome_obj);
 	}
 
 	void CreateBasePass()
@@ -2716,18 +2754,18 @@ protected:
 		//~ Begin create scene rendering pipeline and shaders
 		{
 			uint32_t SpecConstantsCount = GlobalConstants.SpecConstantsCount;
-			CreateDescriptorSetLayout(BasePass.DescriptorSetLayout);
+			RHICreateDescriptorSetLayout(BasePass.DescriptorSetLayout);
 			BasePass.Pipelines.resize(SpecConstantsCount);
 			BasePass.PipelinesInstanced.resize(SpecConstantsCount);
-			CreatePipelineLayout(BasePass.PipelineLayout, BasePass.DescriptorSetLayout);
-			CreateGraphicsPipelines(
+			RHICreatePipelineLayout(BasePass.PipelineLayout, BasePass.DescriptorSetLayout);
+			RHICreateGraphicsPipelines(
 				BasePass.Pipelines,
 				BasePass.PipelineLayout,
 				MainRenderPass,
 				"Shaders/Base_VS.spv",
 				"Shaders/Base_FS.spv",
 				EXkRenderFlags::VertexIndexed);
-			CreateGraphicsPipelines(
+			RHICreateGraphicsPipelines(
 				BasePass.PipelinesInstanced,
 				BasePass.PipelineLayout,
 				MainRenderPass,
@@ -2741,21 +2779,21 @@ protected:
 		//~ Begin create indirect BasePass
 		{
 			// Create scene rendering pipeline and shaders
-			CreateDescriptorSetLayout(BasePass.DescriptorSetLayout);
+			RHICreateDescriptorSetLayout(BasePass.IndirectDescriptorSetLayout);
 			uint32_t SpecConstantsCount = GlobalConstants.SpecConstantsCount;
-			BasePass.Pipelines.resize(SpecConstantsCount);
-			BasePass.PipelinesInstanced.resize(SpecConstantsCount);
-			CreatePipelineLayout(BasePass.PipelineLayout, BasePass.DescriptorSetLayout);
-			CreateGraphicsPipelines(
-				BasePass.Pipelines,
-				BasePass.PipelineLayout,
+			BasePass.IndirectPipelines.resize(SpecConstantsCount);
+			BasePass.IndirectPipelinesInstanced.resize(SpecConstantsCount);
+			RHICreatePipelineLayout(BasePass.IndirectPipelineLayout, BasePass.IndirectDescriptorSetLayout);
+			RHICreateGraphicsPipelines(
+				BasePass.IndirectPipelines,
+				BasePass.IndirectPipelineLayout,
 				MainRenderPass,
 				"Shaders/Base_VS.spv",
 				"Shaders/Base_FS.spv",
 				EXkRenderFlags::VertexIndexed);
-			CreateGraphicsPipelines(
-				BasePass.PipelinesInstanced,
-				BasePass.PipelineLayout,
+			RHICreateGraphicsPipelines(
+				BasePass.IndirectPipelinesInstanced,
+				BasePass.IndirectPipelineLayout,
 				MainRenderPass,
 				"Shaders/BaseInstanced_VS.spv",
 				"Shaders/Base_FS.spv",
@@ -2764,51 +2802,51 @@ protected:
 		//~ End create indirect BasePass
 #endif
 
-#if ENABLE_DEFEERED_SHADING
+#if ENABLE_DEFERRED_SHADING
 		//~ Begin create deferred BasePass
 		{
 			// Depth Stencil (Currently depth-only)
 			GBuffer.DepthStencilFormat = VK_FORMAT_D32_SFLOAT;
-			CreateImage(GBuffer.DepthStencilImage, GBuffer.DepthStencilMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.DepthStencilFormat,
+			RHICreateImage(GBuffer.DepthStencilImage, GBuffer.DepthStencilMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.DepthStencilFormat,
 				VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-			CreateImageView(GBuffer.DepthStencilImageView, GBuffer.DepthStencilImage, GBuffer.DepthStencilFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
-			CreateSampler(GBuffer.DepthStencilSampler);
+			RHICreateImageView(GBuffer.DepthStencilImageView, GBuffer.DepthStencilImage, GBuffer.DepthStencilFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
+			RHICreateSampler(GBuffer.DepthStencilSampler);
 
 			// Scene Color
 			GBuffer.SceneColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
-			CreateImage(GBuffer.SceneColorImage, GBuffer.SceneColorMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.SceneColorFormat,
+			RHICreateImage(GBuffer.SceneColorImage, GBuffer.SceneColorMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.SceneColorFormat,
 				VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-			CreateImageView(GBuffer.SceneColorImageView, GBuffer.SceneColorImage, GBuffer.SceneColorFormat, VK_IMAGE_ASPECT_COLOR_BIT);
-			CreateSampler(GBuffer.SceneColorSampler);
+			RHICreateImageView(GBuffer.SceneColorImageView, GBuffer.SceneColorImage, GBuffer.SceneColorFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+			RHICreateSampler(GBuffer.SceneColorSampler);
 
 			// GBufferA Normal+(CastShadow+Masked)
 			GBuffer.GBufferAFormat = VK_FORMAT_A2R10G10B10_UNORM_PACK32;
-			CreateImage(GBuffer.GBufferAImage, GBuffer.GBufferAMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.GBufferAFormat,
+			RHICreateImage(GBuffer.GBufferAImage, GBuffer.GBufferAMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.GBufferAFormat,
 				VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-			CreateImageView(GBuffer.GBufferAImageView, GBuffer.GBufferAImage, GBuffer.GBufferAFormat, VK_IMAGE_ASPECT_COLOR_BIT);
-			CreateSampler(GBuffer.GBufferASampler);
+			RHICreateImageView(GBuffer.GBufferAImageView, GBuffer.GBufferAImage, GBuffer.GBufferAFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+			RHICreateSampler(GBuffer.GBufferASampler);
 
 			// GBufferB M+S+R+(ShadingModelID+SelectiveOutputMask) for unreal
 			// GBufferB M+S+R+(OpacityMask) for me
 			GBuffer.GBufferBFormat = VK_FORMAT_R8G8B8A8_UNORM;
-			CreateImage(GBuffer.GBufferBImage, GBuffer.GBufferBMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.GBufferBFormat,
+			RHICreateImage(GBuffer.GBufferBImage, GBuffer.GBufferBMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.GBufferBFormat,
 				VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-			CreateImageView(GBuffer.GBufferBImageView, GBuffer.GBufferBImage, GBuffer.GBufferBFormat, VK_IMAGE_ASPECT_COLOR_BIT);
-			CreateSampler(GBuffer.GBufferBSampler);
+			RHICreateImageView(GBuffer.GBufferBImageView, GBuffer.GBufferBImage, GBuffer.GBufferBFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+			RHICreateSampler(GBuffer.GBufferBSampler);
 
 			// GBufferC BaseColor + AO
 			GBuffer.GBufferCFormat = VK_FORMAT_R8G8B8A8_UNORM;
-			CreateImage(GBuffer.GBufferCImage, GBuffer.GBufferCMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.GBufferCFormat,
+			RHICreateImage(GBuffer.GBufferCImage, GBuffer.GBufferCMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.GBufferCFormat,
 				VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-			CreateImageView(GBuffer.GBufferCImageView, GBuffer.GBufferCImage, GBuffer.GBufferCFormat, VK_IMAGE_ASPECT_COLOR_BIT);
-			CreateSampler(GBuffer.GBufferCSampler);
+			RHICreateImageView(GBuffer.GBufferCImageView, GBuffer.GBufferCImage, GBuffer.GBufferCFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+			RHICreateSampler(GBuffer.GBufferCSampler);
 
 			// GBufferD Position + ID
 			GBuffer.GBufferDFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
-			CreateImage(GBuffer.GBufferDImage, GBuffer.GBufferDMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.GBufferDFormat,
+			RHICreateImage(GBuffer.GBufferDImage, GBuffer.GBufferDMemory, SwapChainExtent.width, SwapChainExtent.height, GBuffer.GBufferDFormat,
 				VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-			CreateImageView(GBuffer.GBufferDImageView, GBuffer.GBufferDImage, GBuffer.GBufferDFormat, VK_IMAGE_ASPECT_COLOR_BIT);
-			CreateSampler(GBuffer.GBufferDSampler);
+			RHICreateImageView(GBuffer.GBufferDImageView, GBuffer.GBufferDImage, GBuffer.GBufferDFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+			RHICreateSampler(GBuffer.GBufferDSampler);
 
 			VkAttachmentDescription DepthAttachment{};
 			DepthAttachment.format = FindDepthFormat();
@@ -2915,18 +2953,18 @@ protected:
 				throw std::runtime_error("[CreateBaseDeferredPass] Failed to Create framebuffer!");
 			}
 
-			CreateDescriptorSetLayout(BasePass.DeferredSceneDescriptorSetLayout, EXkRenderFlags::DeferredScene);
+			RHICreateDescriptorSetLayout(BasePass.DeferredSceneDescriptorSetLayout, EXkRenderFlags::DeferredScene);
 			BasePass.DeferredScenePipelines.resize(GlobalConstants.SpecConstantsCount);
 			BasePass.DeferredScenePipelinesInstanced.resize(GlobalConstants.SpecConstantsCount);
-			CreatePipelineLayout(BasePass.DeferredScenePipelineLayout, BasePass.DeferredSceneDescriptorSetLayout);
-			CreateGraphicsPipelines(
+			RHICreatePipelineLayout(BasePass.DeferredScenePipelineLayout, BasePass.DeferredSceneDescriptorSetLayout);
+			RHICreateGraphicsPipelines(
 				BasePass.DeferredScenePipelines,
 				BasePass.DeferredScenePipelineLayout,
 				BasePass.DeferredSceneRenderPass,
 				"Shaders/Base_VS.spv",
 				"Shaders/BaseScene_FS.spv",
 				EXkRenderFlags::VertexIndexed | EXkRenderFlags::DeferredScene);
-			CreateGraphicsPipelines(
+			RHICreateGraphicsPipelines(
 				BasePass.DeferredScenePipelinesInstanced,
 				BasePass.DeferredScenePipelineLayout,
 				BasePass.DeferredSceneRenderPass,
@@ -2935,10 +2973,10 @@ protected:
 				EXkRenderFlags::Instanced | EXkRenderFlags::DeferredScene);
 
 			/** Create DescriptorSetLayout for Lighting*/
-			CreateDescriptorSetLayout(BasePass.DeferredLightingDescriptorSetLayout, EXkRenderFlags::DeferredLighting);
+			RHICreateDescriptorSetLayout(BasePass.DeferredLightingDescriptorSetLayout, EXkRenderFlags::DeferredLighting);
 
 			/** Create DescriptorPool and DescriptorSets for Lighting*/
-			CreateDescriptorSet(
+			RHICreateDescriptorSet(
 				BasePass.DeferredLightingDescriptorSets,
 				BasePass.DeferredLightingDescriptorPool,
 				BasePass.DeferredLightingDescriptorSetLayout,
@@ -2946,9 +2984,9 @@ protected:
 				GBuffer.Samplers(),
 				EXkRenderFlags::DeferredLighting);
 
-			CreatePipelineLayout(BasePass.DeferredLightingPipelineLayout, BasePass.DeferredLightingDescriptorSetLayout);
+			RHICreatePipelineLayout(BasePass.DeferredLightingPipelineLayout, BasePass.DeferredLightingDescriptorSetLayout);
 			BasePass.DeferredLightingPipelines.resize(GlobalConstants.SpecConstantsCount);
-			CreateGraphicsPipelines(
+			RHICreateGraphicsPipelines(
 				BasePass.DeferredLightingPipelines,
 				BasePass.DeferredLightingPipelineLayout,
 				MainRenderPass,
@@ -3374,7 +3412,7 @@ protected:
 		mainScissor.offset = { 0, 0 };
 		mainScissor.extent = SwapChainExtent;
 
-#if ENABLE_DEFEERED_SHADING
+#if ENABLE_DEFERRED_SHADING
 		// 【延迟渲染】渲染场景
 		{
 			VkRenderPassBeginInfo renderPassInfo{};
@@ -3492,7 +3530,7 @@ protected:
 			// 【主场景】设置视口剪切
 			vkCmdSetScissor(commandBuffer, 0, 1, &mainScissor);
 
-#if ENABLE_DEFEERED_SHADING
+#if ENABLE_DEFERRED_SHADING
 			// 【主场景】设置延迟渲染视口
 			vkCmdSetViewport(commandBuffer, 0, 1, &mainWindow);
 
@@ -3915,7 +3953,7 @@ protected:
 			vkDestroyBuffer(Device, RenderIndirectInstancedObject.IndirectCommandsBuffer, nullptr);
 			vkFreeMemory(Device, RenderIndirectInstancedObject.IndirectCommandsBufferMemory, nullptr);
 		}
-#if ENABLE_DEFEERED_SHADING
+#if ENABLE_DEFERRED_SHADING
 		for (size_t i = 0; i < Scene.RenderDeferredObjects.size(); i++)
 		{
 			FRenderDeferredObject& renderObject = Scene.RenderDeferredObjects[i];
@@ -3949,17 +3987,17 @@ protected:
 
 #if ENABLE_INDIRECT_DRAW
 		// Clean up BasePass
-		vkDestroyDescriptorSetLayout(Device, BasePass.DescriptorSetLayout, nullptr);
-		vkDestroyPipelineLayout(Device, BasePass.PipelineLayout, nullptr);
-		for (size_t i = 0; i < BasePass.Pipelines.size(); i++)
+		vkDestroyDescriptorSetLayout(Device, BasePass.IndirectDescriptorSetLayout, nullptr);
+		vkDestroyPipelineLayout(Device, BasePass.IndirectPipelineLayout, nullptr);
+		for (size_t i = 0; i < BasePass.IndirectPipelines.size(); i++)
 		{
-			assert(BasePass.Pipelines.size() == BasePass.PipelinesInstanced.size());
-			vkDestroyPipeline(Device, BasePass.Pipelines[i], nullptr);
-			vkDestroyPipeline(Device, BasePass.PipelinesInstanced[i], nullptr);
+			assert(BasePass.IndirectPipelines.size() == BasePass.IndirectPipelinesInstanced.size());
+			vkDestroyPipeline(Device, BasePass.IndirectPipelines[i], nullptr);
+			vkDestroyPipeline(Device, BasePass.IndirectPipelinesInstanced[i], nullptr);
 		}
 #endif
 
-#if ENABLE_DEFEERED_SHADING
+#if ENABLE_DEFERRED_SHADING
 		// Clean up BasePass
 		vkDestroyDescriptorSetLayout(Device, BasePass.DeferredLightingDescriptorSetLayout, nullptr);
 		vkDestroyDescriptorPool(Device, BasePass.DeferredLightingDescriptorPool, nullptr);
@@ -4024,7 +4062,7 @@ public:
 	void CreateEngineWorld()
 	{
 		GlobalInput.MainCamera = &World.MainCamera;
-#if ENABLE_GENERATE_WORLD
+#if ENABLE_GENERATE_WORLD && !ENABLE_INDIRECT_DRAW_TEST
 		World.EnableSkydome = true;
 		World.OverrideSkydome = true;
 		World.SkydomeFileName = "grassland_night.png";
@@ -4130,7 +4168,7 @@ public:
 		if (World.OverrideCubemap)
 		{
 			CleanupCubeMaps();
-			CreateTextureCubeResource(CubemapImage, CubemapImageMemory, CubemapImageView, CubemapSampler, CubemapMaxMips, {
+			RHICreateTextureCubeResource(CubemapImage, CubemapImageMemory, CubemapImageView, CubemapSampler, CubemapMaxMips, {
 			ASSETS(World.CubemapFileNames[0]),
 			ASSETS(World.CubemapFileNames[1]),
 			ASSETS(World.CubemapFileNames[2]),
@@ -4142,26 +4180,26 @@ public:
 		if (World.OverrideSkydome)
 		{
 			CleanupSkydomeResource();
-			CreateTextureResource(
+			RHICreateTextureResource(
 				SkydomePass.Images[0],
 				SkydomePass.ImageMemorys[0],
 				SkydomePass.ImageViews[0],
 				SkydomePass.ImageSamplers[0],
 				ASSETS(World.SkydomeFileName));
-			UpdateDescriptorSet(SkydomePass.DescriptorSets, SkydomePass.ImageViews, SkydomePass.ImageSamplers, EXkRenderFlags::Skydome);
+			RHIUpdateDescriptorSet(SkydomePass.DescriptorSets, SkydomePass.ImageViews, SkydomePass.ImageSamplers, EXkRenderFlags::Skydome);
 		}
 
 		BackgroundPass.EnableBackground = World.EnableBackground;
 		if (World.OverrideBackground)
 		{
 			CleanupBackgroundResource();
-			CreateTextureResource(
+			RHICreateTextureResource(
 				BackgroundPass.Images[0],
 				BackgroundPass.ImageMemorys[0],
 				BackgroundPass.ImageViews[0],
 				BackgroundPass.ImageSamplers[0],
 				ASSETS(World.BackgroundFileName));
-			UpdateDescriptorSet(BackgroundPass.DescriptorSets, BackgroundPass.ImageViews, BackgroundPass.ImageSamplers, EXkRenderFlags::Background);
+			RHIUpdateDescriptorSet(BackgroundPass.DescriptorSets, BackgroundPass.ImageViews, BackgroundPass.ImageSamplers, EXkRenderFlags::Background);
 		}
 
 		if (World.bReloadScene)
@@ -4172,61 +4210,61 @@ public:
 #if ENABLE_INDIRECT_DRAW
 		Scene.IndirectDescriptorSetLayout = &BasePass.IndirectDescriptorSetLayout;
 #endif
-#if ENABLE_DEFEERED_SHADING
+#if ENABLE_DEFERRED_SHADING
 		Scene.DeferredSceneDescriptorSetLayout = &BasePass.DeferredSceneDescriptorSetLayout;
 		Scene.DeferredLightingDescriptorSetLayout = &BasePass.DeferredLightingDescriptorSetLayout;
 #endif
+
+#if ENABLE_INDIRECT_DRAW_TEST
 		/* (2) Create base scene */
-		if (ENABLE_INDIRECT_DRAW)
+		XkRenderObjectIndirect object;
+		object.Mesh.FilePath = "Content/Models/dragon.meshlet";
+		object.Material.FilePaths = {
+			"Content/Textures/default_grey.png",	// BaseColor
+			"Content/Textures/default_black.png",	// Metallic
+			"Content/Textures/default_white.png",	// Roughness
+			"Content/Textures/default_normal.png",	// Normal
+			"Content/Textures/default_white.png",	// AmbientOcclution
+			"Content/Textures/default_black.png",	// Emissive
+			"Content/Textures/default_white.png" };	// Mask
+		CreateRenderObject<XkRenderObjectIndirect>(object, *Scene.DescriptorSetLayout);
+		CreateTransformBuffer(object);
+
+		object.IndirectCommands.clear();
+
+		for (uint32_t i = 0; i < object.Mesh.MeshletSet.Meshlets.size(); ++i)
 		{
-			XkRenderObjectIndirect object;
-			XkString object_obj = "Content/Models/dragon.meshlet";
-			std::vector<XkString> object_imgs = {
-				"Content/Textures/default_grey.png",	// BaseColor
-				"Content/Textures/default_black.png",	// Metallic
-				"Content/Textures/default_white.png",	// Roughness
-				"Content/Textures/default_normal.png",	// Normal
-				"Content/Textures/default_white.png",	// AmbientOcclution
-				"Content/Textures/default_black.png",	// Emissive
-				"Content/Textures/default_white.png" };	// Mask
-
-			CreateRenderIndirectObject<XkRenderObjectIndirect>(object, object_obj, object_imgs);
-
-			object.IndirectCommands.clear();
-
-			for (uint32_t i = 0; i < object.Mesh.MeshletSet.Meshlets.size(); ++i)
-			{
-				const XkMeshlet meshletSet = object.Mesh.MeshletSet.Meshlets[i];
-				// Member of XkMeshlet:
-				//uint32_t VertexOffset;
-				//uint32_t VertexCount;
-				//uint32_t TriangleOffset;
-				//uint32_t TriangleCount;
-				//float BoundsCenter[3];
-				//float BoundsRadius;
-				//float ConeApex[3];
-				//float ConeAxis[3];
-				//float ConeCutoff, Pad;
-				VkDrawIndexedIndirectCommand indirectCmd{};
-				// @Note: indexCount = TriangleCount * 3, this is easy to get confused
-				indirectCmd.indexCount = (uint32_t)(meshletSet.TriangleCount * 3); /*indexCount*/
-				indirectCmd.instanceCount = 1; /*instanceCount*/
-				indirectCmd.firstIndex = meshletSet.TriangleOffset; /*firstIndex*/
-				indirectCmd.vertexOffset = meshletSet.VertexOffset; /*vertexOffset*/
-				indirectCmd.firstInstance = 0; /*firstInstance*/
-				object.IndirectCommands.push_back(indirectCmd);
-			}
-			//VkDrawIndexedIndirectCommand indirectCmd{};
-			//indirectCmd.indexCount = (uint32_t)object.Mesh.Indices.size(); /*indexCount*/
-			//indirectCmd.instanceCount = 1; /*instanceCount*/
-			//indirectCmd.firstIndex = 0; /*firstIndex*/
-			//indirectCmd.vertexOffset = 0; /*vertexOffset*/
-			//indirectCmd.firstInstance = 0; /*firstInstance*/
-			//object.IndirectCommands.push_back(indirectCmd);
-
-			CreateRenderIndirectBuffer<XkRenderObjectIndirect>(object);
-			Scene.RenderIndirectObjects.push_back(object);
+			const XkMeshlet meshletSet = object.Mesh.MeshletSet.Meshlets[i];
+			// Member of XkMeshlet:
+			//uint32_t VertexOffset;
+			//uint32_t VertexCount;
+			//uint32_t TriangleOffset;
+			//uint32_t TriangleCount;
+			//float BoundsCenter[3];
+			//float BoundsRadius;
+			//float ConeApex[3];
+			//float ConeAxis[3];
+			//float ConeCutoff, Pad;
+			VkDrawIndexedIndirectCommand indirectCmd{};
+			// @Note: indexCount = TriangleCount * 3, this is easy to get confused
+			indirectCmd.indexCount = (uint32_t)(meshletSet.TriangleCount * 3); /*indexCount*/
+			indirectCmd.instanceCount = 1; /*instanceCount*/
+			indirectCmd.firstIndex = meshletSet.TriangleOffset; /*firstIndex*/
+			indirectCmd.vertexOffset = meshletSet.VertexOffset; /*vertexOffset*/
+			indirectCmd.firstInstance = 0; /*firstInstance*/
+			object.IndirectCommands.push_back(indirectCmd);
 		}
+		//VkDrawIndexedIndirectCommand indirectCmd{};
+		//indirectCmd.indexCount = (uint32_t)object.Mesh.Indices.size(); /*indexCount*/
+		//indirectCmd.instanceCount = 1; /*instanceCount*/
+		//indirectCmd.firstIndex = 0; /*firstIndex*/
+		//indirectCmd.vertexOffset = 0; /*vertexOffset*/
+		//indirectCmd.firstInstance = 0; /*firstInstance*/
+		//object.IndirectCommands.push_back(indirectCmd);
+
+		CreateIndirectCommandsBuffer<XkRenderObjectIndirect>(object);
+		Scene.RenderIndirectObjects.push_back(object);
+#endif
 
 		for (const XkObjectDesc& ObjectDesc : World.ObjectDescs)
 		{
@@ -4234,7 +4272,7 @@ public:
 			{
 				std::vector<XkInstanceData> Data;
 				XkObjectDesc::GenerateInstance(Data, ObjectDesc);
-#if ENABLE_DEFEERED_SHADING
+#if ENABLE_DEFERRED_SHADING
 				CreateRenderObjectsFromProfabs(
 					Scene.RenderDeferredInstancedObjects,
 					*Scene.DeferredSceneDescriptorSetLayout, ObjectDesc.ProfabName, Data);
@@ -4245,7 +4283,7 @@ public:
 					*Scene.DeferredSceneDescriptorSetLayout, ObjectDesc.ProfabName);
 			}
 
-			UpdateDescriptorSet(BasePass.DeferredLightingDescriptorSets, GBuffer.ImageViews(), GBuffer.Samplers(), EXkRenderFlags::DeferredLighting);
+			RHIUpdateDescriptorSet(BasePass.DeferredLightingDescriptorSets, GBuffer.ImageViews(), GBuffer.Samplers(), EXkRenderFlags::DeferredLighting);
 #else
 				CreateRenderObjectsFromProfabs(
 					Scene.RenderInstancedObjects,
@@ -4649,7 +4687,7 @@ public:
 		BasePass.RenderIndirectObjects.clear();
 		BasePass.RenderIndirectInstancedObjects.clear();
 #endif
-#if ENABLE_DEFEERED_SHADING
+#if ENABLE_DEFERRED_SHADING
 		BasePass.RenderDeferredObjects.clear();
 		BasePass.RenderDeferredInstancedObjects.clear();
 #endif
@@ -4679,7 +4717,7 @@ public:
 			ShadowmapPass.RenderIndirectInstancedObjects.push_back(RenderIndirectInstancedObject);
 		}
 #endif
-#if ENABLE_DEFEERED_SHADING
+#if ENABLE_DEFERRED_SHADING
 		for (size_t i = 0; i < Scene.RenderDeferredObjects.size(); i++)
 		{
 			FRenderDeferredObject* RenderDeferredObject = &Scene.RenderDeferredObjects[i];
@@ -4695,9 +4733,277 @@ public:
 #endif
 	}
 
+	/** Read vertices and indices from a file */
+	template<typename T>
+	void CreateMeshVertexBuffers(T& outMesh, const XkString& filename)
+	{
+		if constexpr (std::is_same<T, XkMeshIndirect>::value)
+		{
+			LoadMeshletAsset(filename, outMesh.Vertices, outMesh.Indices, outMesh.MeshletSet.Meshlets, outMesh.MeshletSet.MeshletVertices, outMesh.MeshletSet.MeshletTriangles);
+
+			std::vector<XkVertex> tmpVertices = outMesh.Vertices;
+			outMesh.Vertices.resize(outMesh.MeshletSet.MeshletVertices.size());
+			for (uint32_t i = 0; i < outMesh.MeshletSet.MeshletVertices.size(); i++)
+			{
+				outMesh.Vertices[i] = tmpVertices[outMesh.MeshletSet.MeshletVertices[i]];
+			}
+			outMesh.Indices.resize(outMesh.MeshletSet.MeshletTriangles.size());
+			uint32_t triangleCount = 0;
+			uint32_t triangleOffset = 0;
+			for (uint32_t i = 0; i < outMesh.MeshletSet.Meshlets.size(); i++)
+			{
+				XkMeshlet meshlet = outMesh.MeshletSet.Meshlets[i];
+				triangleCount += meshlet.TriangleCount;
+				triangleOffset += meshlet.TriangleOffset;
+			}
+			for (uint32_t i = 0; i < outMesh.MeshletSet.MeshletTriangles.size(); i++)
+			{
+				outMesh.Indices[i] = outMesh.MeshletSet.MeshletTriangles[i];
+			}
+		}
+		else if constexpr (std::is_same<T, XkMesh>::value)
+		{
+			LoadMeshAsset(filename, outMesh.Vertices, outMesh.Indices);
+		}
+		else
+		{
+			assert(true);
+		}
+		RHICreateVertexBuffer(
+			outMesh.VertexBuffer,
+			outMesh.VertexBufferMemory,
+			outMesh.Vertices);
+		RHICreateIndexBuffer(
+			outMesh.IndexBuffer,
+			outMesh.IndexBufferMemory,
+			outMesh.Indices);
+	}
+
+	template <typename T>
+	void CreateTransformBuffer(T& outObject)
+	{
+		VkDeviceSize BufferSize = sizeof(XkTransfrom);
+		outObject.TransfromUniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+		outObject.TransfromUniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
+
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+			RHICreateBuffer(BufferSize,
+				VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+				outObject.TransfromUniformBuffers[i],
+				outObject.TransfromUniformBuffersMemory[i]);
+		}
+
+		glm::mat4 LocalToWorld = outObject.Transfrom.GetMatrix();
+
+		void* data_ubo;
+		vkMapMemory(Device, outObject.TransfromUniformBuffersMemory[CurrentFrame], 0, sizeof(LocalToWorld), 0, &data_ubo);
+		memcpy(data_ubo, &LocalToWorld, sizeof(LocalToWorld));
+		vkUnmapMemory(Device, outObject.TransfromUniformBuffersMemory[CurrentFrame]);
+	};
+
+	template <typename T>
+	void CreateInstancedBuffer(T& outObject, const std::vector<XkInstanceData>& inInstanceData)
+	{
+		outObject.InstanceCount = static_cast<uint32_t>(inInstanceData.size());
+		VkDeviceSize bufferSize = inInstanceData.size() * sizeof(XkInstanceData);
+		VkBuffer stagingBuffer;
+		VkDeviceMemory stagingBufferMemory;
+		RHICreateBuffer(
+			bufferSize,
+			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			stagingBuffer,
+			stagingBufferMemory);
+
+		void* data;
+		vkMapMemory(Device, stagingBufferMemory, 0, bufferSize, 0, &data);
+		memcpy(data, inInstanceData.data(), (size_t)bufferSize);
+		vkUnmapMemory(Device, stagingBufferMemory);
+
+		RHICreateBuffer(
+			bufferSize,
+			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+			outObject.Mesh.InstancedBuffer,
+			outObject.Mesh.InstancedBufferMemory);
+		RHICopyBuffer(stagingBuffer, outObject.Mesh.InstancedBuffer, bufferSize);
+
+		vkDestroyBuffer(Device, stagingBuffer, nullptr);
+		vkFreeMemory(Device, stagingBufferMemory, nullptr);
+	};
+
+	template <typename T>
+	void CreateIndirectCommandsBuffer(T& outObject)
+	{
+		VkDeviceSize bufferSize = outObject.IndirectCommands.size() * sizeof(VkDrawIndexedIndirectCommand);
+		VkBuffer stagingBuffer;
+		VkDeviceMemory stagingBufferMemory;
+		RHICreateBuffer(
+			bufferSize,
+			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			stagingBuffer,
+			stagingBufferMemory);
+
+		void* data;
+		vkMapMemory(Device, stagingBufferMemory, 0, bufferSize, 0, &data);
+		memcpy(data, outObject.IndirectCommands.data(), (size_t)bufferSize);
+		vkUnmapMemory(Device, stagingBufferMemory);
+
+		RHICreateBuffer(
+			bufferSize,
+			VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+			outObject.IndirectCommandsBuffer,
+			outObject.IndirectCommandsBufferMemory);
+		RHICopyBuffer(stagingBuffer, outObject.IndirectCommandsBuffer, bufferSize);
+
+		vkDestroyBuffer(Device, stagingBuffer, nullptr);
+		vkFreeMemory(Device, stagingBufferMemory, nullptr);
+	};
+
+	template <typename T>
+	void CreateRenderObject(T& outObject, const VkDescriptorSetLayout& inDescriptorSetLayout)
+	{
+		CreateMeshVertexBuffers(outObject.Mesh, outObject.Mesh.FilePath);
+
+		std::vector<XkString> PngFiles = outObject.Material.FilePaths;
+		outObject.Material.TextureImages.resize(PngFiles.size());
+		outObject.Material.TextureImageMemorys.resize(PngFiles.size());
+		outObject.Material.TextureImageViews.resize(PngFiles.size());
+		outObject.Material.TextureImageSamplers.resize(PngFiles.size());
+		for (size_t i = 0; i < PngFiles.size(); i++)
+		{
+			bool sRGB = (i == 0);
+			RHICreateTextureResource(
+				outObject.Material.TextureImages[i],
+				outObject.Material.TextureImageMemorys[i],
+				outObject.Material.TextureImageViews[i],
+				outObject.Material.TextureImageSamplers[i],
+				PngFiles[i], sRGB);
+		}
+
+		RHICreateDescriptorSet(
+			outObject.Material.DescriptorSets,
+			outObject.Material.DescriptorPool,
+			inDescriptorSetLayout,
+			outObject.Material.TextureImageViews,
+			outObject.Material.TextureImageSamplers);
+	};
+
+	template <typename T>
+	void DestroyRenderObject(T& outObject)
+	{
+		vkDestroyDescriptorPool(Device, outObject.Material.DescriptorPool, nullptr);
+
+		for (size_t j = 0; j < outObject.Material.TextureImages.size(); j++)
+		{
+			vkDestroyImageView(Device, outObject.Material.TextureImageViews[j], nullptr);
+			vkDestroySampler(Device, outObject.Material.TextureImageSamplers[j], nullptr);
+			vkDestroyImage(Device, outObject.Material.TextureImages[j], nullptr);
+			vkFreeMemory(Device, outObject.Material.TextureImageMemorys[j], nullptr);
+		}
+
+		vkDestroyBuffer(Device, outObject.Mesh.VertexBuffer, nullptr);
+		vkFreeMemory(Device, outObject.Mesh.VertexBufferMemory, nullptr);
+		vkDestroyBuffer(Device, outObject.Mesh.IndexBuffer, nullptr);
+		vkFreeMemory(Device, outObject.Mesh.IndexBufferMemory, nullptr);
+
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+		{
+			vkDestroyBuffer(Device, outObject.TransfromUniformBuffers[i], nullptr);
+			vkFreeMemory(Device, outObject.TransfromUniformBuffersMemory[i], nullptr);
+		}
+	};
+
+	template <typename T>
+	void CreateRenderObjectsFromProfabs(std::vector<T>& outRenderObjects, const VkDescriptorSetLayout& inLayout, const XkString& inAssetName, const std::vector<XkInstanceData>& inInstanceData = {})
+	{
+		XkString asset_set_dir = "Profabs";
+		for (const auto& folder : std::filesystem::directory_iterator(asset_set_dir))
+		{
+			XkString asset_name = folder.path().filename().generic_string();
+			XkString asset_set = folder.path().generic_string();
+			if (inAssetName != asset_name)
+			{
+				continue;
+			}
+			XkString models_dir = asset_set + XkString("/models/");
+			XkString textures_dir = asset_set + XkString("/textures/");
+			if (!std::filesystem::is_directory(models_dir) ||
+				!std::filesystem::is_directory(textures_dir))
+			{
+				continue;
+			}
+			for (const auto& Model : std::filesystem::directory_iterator(models_dir))
+			{
+				XkString model_file = Model.path().generic_string();
+				XkString model_file_name = model_file.substr(model_file.find_last_of("/\\") + 1);
+				XkString::size_type const p(model_file_name.find_last_of('.'));
+				XkString model_name = model_file_name.substr(0, p);
+				XkString model_suffix = model_file_name.substr(p + 1);
+				if (model_suffix != "obj") {
+					continue;
+				}
+				XkString texture_bc = textures_dir + model_name + XkString("_bc.png");
+				if (!std::filesystem::exists(texture_bc)) {
+					texture_bc = XkString("Content/Textures/default_grey.png");
+				}
+				XkString texture_m = textures_dir + model_name + XkString("_m.png");
+				if (!std::filesystem::exists(texture_m)) {
+					texture_m = XkString("Content/Textures/default_black.png");
+				}
+				XkString texture_r = textures_dir + model_name + XkString("_r.png");
+				if (!std::filesystem::exists(texture_r)) {
+					texture_r = XkString("Content/Textures/default_white.png");
+				}
+				XkString texture_n = textures_dir + model_name + XkString("_n.png");
+				if (!std::filesystem::exists(texture_n)) {
+					texture_n = XkString("Content/Textures/default_normal.png");
+				}
+				XkString texture_ao = textures_dir + model_name + XkString("_ao.png");
+				if (!std::filesystem::exists(texture_ao)) {
+					texture_ao = XkString("Content/Textures/default_white.png");
+				}
+				XkString texture_ev = textures_dir + model_name + XkString("_ev.png");
+				if (!std::filesystem::exists(texture_ev)) {
+					texture_ev = XkString("Content/Textures/default_black.png");
+				}
+				XkString texture_ms = textures_dir + model_name + XkString("_ms.png");
+				if (!std::filesystem::exists(texture_ms)) {
+					texture_ms = XkString("Content/Textures/default_white.png");
+				}
+
+				T asset;
+				asset.Mesh.FilePath = model_file;
+				asset.Material.FilePaths = {
+					texture_bc,
+					texture_m,
+					texture_r,
+					texture_n,
+					texture_ao,
+					texture_ev,
+					texture_ms };
+				CreateRenderObject<T>(asset, inLayout);
+				CreateTransformBuffer(asset);
+				if (inInstanceData.size() > 0)
+				{
+					CreateInstancedBuffer<T>(asset, inInstanceData);
+				}
+				outRenderObjects.push_back(asset);
+			}
+		}
+	}
+
+protected:
+	////////////////////////////////////////////////////////////////////////////
+	// Rendering Hardware Interface
+	////////////////////////////////////////////////////////////////////////////
+
 	/** Create graphics pipeline */
-	void CreatePipelineLayout(
-		VkPipelineLayout& outPipelineLayout, 
+	void RHICreatePipelineLayout(
+		VkPipelineLayout& outPipelineLayout,
 		const VkDescriptorSetLayout& inDescriptorSetLayout,
 		const EXkRenderFlags rFlags = EXkRenderFlags::None)
 	{
@@ -4719,12 +5025,12 @@ public:
 		// PipelineLayout可以用来创建和绑定VertexBuffer和UniformBuffer，这样可以往着色器中传递参数
 		if (vkCreatePipelineLayout(Device, &pipelineLayoutInfo, nullptr, &outPipelineLayout) != VK_SUCCESS)
 		{
-			throw std::runtime_error("[CreatePipelineLayout] Failed to Create pipeline layout!");
+			throw std::runtime_error("[RHICreatePipelineLayout] Failed to Create pipeline layout!");
 		}
 	}
 
 	/** Create graphics pipeline */
-	void CreateGraphicsPipelines(
+	void RHICreateGraphicsPipelines(
 		std::vector<VkPipeline>& outPipelines,
 		const VkPipelineLayout& inPipelineLayout,
 		const VkRenderPass& inRenderPass,
@@ -4735,8 +5041,8 @@ public:
 		/* create shaders */
 		auto vertShaderCode = LoadShaderSource(inVertFilename);
 		auto fragShaderCode = LoadShaderSource(inFragFilename);
-		VkShaderModule vertShaderModule = CreateShaderModule(vertShaderCode);
-		VkShaderModule fragShaderModule = CreateShaderModule(fragShaderCode);
+		VkShaderModule vertShaderModule = RHICreateShaderModule(vertShaderCode);
+		VkShaderModule fragShaderModule = RHICreateShaderModule(fragShaderCode);
 		VkPipelineShaderStageCreateInfo vertShaderStageCI{};
 		vertShaderStageCI.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
 		vertShaderStageCI.stage = VK_SHADER_STAGE_VERTEX_BIT;
@@ -4930,7 +5236,7 @@ public:
 
 			if (vkCreateGraphicsPipelines(Device, VK_NULL_HANDLE, 1, &pipelineCI, nullptr, &outPipelines[i]) != VK_SUCCESS)
 			{
-				throw std::runtime_error("[CreateGraphicsPipelines] Failed to Create graphics pipeline!");
+				throw std::runtime_error("[RHICreateGraphicsPipelines] Failed to Create graphics pipeline!");
 			}
 		}
 
@@ -4939,7 +5245,7 @@ public:
 	}
 
 	/** Generic function for creating DescriptorSetLayout */
-	void CreateDescriptorSetLayout(VkDescriptorSetLayout& outDescriptorSetLayout, const EXkRenderFlags rFlags = EXkRenderFlags::None)
+	void RHICreateDescriptorSetLayout(VkDescriptorSetLayout& outDescriptorSetLayout, const EXkRenderFlags rFlags = EXkRenderFlags::None)
 	{
 		std::vector<VkDescriptorSetLayoutBinding> layoutBindings;
 		VkDescriptorSetLayoutCreateInfo layoutInfo{};
@@ -5118,12 +5424,12 @@ public:
 		layoutInfo.bindingCount = static_cast<uint32_t>(layoutBindings.size());
 		layoutInfo.pBindings = layoutBindings.data();
 		if (vkCreateDescriptorSetLayout(Device, &layoutInfo, nullptr, &outDescriptorSetLayout) != VK_SUCCESS) {
-			throw std::runtime_error("[CreateDescriptorSetLayout] Failed to Create descriptor set layout!");
+			throw std::runtime_error("[RHICreateDescriptorSetLayout] Failed to Create descriptor set layout!");
 		}
 	}
 
 	/** Generic function for creating DescriptorSets */
-	void CreateDescriptorSet(std::vector<VkDescriptorSet>& outDescriptorSets, VkDescriptorPool& outDescriptorPool,
+	void RHICreateDescriptorSet(std::vector<VkDescriptorSet>& outDescriptorSets, VkDescriptorPool& outDescriptorPool,
 		const VkDescriptorSetLayout& inDescriptorSetLayout, const std::vector<VkImageView>& inImageViews, const std::vector<VkSampler>& inSamplers,
 		const EXkRenderFlags rFlags = EXkRenderFlags::None)
 	{
@@ -5215,7 +5521,7 @@ public:
 		poolCI.pPoolSizes = poolSizes.data();
 		poolCI.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
 		if (vkCreateDescriptorPool(Device, &poolCI, nullptr, &outDescriptorPool) != VK_SUCCESS) {
-			throw std::runtime_error("[CreateDescriptorSet] Failed to Create descriptor pool!");
+			throw std::runtime_error("[RHICreateDescriptorSet] Failed to Create descriptor pool!");
 		}
 
 		/* create DescriptorSet */
@@ -5227,14 +5533,14 @@ public:
 		allocInfo.pSetLayouts = layouts.data();
 		outDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
 		if (vkAllocateDescriptorSets(Device, &allocInfo, outDescriptorSets.data()) != VK_SUCCESS) {
-			throw std::runtime_error("[CreateDescriptorSet] Failed to allocate descriptor sets!");
+			throw std::runtime_error("[RHICreateDescriptorSet] Failed to allocate descriptor sets!");
 		}
 
 		/* update DescriptorSet */
-		UpdateDescriptorSet(outDescriptorSets, inImageViews, inSamplers, rFlags);
+		RHIUpdateDescriptorSet(outDescriptorSets, inImageViews, inSamplers, rFlags);
 	}
 
-	void UpdateDescriptorSet(
+	void RHIUpdateDescriptorSet(
 		std::vector<VkDescriptorSet>& outDescriptorSets,
 		const std::vector<VkImageView>& inImageViews,
 		const std::vector<VkSampler>& inSamplers,
@@ -5516,7 +5822,7 @@ public:
 	}
 
 	/** Read a path to a texture and create image, image view, and sampler resources */
-	void CreateTextureResource(
+	void RHICreateTextureResource(
 		VkImage& outImage,
 		VkDeviceMemory& outMemory,
 		VkImageView& outImageView,
@@ -5532,7 +5838,7 @@ public:
 
 		VkBuffer stagingBuffer;
 		VkDeviceMemory stagingBufferMemory;
-		CreateBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+		RHICreateBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
 
 		void* data;
 		vkMapMemory(Device, stagingBufferMemory, 0, imageSize, 0, &data);
@@ -5541,7 +5847,7 @@ public:
 
 		VkFormat format = sRGB ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
 		// VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT 告诉Vulkan这张贴图即要被读也要被写
-		CreateImage(
+		RHICreateImage(
 			outImage,
 			outMemory,
 			texWidth, texHeight, format,
@@ -5549,17 +5855,17 @@ public:
 			VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mipLevels);
 
-		TransitionImageLayout(outImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mipLevels);
-		CopyBufferToImage(stagingBuffer, outImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
-		//TransitionImageLayout(outImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+		RHITransitionImageLayout(outImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mipLevels);
+		RHICopyBufferToImage(stagingBuffer, outImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
+		//RHITransitionImageLayout(outImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
 		vkDestroyBuffer(Device, stagingBuffer, nullptr);
 		vkFreeMemory(Device, stagingBufferMemory, nullptr);
 
-		GenerateMipmaps(outImage, format, texWidth, texHeight, mipLevels);
+		RHIGenerateMipmaps(outImage, format, texWidth, texHeight, mipLevels);
 
-		CreateImageView(outImageView, outImage, format, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels);
-		CreateSampler(outSampler,
+		RHICreateImageView(outImageView, outImage, format, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels);
+		RHICreateSampler(outSampler,
 			VK_FILTER_LINEAR,
 			VK_SAMPLER_ADDRESS_MODE_REPEAT,
 			VK_SAMPLER_ADDRESS_MODE_REPEAT,
@@ -5569,7 +5875,7 @@ public:
 	}
 
 	/** Read a path to an HDR texture and create a CUBEMAP image resource */
-	void CreateTextureCubeResource(
+	void RHICreateTextureCubeResource(
 		VkImage& outImage,
 		VkDeviceMemory& outMemory,
 		VkImageView& outImageView,
@@ -5588,7 +5894,7 @@ public:
 
 		VkBuffer stagingBuffer;
 		VkDeviceMemory stagingBufferMemory;
-		CreateBuffer(imageSize * 6, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+		RHICreateBuffer(imageSize * 6, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
 
 		for (int i = 0; i < 6; ++i) {
 			void* writeLocation;
@@ -5597,7 +5903,7 @@ public:
 			vkUnmapMemory(Device, stagingBufferMemory);
 		}
 
-		// CreateImage
+		// RHICreateImage
 		{
 			VkImageCreateInfo imageInfo{};
 			imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -5616,7 +5922,7 @@ public:
 			imageInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
 
 			if (vkCreateImage(Device, &imageInfo, nullptr, &outImage) != VK_SUCCESS) {
-				throw std::runtime_error("[CreateTextureCubeResource] Failed to Create image!");
+				throw std::runtime_error("[RHICreateTextureCubeResource] Failed to Create image!");
 			}
 
 			VkMemoryRequirements memRequirements;
@@ -5628,14 +5934,14 @@ public:
 			allocInfo.memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
 			if (vkAllocateMemory(Device, &allocInfo, nullptr, &outMemory) != VK_SUCCESS) {
-				throw std::runtime_error("[CreateTextureCubeResource] Failed to allocate image memory!");
+				throw std::runtime_error("[RHICreateTextureCubeResource] Failed to allocate image memory!");
 			}
 
 			vkBindImageMemory(Device, outImage, outMemory, 0);
 		}
-		// TransitionImageLayout
+		// RHITransitionImageLayout
 		{
-			VkCommandBuffer CommandBuffer = BeginSingleTimeCommands();
+			VkCommandBuffer CommandBuffer = RHIBeginSingleTimeCommands();
 
 			VkImageMemoryBarrier barrier{};
 			barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -5664,11 +5970,11 @@ public:
 				0, nullptr,
 				1, &barrier
 			);
-			EndSingleTimeCommands(CommandBuffer);
+			RHIEndSingleTimeCommands(CommandBuffer);
 		}
-		// CopyBufferToImage
+		// RHICopyBufferToImage
 		{
-			VkCommandBuffer CommandBuffer = BeginSingleTimeCommands();
+			VkCommandBuffer CommandBuffer = RHIBeginSingleTimeCommands();
 
 			VkBufferImageCopy region{};
 			region.bufferOffset = 0;
@@ -5687,9 +5993,9 @@ public:
 				1
 			};
 			vkCmdCopyBufferToImage(CommandBuffer, stagingBuffer, outImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-			EndSingleTimeCommands(CommandBuffer);
+			RHIEndSingleTimeCommands(CommandBuffer);
 		}
-		// GenerateMipmaps
+		// RHIGenerateMipmaps
 		{
 			VkFormatProperties formatProperties;
 			vkGetPhysicalDeviceFormatProperties(PhysicalDevice, VK_FORMAT_R8G8B8A8_SRGB, &formatProperties);
@@ -5698,7 +6004,7 @@ public:
 				throw std::runtime_error("texture image format does not support linear blitting!");
 			}
 
-			VkCommandBuffer CommandBuffer = BeginSingleTimeCommands();
+			VkCommandBuffer CommandBuffer = RHIBeginSingleTimeCommands();
 
 			VkImageMemoryBarrier barrier{};
 			barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -5782,12 +6088,12 @@ public:
 				0, nullptr,
 				1, &barrier);
 
-			EndSingleTimeCommands(CommandBuffer);
+			RHIEndSingleTimeCommands(CommandBuffer);
 		}
 		vkDestroyBuffer(Device, stagingBuffer, nullptr);
 		vkFreeMemory(Device, stagingBufferMemory, nullptr);
 
-		// CreateImageView
+		// RHICreateImageView
 		{
 			VkImageViewCreateInfo viewInfo{};
 			viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -5800,10 +6106,10 @@ public:
 			viewInfo.subresourceRange.baseArrayLayer = 0;
 			viewInfo.subresourceRange.layerCount = 6;
 			if (vkCreateImageView(Device, &viewInfo, nullptr, &outImageView) != VK_SUCCESS) {
-				throw std::runtime_error("[CreateTextureCubeResource] Failed to Create texture image View!");
+				throw std::runtime_error("[RHICreateTextureCubeResource] Failed to Create texture image View!");
 			}
 		}
-		CreateSampler(outSampler,
+		RHICreateSampler(outSampler,
 			VK_FILTER_LINEAR,
 			VK_SAMPLER_ADDRESS_MODE_REPEAT,
 			VK_SAMPLER_ADDRESS_MODE_REPEAT,
@@ -5813,284 +6119,418 @@ public:
 		outMaxMipLevels = mipLevels;
 	}
 
-	template <typename T>
-	void CreateRenderObject(T& outObject, const XkString& objfile, const std::vector<XkString>& pngFiles, const VkDescriptorSetLayout& inDescriptorSetLayout)
+	VkCommandBuffer RHIBeginSingleTimeCommands()
 	{
-		CreateMesh(outObject.Mesh.Vertices, outObject.Mesh.Indices, objfile);
-		outObject.Material.TextureImages.resize(pngFiles.size());
-		outObject.Material.TextureImageMemorys.resize(pngFiles.size());
-		outObject.Material.TextureImageViews.resize(pngFiles.size());
-		outObject.Material.TextureImageSamplers.resize(pngFiles.size());
-		for (size_t i = 0; i < pngFiles.size(); i++)
-		{
-			bool sRGB = (i == 0);
-			CreateTextureResource(
-				outObject.Material.TextureImages[i],
-				outObject.Material.TextureImageMemorys[i],
-				outObject.Material.TextureImageViews[i],
-				outObject.Material.TextureImageSamplers[i],
-				pngFiles[i], sRGB);
-		}
+		// Copy the buffer using commandBuffer, just like rendering
+		VkCommandBufferAllocateInfo allocInfo{};
+		allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+		allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+		allocInfo.commandPool = CommandPool;
+		allocInfo.commandBufferCount = 1;
 
-		CreateVertexBuffer(
-			outObject.Mesh.VertexBuffer,
-			outObject.Mesh.VertexBufferMemory,
-			outObject.Mesh.Vertices);
-		CreateIndexBuffer(
-			outObject.Mesh.IndexBuffer,
-			outObject.Mesh.IndexBufferMemory,
-			outObject.Mesh.Indices);
-		CreateDescriptorSet(
-			outObject.Material.DescriptorSets,
-			outObject.Material.DescriptorPool,
-			inDescriptorSetLayout,
-			outObject.Material.TextureImageViews,
-			outObject.Material.TextureImageSamplers);
+		VkCommandBuffer commandBuffer;
+		vkAllocateCommandBuffers(Device, &allocInfo, &commandBuffer);
 
-		VkDeviceSize BufferSize = sizeof(XkTransfrom);
-		outObject.TransfromUniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-		outObject.TransfromUniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
+		VkCommandBufferBeginInfo beginInfo{};
+		beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+		beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
-		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-			CreateBuffer(BufferSize,
-				VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-				outObject.TransfromUniformBuffers[i],
-				outObject.TransfromUniformBuffersMemory[i]);
-		}
+		vkBeginCommandBuffer(commandBuffer, &beginInfo);
 
-		XkTransfrom Transfrom{};
-		Transfrom.Location = glm::vec3(0.0f);
-		Transfrom.Rotation = glm::vec3(0.0f);
-		Transfrom.Scale3D = glm::vec3(1.0f);
+		return commandBuffer;
+	}
 
-		void* data_ubo;
-		vkMapMemory(Device, outObject.TransfromUniformBuffersMemory[CurrentFrame], 0, sizeof(Transfrom), 0, &data_ubo);
-		memcpy(data_ubo, &Transfrom, sizeof(Transfrom));
-		vkUnmapMemory(Device, outObject.TransfromUniformBuffersMemory[CurrentFrame]);
-	};
-
-	template <typename T>
-	void DestroyRenderObject(T& outObject)
+	void RHIEndSingleTimeCommands(VkCommandBuffer commandBuffer)
 	{
-		vkDestroyDescriptorPool(Device, outObject.Material.DescriptorPool, nullptr);
+		vkEndCommandBuffer(commandBuffer);
 
-		for (size_t j = 0; j < outObject.Material.TextureImages.size(); j++)
-		{
-			vkDestroyImageView(Device, outObject.Material.TextureImageViews[j], nullptr);
-			vkDestroySampler(Device, outObject.Material.TextureImageSamplers[j], nullptr);
-			vkDestroyImage(Device, outObject.Material.TextureImages[j], nullptr);
-			vkFreeMemory(Device, outObject.Material.TextureImageMemorys[j], nullptr);
+		VkSubmitInfo submitInfo{};
+		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+		submitInfo.commandBufferCount = 1;
+		submitInfo.pCommandBuffers = &commandBuffer;
+
+		vkQueueSubmit(GraphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+		vkQueueWaitIdle(GraphicsQueue);
+
+		vkFreeCommandBuffers(Device, CommandPool, 1, &commandBuffer);
+	}
+
+	/** Utility function for creating Buffer */
+	void RHICreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory) {
+		VkBufferCreateInfo bufferInfo{};
+		bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+		bufferInfo.size = size;
+		bufferInfo.usage = usage;
+		bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+		if (vkCreateBuffer(Device, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
+			throw std::runtime_error("[RHICreateBuffer] Failed to Create buffer!");
 		}
 
-		vkDestroyBuffer(Device, outObject.Mesh.VertexBuffer, nullptr);
-		vkFreeMemory(Device, outObject.Mesh.VertexBufferMemory, nullptr);
-		vkDestroyBuffer(Device, outObject.Mesh.IndexBuffer, nullptr);
-		vkFreeMemory(Device, outObject.Mesh.IndexBufferMemory, nullptr);
+		// Allocate memory for VertexBuffer and bind it
+		VkMemoryRequirements memRequirements;
+		vkGetBufferMemoryRequirements(Device, buffer, &memRequirements);
 
-		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
-		{
-			vkDestroyBuffer(Device, outObject.TransfromUniformBuffers[i], nullptr);
-			vkFreeMemory(Device, outObject.TransfromUniformBuffersMemory[i], nullptr);
+		VkMemoryAllocateInfo allocInfo{};
+		allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+		allocInfo.allocationSize = memRequirements.size;
+		// Automatically find the suitable memory type
+		allocInfo.memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, properties);
+		// Bind the allocated memory address
+		if (vkAllocateMemory(Device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
+			throw std::runtime_error("[RHICreateBuffer] Failed to allocate buffer memory!");
 		}
-	};
+		// Bind the VertexBuffer and its memory address
+		vkBindBufferMemory(Device, buffer, bufferMemory, 0);
+	}
 
-	template <typename T>
-	void CreateRenderIndirectObject(T& outObject, const XkString& meshletFile, const std::vector<XkString>& pngFiles)
+	/** Utility function for copying buffers */
+	void RHICopyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size)
 	{
-		CreateMeshlet(outObject.Mesh.Vertices, outObject.Mesh.Indices,
-			outObject.Mesh.MeshletSet.Meshlets, outObject.Mesh.MeshletSet.MeshletVertices, outObject.Mesh.MeshletSet.MeshletTriangles, meshletFile);
+		VkCommandBuffer CommandBuffer = RHIBeginSingleTimeCommands();
 
-		outObject.Material.TextureImages.resize(pngFiles.size());
-		outObject.Material.TextureImageMemorys.resize(pngFiles.size());
-		outObject.Material.TextureImageViews.resize(pngFiles.size());
-		outObject.Material.TextureImageSamplers.resize(pngFiles.size());
-		for (size_t i = 0; i < pngFiles.size(); i++)
-		{
-			bool sRGB = (i == 0);
-			CreateTextureResource(
-				outObject.Material.TextureImages[i],
-				outObject.Material.TextureImageMemorys[i],
-				outObject.Material.TextureImageViews[i],
-				outObject.Material.TextureImageSamplers[i],
-				pngFiles[i], sRGB);
-		}
+		VkBufferCopy copyRegion{};
+		copyRegion.size = size;
+		vkCmdCopyBuffer(CommandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
 
-		std::vector<XkVertex> tmpVertices = outObject.Mesh.Vertices;
-		outObject.Mesh.Vertices.resize(outObject.Mesh.MeshletSet.MeshletVertices.size());
-		for (uint32_t i = 0; i < outObject.Mesh.MeshletSet.MeshletVertices.size(); i++)
-		{
-			outObject.Mesh.Vertices[i] = tmpVertices[outObject.Mesh.MeshletSet.MeshletVertices[i]];
-		}
-		outObject.Mesh.Indices.resize(outObject.Mesh.MeshletSet.MeshletTriangles.size());
-		uint32_t triangleCount = 0;
-		uint32_t triangleOffset = 0;
-		for (uint32_t i = 0; i < outObject.Mesh.MeshletSet.Meshlets.size(); i++)
-		{
-			XkMeshlet meshlet = outObject.Mesh.MeshletSet.Meshlets[i];
-			triangleCount += meshlet.TriangleCount;
-			triangleOffset += meshlet.TriangleOffset;
-		}
-		for (uint32_t i = 0; i < outObject.Mesh.MeshletSet.MeshletTriangles.size(); i++)
-		{
-			outObject.Mesh.Indices[i] = outObject.Mesh.MeshletSet.MeshletTriangles[i];
-		}
-		CreateVertexBuffer(
-			outObject.Mesh.VertexBuffer,
-			outObject.Mesh.VertexBufferMemory,
-			outObject.Mesh.Vertices);
-		CreateIndexBuffer(
-			outObject.Mesh.IndexBuffer,
-			outObject.Mesh.IndexBufferMemory,
-			outObject.Mesh.Indices);
-		CreateDescriptorSet(
-			outObject.Material.DescriptorSets,
-			outObject.Material.DescriptorPool,
-			BasePass.DescriptorSetLayout,
-			outObject.Material.TextureImageViews,
-			outObject.Material.TextureImageSamplers);
-	};
+		RHIEndSingleTimeCommands(CommandBuffer);
+	}
 
-	template <typename T>
-	void CreateInstancedBuffer(T& outObject, const std::vector<XkInstanceData>& inInstanceData)
+	/** Create vertex buffer VBO */
+	void RHICreateVertexBuffer(VkBuffer& outBuffer, VkDeviceMemory& outMemory, const std::vector<XkVertex>& inVertices)
 	{
-		outObject.InstanceCount = static_cast<uint32_t>(inInstanceData.size());
-		VkDeviceSize bufferSize = inInstanceData.size() * sizeof(XkInstanceData);
+		// Create VertexBuffer based on the size of Vertices
+		VkDeviceSize bufferSize = sizeof(inVertices[0]) * inVertices.size();
+
+		// Why do we need a stagingBuffer? Because creating the VertexBuffer directly allows CPU-side access to the GPU memory used by the VertexBufferMemory, which is dangerous.
+		// So we first create a temporary Buffer to write the data to, and then copy this Buffer to the final VertexBuffer.
+		// The VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT flag ensures that the final VertexBuffer is located in hardware local memory, such as the graphics card's VRAM.
 		VkBuffer stagingBuffer;
 		VkDeviceMemory stagingBufferMemory;
-		CreateBuffer(
-			bufferSize,
-			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-			stagingBuffer,
-			stagingBufferMemory);
+		// A generic function for creating VertexBuffer, which makes it convenient to create StagingBuffer and the actual VertexBuffer
+		RHICreateBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
 
+		// Copy the data to the vertex buffer
 		void* data;
 		vkMapMemory(Device, stagingBufferMemory, 0, bufferSize, 0, &data);
-		memcpy(data, inInstanceData.data(), (size_t)bufferSize);
+		memcpy(data, inVertices.data(), (size_t)bufferSize);
 		vkUnmapMemory(Device, stagingBufferMemory);
 
-		CreateBuffer(
-			bufferSize,
-			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-			outObject.Mesh.InstancedBuffer,
-			outObject.Mesh.InstancedBufferMemory);
-		CopyBuffer(stagingBuffer, outObject.Mesh.InstancedBuffer, bufferSize);
+		RHICreateBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, outBuffer, outMemory);
+
+		RHICopyBuffer(stagingBuffer, outBuffer, bufferSize);
 
 		vkDestroyBuffer(Device, stagingBuffer, nullptr);
 		vkFreeMemory(Device, stagingBufferMemory, nullptr);
-	};
+	}
 
+	/** Create index buffer IBO */
 	template <typename T>
-	void CreateRenderIndirectBuffer(T& outObject)
+	void RHICreateIndexBuffer(VkBuffer& outBuffer, VkDeviceMemory& outMemory, const std::vector<T>& inIndices)
 	{
-		VkDeviceSize bufferSize = outObject.IndirectCommands.size() * sizeof(VkDrawIndexedIndirectCommand);
+		VkDeviceSize bufferSize = sizeof(inIndices[0]) * inIndices.size();
+
 		VkBuffer stagingBuffer;
 		VkDeviceMemory stagingBufferMemory;
-		CreateBuffer(
-			bufferSize,
-			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-			stagingBuffer,
-			stagingBufferMemory);
+		RHICreateBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
 
 		void* data;
 		vkMapMemory(Device, stagingBufferMemory, 0, bufferSize, 0, &data);
-		memcpy(data, outObject.IndirectCommands.data(), (size_t)bufferSize);
+		memcpy(data, inIndices.data(), (size_t)bufferSize);
 		vkUnmapMemory(Device, stagingBufferMemory);
 
-		CreateBuffer(
-			bufferSize,
-			VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-			outObject.IndirectCommandsBuffer,
-			outObject.IndirectCommandsBufferMemory);
-		CopyBuffer(stagingBuffer, outObject.IndirectCommandsBuffer, bufferSize);
+		RHICreateBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, outBuffer, outMemory);
+
+		RHICopyBuffer(stagingBuffer, outBuffer, bufferSize);
 
 		vkDestroyBuffer(Device, stagingBuffer, nullptr);
 		vkFreeMemory(Device, stagingBufferMemory, nullptr);
-	};
+	}
 
-	template <typename T>
-	void CreateRenderObjectsFromProfabs(std::vector<T>& outRenderObjects, const VkDescriptorSetLayout& inLayout, const XkString& inAssetName, const std::vector<XkInstanceData>& inInstanceData = {})
+	/** Create Shader module */
+	VkShaderModule RHICreateShaderModule(const std::vector<char>& code)
 	{
-		XkString asset_set_dir = "Profabs";
-		for (const auto& folder : std::filesystem::directory_iterator(asset_set_dir))
+		VkShaderModuleCreateInfo createInfo{};
+		createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+		createInfo.codeSize = code.size();
+		createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
+
+		VkShaderModule shaderModule;
+		if (vkCreateShaderModule(Device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS)
 		{
-			XkString asset_name = folder.path().filename().generic_string();
-			XkString asset_set = folder.path().generic_string();
-			if (inAssetName != asset_name)
-			{
-				continue;
-			}
-			XkString models_dir = asset_set + XkString("/models/");
-			XkString textures_dir = asset_set + XkString("/textures/");
-			if (!std::filesystem::is_directory(models_dir) ||
-				!std::filesystem::is_directory(textures_dir))
-			{
-				continue;
-			}
-			for (const auto& Model : std::filesystem::directory_iterator(models_dir))
-			{
-				XkString model_file = Model.path().generic_string();
-				XkString model_file_name = model_file.substr(model_file.find_last_of("/\\") + 1);
-				XkString::size_type const p(model_file_name.find_last_of('.'));
-				XkString model_name = model_file_name.substr(0, p);
-				XkString model_suffix = model_file_name.substr(p + 1);
-				if (model_suffix != "obj") {
-					continue;
-				}
-				XkString texture_bc = textures_dir + model_name + XkString("_bc.png");
-				if (!std::filesystem::exists(texture_bc)) {
-					texture_bc = XkString("Content/Textures/default_grey.png");
-				}
-				XkString texture_m = textures_dir + model_name + XkString("_m.png");
-				if (!std::filesystem::exists(texture_m)) {
-					texture_m = XkString("Content/Textures/default_black.png");
-				}
-				XkString texture_r = textures_dir + model_name + XkString("_r.png");
-				if (!std::filesystem::exists(texture_r)) {
-					texture_r = XkString("Content/Textures/default_white.png");
-				}
-				XkString texture_n = textures_dir + model_name + XkString("_n.png");
-				if (!std::filesystem::exists(texture_n)) {
-					texture_n = XkString("Content/Textures/default_normal.png");
-				}
-				XkString texture_ao = textures_dir + model_name + XkString("_ao.png");
-				if (!std::filesystem::exists(texture_ao)) {
-					texture_ao = XkString("Content/Textures/default_white.png");
-				}
-				XkString texture_ev = textures_dir + model_name + XkString("_ev.png");
-				if (!std::filesystem::exists(texture_ev)) {
-					texture_ev = XkString("Content/Textures/default_black.png");
-				}
-				XkString texture_ms = textures_dir + model_name + XkString("_ms.png");
-				if (!std::filesystem::exists(texture_ms)) {
-					texture_ms = XkString("Content/Textures/default_white.png");
-				}
+			throw std::runtime_error("[RHICreateShaderModule] Failed to Create shader module!");
+		}
 
-				T asset;
-				XkString asset_obj = model_file;
-				std::vector<XkString> asset_imgs = {
-					texture_bc,
-					texture_m,
-					texture_r,
-					texture_n,
-					texture_ao,
-					texture_ev,
-					texture_ms };
+		return shaderModule;
+	}
 
-				CreateRenderObject<T>(asset, asset_obj, asset_imgs, inLayout);
-				if (inInstanceData.size() > 0)
-				{
-					CreateInstancedBuffer<T>(asset, inInstanceData);
-				}
-				outRenderObjects.push_back(asset);
-			}
+	/** Use ImageMemoryBarrier to synchronize access to texture resources, avoiding a texture being read while it is being written */
+	void RHITransitionImageLayout(VkImage& image, const VkImageLayout oldLayout, const VkImageLayout newLayout, const uint32_t miplevels = 1)
+	{
+		VkCommandBuffer CommandBuffer = RHIBeginSingleTimeCommands();
+
+		VkImageMemoryBarrier barrier{};
+		barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+		barrier.oldLayout = oldLayout;
+		barrier.newLayout = newLayout;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = image;
+		barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		barrier.subresourceRange.baseMipLevel = 0;
+		barrier.subresourceRange.levelCount = miplevels;
+		barrier.subresourceRange.baseArrayLayer = 0;
+		barrier.subresourceRange.layerCount = 1;
+
+		VkPipelineStageFlags sourceStage;
+		VkPipelineStageFlags destinationStage;
+
+		if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+			barrier.srcAccessMask = 0;
+			barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+			sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+			destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+		}
+		else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+			barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+			barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+			sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+			destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+		}
+		else {
+			throw std::invalid_argument("unsupported layout transition!");
+		}
+
+		vkCmdPipelineBarrier(
+			CommandBuffer,
+			sourceStage, destinationStage,
+			0,
+			0, nullptr,
+			0, nullptr,
+			1, &barrier
+		);
+
+		RHIEndSingleTimeCommands(CommandBuffer);
+	}
+
+	void RHIGenerateMipmaps(VkImage& outImage, const VkFormat& imageFormat, const int32_t texWidth, const int32_t texHeight, const uint32_t mipLevels)
+	{
+		// Check if the image format supports linear blitting
+		VkFormatProperties formatProperties;
+		vkGetPhysicalDeviceFormatProperties(PhysicalDevice, imageFormat, &formatProperties);
+
+		if (!(formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) {
+			throw std::runtime_error("[RHIGenerateMipmaps] Texture image format does not support linear blitting!");
+		}
+
+		VkCommandBuffer commandBuffer = RHIBeginSingleTimeCommands();
+
+		VkImageMemoryBarrier barrier{};
+		barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+		barrier.image = outImage;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		barrier.subresourceRange.baseArrayLayer = 0;
+		barrier.subresourceRange.layerCount = 1;
+		barrier.subresourceRange.levelCount = 1;
+
+		int32_t mipWidth = texWidth;
+		int32_t mipHeight = texHeight;
+
+		for (uint32_t i = 1; i < mipLevels; i++) {
+			barrier.subresourceRange.baseMipLevel = i - 1;
+			barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+			barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+			barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+			barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+			vkCmdPipelineBarrier(commandBuffer,
+				VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+				0, nullptr,
+				0, nullptr,
+				1, &barrier);
+
+			VkImageBlit blit{};
+			blit.srcOffsets[0] = { 0, 0, 0 };
+			blit.srcOffsets[1] = { mipWidth, mipHeight, 1 };
+			blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			blit.srcSubresource.mipLevel = i - 1;
+			blit.srcSubresource.baseArrayLayer = 0;
+			blit.srcSubresource.layerCount = 1;
+			blit.dstOffsets[0] = { 0, 0, 0 };
+			blit.dstOffsets[1] = { mipWidth > 1 ? mipWidth / 2 : 1, mipHeight > 1 ? mipHeight / 2 : 1, 1 };
+			blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			blit.dstSubresource.mipLevel = i;
+			blit.dstSubresource.baseArrayLayer = 0;
+			blit.dstSubresource.layerCount = 1;
+
+			vkCmdBlitImage(commandBuffer,
+				outImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+				outImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				1, &blit,
+				VK_FILTER_LINEAR);
+			barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+			barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+			barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+			vkCmdPipelineBarrier(commandBuffer,
+				VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+				0, nullptr,
+				0, nullptr,
+				1, &barrier);
+
+			if (mipWidth > 1) mipWidth /= 2;
+			if (mipHeight > 1) mipHeight /= 2;
+		}
+
+		barrier.subresourceRange.baseMipLevel = mipLevels - 1;
+		barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+		barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+		barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+		vkCmdPipelineBarrier(commandBuffer,
+			VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+			0, nullptr,
+			0, nullptr,
+			1, &barrier);
+
+		RHIEndSingleTimeCommands(commandBuffer);
+	}
+
+	/** Copy the buffer to the image object */
+	void RHICopyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height)
+	{
+		VkCommandBuffer CommandBuffer = RHIBeginSingleTimeCommands();
+
+		VkBufferImageCopy region{};
+		region.bufferOffset = 0;
+		region.bufferRowLength = 0;
+		region.bufferImageHeight = 0;
+		region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		region.imageSubresource.mipLevel = 0;
+		region.imageSubresource.baseArrayLayer = 0;
+		region.imageSubresource.layerCount = 1;
+		region.imageOffset = { 0, 0, 0 };
+		region.imageExtent = { width, height, 1 };
+
+		vkCmdCopyBufferToImage(CommandBuffer, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+		RHIEndSingleTimeCommands(CommandBuffer);
+	}
+
+	/** Create image resources */
+	void RHICreateImage(
+		VkImage& outImage,
+		VkDeviceMemory& outImageMemory,
+		const uint32_t inWidth, const uint32_t inHeight, const VkFormat format,
+		const VkImageTiling tiling, const VkImageUsageFlags usage,
+		const VkMemoryPropertyFlags properties, const uint32_t miplevels = 1)
+	{
+		VkImageCreateInfo imageInfo{};
+		imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+		imageInfo.imageType = VK_IMAGE_TYPE_2D;
+		imageInfo.extent.width = inWidth;
+		imageInfo.extent.height = inHeight;
+		imageInfo.extent.depth = 1;
+		imageInfo.format = format;
+		imageInfo.tiling = tiling;
+		imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		imageInfo.usage = usage;
+		imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+		imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		imageInfo.arrayLayers = 1;
+		imageInfo.mipLevels = miplevels;
+
+		if (vkCreateImage(Device, &imageInfo, nullptr, &outImage) != VK_SUCCESS) {
+			throw std::runtime_error("[RHICreateImage] Failed to Create image!");
+		}
+
+		VkMemoryRequirements memRequirements;
+		vkGetImageMemoryRequirements(Device, outImage, &memRequirements);
+
+		VkMemoryAllocateInfo allocInfo{};
+		allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+		allocInfo.allocationSize = memRequirements.size;
+		allocInfo.memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, properties);
+
+		if (vkAllocateMemory(Device, &allocInfo, nullptr, &outImageMemory) != VK_SUCCESS) {
+			throw std::runtime_error("[RHICreateImage] Failed to allocate image memory!");
+		}
+
+		vkBindImageMemory(Device, outImage, outImageMemory, 0);
+	}
+
+	/** Create image viewport */
+	void RHICreateImageView(
+		VkImageView& outImageView,
+		const VkImage& inImage,
+		const VkFormat inFormat,
+		const VkImageAspectFlags aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT,
+		const uint32_t levelCount = 1)
+	{
+		VkImageViewCreateInfo viewInfo{};
+		viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+		viewInfo.image = inImage;
+		viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+		viewInfo.format = inFormat;
+		viewInfo.subresourceRange.aspectMask = aspectFlags; // VK_IMAGE_ASPECT_COLOR_BIT 颜色 VK_IMAGE_ASPECT_DEPTH_BIT 深度
+		viewInfo.subresourceRange.baseMipLevel = 0;
+		viewInfo.subresourceRange.levelCount = levelCount;
+		viewInfo.subresourceRange.baseArrayLayer = 0;
+		viewInfo.subresourceRange.layerCount = 1;
+
+		if (vkCreateImageView(Device, &viewInfo, nullptr, &outImageView) != VK_SUCCESS) {
+			throw std::runtime_error("[RHICreateImageView] Failed to Create texture image View!");
 		}
 	}
+
+	/** Create sampler */
+	void RHICreateSampler(
+		VkSampler& outSampler,
+		const VkFilter filter = VK_FILTER_LINEAR,
+		const VkSamplerAddressMode addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+		const VkSamplerAddressMode addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+		const VkSamplerAddressMode addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+		const VkBorderColor borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+		const uint32_t miplevels = 1)
+	{
+		VkPhysicalDeviceProperties properties{};
+		vkGetPhysicalDeviceProperties(PhysicalDevice, &properties);
+
+		VkSamplerCreateInfo samplerInfo{};
+		samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+		samplerInfo.magFilter = filter;
+		samplerInfo.minFilter = filter;
+		samplerInfo.addressModeU = addressModeU;
+		samplerInfo.addressModeV = addressModeV;
+		samplerInfo.addressModeW = addressModeW;
+		// Disable various anisotropy here, some hardware may not support it
+		samplerInfo.anisotropyEnable = VK_TRUE;
+		samplerInfo.maxAnisotropy = properties.limits.maxSamplerAnisotropy;
+		samplerInfo.borderColor = borderColor;
+		samplerInfo.unnormalizedCoordinates = VK_FALSE;
+		samplerInfo.compareEnable = VK_FALSE;
+		samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+		samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+		samplerInfo.minLod = 0.0f;
+		samplerInfo.maxLod = static_cast<float>(miplevels);
+		samplerInfo.mipLodBias = 0.0f;
+
+		if (vkCreateSampler(Device, &samplerInfo, nullptr, &outSampler) != VK_SUCCESS) {
+			throw std::runtime_error("[RHICreateSampler] Failed to Create texture sampler!");
+		}
+	}
+
 protected:
+	////////////////////////////////////////////////////////////////////////////
+	// Window and Surface Help Functions
+	////////////////////////////////////////////////////////////////////////////
+
 	/** Choose the format of the image to render to the SwapChain */
 	VkSurfaceFormatKHR ChooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats)
 	{
@@ -6302,425 +6742,62 @@ protected:
 		throw std::runtime_error("[FindMemoryType] Failed to find suitable memory type!");
 	}
 
-	VkCommandBuffer BeginSingleTimeCommands()
+	/** Select the content to print for Debug information */
+	void PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo)
 	{
-		// Copy the buffer using commandBuffer, just like rendering
-		VkCommandBufferAllocateInfo allocInfo{};
-		allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-		allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-		allocInfo.commandPool = CommandPool;
-		allocInfo.commandBufferCount = 1;
-
-		VkCommandBuffer commandBuffer;
-		vkAllocateCommandBuffers(Device, &allocInfo, &commandBuffer);
-
-		VkCommandBufferBeginInfo beginInfo{};
-		beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-		beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-		vkBeginCommandBuffer(commandBuffer, &beginInfo);
-
-		return commandBuffer;
+		createInfo = {};
+		createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+		createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+		createInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+		createInfo.pfnUserCallback = DebugCallback;
 	}
 
-	void EndSingleTimeCommands(VkCommandBuffer commandBuffer)
+	/** Check if validation layer support is available */
+	bool CheckValidationLayerSupport()
 	{
-		vkEndCommandBuffer(commandBuffer);
+		uint32_t layerCount;
+		vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
 
-		VkSubmitInfo submitInfo{};
-		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-		submitInfo.commandBufferCount = 1;
-		submitInfo.pCommandBuffers = &commandBuffer;
+		std::vector<VkLayerProperties> availableLayers(layerCount);
+		vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data());
 
-		vkQueueSubmit(GraphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
-		vkQueueWaitIdle(GraphicsQueue);
-
-		vkFreeCommandBuffers(Device, CommandPool, 1, &commandBuffer);
-	}
-
-	/** Utility function for creating Buffer */
-	void CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory) {
-		VkBufferCreateInfo bufferInfo{};
-		bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-		bufferInfo.size = size;
-		bufferInfo.usage = usage;
-		bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-		if (vkCreateBuffer(Device, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
-			throw std::runtime_error("[CreateBuffer] Failed to Create buffer!");
-		}
-
-		// Allocate memory for VertexBuffer and bind it
-		VkMemoryRequirements memRequirements;
-		vkGetBufferMemoryRequirements(Device, buffer, &memRequirements);
-
-		VkMemoryAllocateInfo allocInfo{};
-		allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-		allocInfo.allocationSize = memRequirements.size;
-		// Automatically find the suitable memory type
-		allocInfo.memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, properties);
-		// Bind the allocated memory address
-		if (vkAllocateMemory(Device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
-			throw std::runtime_error("[CreateBuffer] Failed to allocate buffer memory!");
-		}
-		// Bind the VertexBuffer and its memory address
-		vkBindBufferMemory(Device, buffer, bufferMemory, 0);
-	}
-
-	/** Utility function for copying buffers */
-	void CopyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size)
-	{
-		VkCommandBuffer CommandBuffer = BeginSingleTimeCommands();
-
-		VkBufferCopy copyRegion{};
-		copyRegion.size = size;
-		vkCmdCopyBuffer(CommandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
-
-		EndSingleTimeCommands(CommandBuffer);
-	}
-
-	/** Read vertices and indices from a file */
-	void CreateMesh(std::vector<XkVertex>& outVertices, std::vector<uint32_t>& outIndices, const XkString& filename)
-	{
-		LoadMeshAsset(filename, outVertices, outIndices);
-	}
-
-	void CreateMeshlet(std::vector<XkVertex>& outVertices, std::vector<uint32_t>& outIndices,
-		std::vector<XkMeshlet>& outMeshlets, std::vector<uint32_t>& outMeshletVertices, std::vector<uint8_t>& outMeshletTriangles, const XkString& filename)
-	{
-		LoadMeshletAsset(filename, outVertices, outIndices, outMeshlets, outMeshletVertices, outMeshletTriangles);
-	}
-
-	/** Create vertex buffer VBO */
-	void CreateVertexBuffer(VkBuffer& outBuffer, VkDeviceMemory& outMemory, const std::vector<XkVertex>& inVertices)
-	{
-		// Create VertexBuffer based on the size of Vertices
-		VkDeviceSize bufferSize = sizeof(inVertices[0]) * inVertices.size();
-
-		// Why do we need a stagingBuffer? Because creating the VertexBuffer directly allows CPU-side access to the GPU memory used by the VertexBufferMemory, which is dangerous.
-		// So we first create a temporary Buffer to write the data to, and then copy this Buffer to the final VertexBuffer.
-		// The VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT flag ensures that the final VertexBuffer is located in hardware local memory, such as the graphics card's VRAM.
-		VkBuffer stagingBuffer;
-		VkDeviceMemory stagingBufferMemory;
-		// A generic function for creating VertexBuffer, which makes it convenient to create StagingBuffer and the actual VertexBuffer
-		CreateBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
-
-		// Copy the data to the vertex buffer
-		void* data;
-		vkMapMemory(Device, stagingBufferMemory, 0, bufferSize, 0, &data);
-		memcpy(data, inVertices.data(), (size_t)bufferSize);
-		vkUnmapMemory(Device, stagingBufferMemory);
-
-		CreateBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, outBuffer, outMemory);
-
-		CopyBuffer(stagingBuffer, outBuffer, bufferSize);
-
-		vkDestroyBuffer(Device, stagingBuffer, nullptr);
-		vkFreeMemory(Device, stagingBufferMemory, nullptr);
-	}
-
-	/** Create index buffer IBO */
-	template <typename T>
-	void CreateIndexBuffer(VkBuffer& outBuffer, VkDeviceMemory& outMemory, const std::vector<T>& inIndices)
-	{
-		VkDeviceSize bufferSize = sizeof(inIndices[0]) * inIndices.size();
-
-		VkBuffer stagingBuffer;
-		VkDeviceMemory stagingBufferMemory;
-		CreateBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
-
-		void* data;
-		vkMapMemory(Device, stagingBufferMemory, 0, bufferSize, 0, &data);
-		memcpy(data, inIndices.data(), (size_t)bufferSize);
-		vkUnmapMemory(Device, stagingBufferMemory);
-
-		CreateBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, outBuffer, outMemory);
-
-		CopyBuffer(stagingBuffer, outBuffer, bufferSize);
-
-		vkDestroyBuffer(Device, stagingBuffer, nullptr);
-		vkFreeMemory(Device, stagingBufferMemory, nullptr);
-	}
-
-	/** Create Shader module */
-	VkShaderModule CreateShaderModule(const std::vector<char>& code)
-	{
-		VkShaderModuleCreateInfo createInfo{};
-		createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-		createInfo.codeSize = code.size();
-		createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
-
-		VkShaderModule shaderModule;
-		if (vkCreateShaderModule(Device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS)
+		for (const char* layerName : ValidationLayers)
 		{
-			throw std::runtime_error("[CreateShaderModule] Failed to Create shader module!");
+			bool layerFound = false;
+
+			for (const auto& layerProperties : availableLayers)
+			{
+				if (strcmp(layerName, layerProperties.layerName) == 0)
+				{
+					layerFound = true;
+					break;
+				}
+			}
+
+			if (!layerFound)
+			{
+				return false;
+			}
 		}
 
-		return shaderModule;
+		return true;
 	}
 
-	/** Use ImageMemoryBarrier to synchronize access to texture resources, avoiding a texture being read while it is being written */
-	void TransitionImageLayout(VkImage& image, const VkImageLayout oldLayout, const VkImageLayout newLayout, const uint32_t miplevels = 1)
+	/** Callback function for printing debug information, can be used to handle debug messages */
+	static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, VkDebugUtilsMessageTypeFlagsEXT messageType, const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData)
 	{
-		VkCommandBuffer CommandBuffer = BeginSingleTimeCommands();
-
-		VkImageMemoryBarrier barrier{};
-		barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-		barrier.oldLayout = oldLayout;
-		barrier.newLayout = newLayout;
-		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.image = image;
-		barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-		barrier.subresourceRange.baseMipLevel = 0;
-		barrier.subresourceRange.levelCount = miplevels;
-		barrier.subresourceRange.baseArrayLayer = 0;
-		barrier.subresourceRange.layerCount = 1;
-
-		VkPipelineStageFlags sourceStage;
-		VkPipelineStageFlags destinationStage;
-
-		if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
-			barrier.srcAccessMask = 0;
-			barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-
-			sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-			destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-		}
-		else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-			barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-			barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-			sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-			destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-		}
-		else {
-			throw std::invalid_argument("unsupported layout transition!");
-		}
-
-		vkCmdPipelineBarrier(
-			CommandBuffer,
-			sourceStage, destinationStage,
-			0,
-			0, nullptr,
-			0, nullptr,
-			1, &barrier
-		);
-
-		EndSingleTimeCommands(CommandBuffer);
+		XkString output = XkString("[LOG]: ") + XkString(pCallbackData->pMessage);
+		std::cerr << output.c_str() << std::endl;
+#ifdef NDEBUG
+		OutputDebugString(output.c_str());
+#endif
+		return VK_FALSE;
 	}
+protected:
+	////////////////////////////////////////////////////////////////////////////
+	// Standard File Path Help Functions
+	////////////////////////////////////////////////////////////////////////////
 
-	void GenerateMipmaps(VkImage& outImage, const VkFormat& imageFormat, const int32_t texWidth, const int32_t texHeight, const uint32_t mipLevels)
-	{
-		// Check if the image format supports linear blitting
-		VkFormatProperties formatProperties;
-		vkGetPhysicalDeviceFormatProperties(PhysicalDevice, imageFormat, &formatProperties);
-
-		if (!(formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) {
-			throw std::runtime_error("[GenerateMipmaps] Texture image format does not support linear blitting!");
-		}
-
-		VkCommandBuffer commandBuffer = BeginSingleTimeCommands();
-
-		VkImageMemoryBarrier barrier{};
-		barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-		barrier.image = outImage;
-		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-		barrier.subresourceRange.baseArrayLayer = 0;
-		barrier.subresourceRange.layerCount = 1;
-		barrier.subresourceRange.levelCount = 1;
-
-		int32_t mipWidth = texWidth;
-		int32_t mipHeight = texHeight;
-
-		for (uint32_t i = 1; i < mipLevels; i++) {
-			barrier.subresourceRange.baseMipLevel = i - 1;
-			barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-			barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-			barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-			barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-
-			vkCmdPipelineBarrier(commandBuffer,
-				VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-				0, nullptr,
-				0, nullptr,
-				1, &barrier);
-
-			VkImageBlit blit{};
-			blit.srcOffsets[0] = { 0, 0, 0 };
-			blit.srcOffsets[1] = { mipWidth, mipHeight, 1 };
-			blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-			blit.srcSubresource.mipLevel = i - 1;
-			blit.srcSubresource.baseArrayLayer = 0;
-			blit.srcSubresource.layerCount = 1;
-			blit.dstOffsets[0] = { 0, 0, 0 };
-			blit.dstOffsets[1] = { mipWidth > 1 ? mipWidth / 2 : 1, mipHeight > 1 ? mipHeight / 2 : 1, 1 };
-			blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-			blit.dstSubresource.mipLevel = i;
-			blit.dstSubresource.baseArrayLayer = 0;
-			blit.dstSubresource.layerCount = 1;
-
-			vkCmdBlitImage(commandBuffer,
-				outImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-				outImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-				1, &blit,
-				VK_FILTER_LINEAR);
-			barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-			barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-			barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-			barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-			vkCmdPipelineBarrier(commandBuffer,
-				VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-				0, nullptr,
-				0, nullptr,
-				1, &barrier);
-
-			if (mipWidth > 1) mipWidth /= 2;
-			if (mipHeight > 1) mipHeight /= 2;
-		}
-
-		barrier.subresourceRange.baseMipLevel = mipLevels - 1;
-		barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-		barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-		barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-		barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-		vkCmdPipelineBarrier(commandBuffer,
-			VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-			0, nullptr,
-			0, nullptr,
-			1, &barrier);
-
-		EndSingleTimeCommands(commandBuffer);
-	}
-
-	/** Copy the buffer to the image object */
-	void CopyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height)
-	{
-		VkCommandBuffer CommandBuffer = BeginSingleTimeCommands();
-
-		VkBufferImageCopy region{};
-		region.bufferOffset = 0;
-		region.bufferRowLength = 0;
-		region.bufferImageHeight = 0;
-		region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-		region.imageSubresource.mipLevel = 0;
-		region.imageSubresource.baseArrayLayer = 0;
-		region.imageSubresource.layerCount = 1;
-		region.imageOffset = { 0, 0, 0 };
-		region.imageExtent = { width, height, 1 };
-
-		vkCmdCopyBufferToImage(CommandBuffer, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-
-		EndSingleTimeCommands(CommandBuffer);
-	}
-
-	/** Create image resources */
-	void CreateImage(
-		VkImage& outImage,
-		VkDeviceMemory& outImageMemory,
-		const uint32_t inWidth, const uint32_t inHeight, const VkFormat format,
-		const VkImageTiling tiling, const VkImageUsageFlags usage,
-		const VkMemoryPropertyFlags properties, const uint32_t miplevels = 1)
-	{
-		VkImageCreateInfo imageInfo{};
-		imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-		imageInfo.imageType = VK_IMAGE_TYPE_2D;
-		imageInfo.extent.width = inWidth;
-		imageInfo.extent.height = inHeight;
-		imageInfo.extent.depth = 1;
-		imageInfo.format = format;
-		imageInfo.tiling = tiling;
-		imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		imageInfo.usage = usage;
-		imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-		imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-		imageInfo.arrayLayers = 1;
-		imageInfo.mipLevels = miplevels;
-
-		if (vkCreateImage(Device, &imageInfo, nullptr, &outImage) != VK_SUCCESS) {
-			throw std::runtime_error("[CreateImage] Failed to Create image!");
-		}
-
-		VkMemoryRequirements memRequirements;
-		vkGetImageMemoryRequirements(Device, outImage, &memRequirements);
-
-		VkMemoryAllocateInfo allocInfo{};
-		allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-		allocInfo.allocationSize = memRequirements.size;
-		allocInfo.memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, properties);
-
-		if (vkAllocateMemory(Device, &allocInfo, nullptr, &outImageMemory) != VK_SUCCESS) {
-			throw std::runtime_error("[CreateImage] Failed to allocate image memory!");
-		}
-
-		vkBindImageMemory(Device, outImage, outImageMemory, 0);
-	}
-
-	/** Create image viewport */
-	void CreateImageView(
-		VkImageView& outImageView,
-		const VkImage& inImage,
-		const VkFormat inFormat,
-		const VkImageAspectFlags aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT,
-		const uint32_t levelCount = 1)
-	{
-		VkImageViewCreateInfo viewInfo{};
-		viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-		viewInfo.image = inImage;
-		viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-		viewInfo.format = inFormat;
-		viewInfo.subresourceRange.aspectMask = aspectFlags; // VK_IMAGE_ASPECT_COLOR_BIT 颜色 VK_IMAGE_ASPECT_DEPTH_BIT 深度
-		viewInfo.subresourceRange.baseMipLevel = 0;
-		viewInfo.subresourceRange.levelCount = levelCount;
-		viewInfo.subresourceRange.baseArrayLayer = 0;
-		viewInfo.subresourceRange.layerCount = 1;
-
-		if (vkCreateImageView(Device, &viewInfo, nullptr, &outImageView) != VK_SUCCESS) {
-			throw std::runtime_error("[CreateImageView] Failed to Create texture image View!");
-		}
-	}
-
-	/** Create sampler */
-	void CreateSampler(
-		VkSampler& outSampler,
-		const VkFilter filter = VK_FILTER_LINEAR,
-		const VkSamplerAddressMode addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-		const VkSamplerAddressMode addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-		const VkSamplerAddressMode addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-		const VkBorderColor borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
-		const uint32_t miplevels = 1)
-	{
-		VkPhysicalDeviceProperties properties{};
-		vkGetPhysicalDeviceProperties(PhysicalDevice, &properties);
-
-		VkSamplerCreateInfo samplerInfo{};
-		samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-		samplerInfo.magFilter = filter;
-		samplerInfo.minFilter = filter;
-		samplerInfo.addressModeU = addressModeU;
-		samplerInfo.addressModeV = addressModeV;
-		samplerInfo.addressModeW = addressModeW;
-		// Disable various anisotropy here, some hardware may not support it
-		samplerInfo.anisotropyEnable = VK_TRUE;
-		samplerInfo.maxAnisotropy = properties.limits.maxSamplerAnisotropy;
-		samplerInfo.borderColor = borderColor;
-		samplerInfo.unnormalizedCoordinates = VK_FALSE;
-		samplerInfo.compareEnable = VK_FALSE;
-		samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
-		samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-		samplerInfo.minLod = 0.0f;
-		samplerInfo.maxLod = static_cast<float>(miplevels);
-		samplerInfo.mipLodBias = 0.0f;
-
-		if (vkCreateSampler(Device, &samplerInfo, nullptr, &outSampler) != VK_SUCCESS) {
-			throw std::runtime_error("[CreateSampler] Failed to Create texture sampler!");
-		}
-	}
-private:
 	/** Load the compiled shader binary SPV file into a memory buffer */
 	static std::vector<char> LoadShaderSource(const XkString& filename)
 	{
@@ -6935,7 +7012,7 @@ private:
 	}
 	
 	// Find file search Profabs folder and Content folder.
-	XkString AssetPathSearch(const XkString& inFilename)
+	static XkString AssetPathSearch(const XkString& inFilename)
 	{
 		XkString Result = inFilename;
 		XkString FileNameWithSuffix = inFilename.substr(inFilename.find_last_of("/\\") + 1);
@@ -7026,59 +7103,6 @@ private:
 		}
 		return Result;
 	}
-
-	/** Select the content to print for Debug information */
-	void PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo)
-	{
-		createInfo = {};
-		createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-		createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-		createInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-		createInfo.pfnUserCallback = DebugCallback;
-	}
-
-	/** Check if validation layer support is available */
-	bool CheckValidationLayerSupport()
-	{
-		uint32_t layerCount;
-		vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
-
-		std::vector<VkLayerProperties> availableLayers(layerCount);
-		vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data());
-
-		for (const char* layerName : ValidationLayers)
-		{
-			bool layerFound = false;
-
-			for (const auto& layerProperties : availableLayers)
-			{
-				if (strcmp(layerName, layerProperties.layerName) == 0)
-				{
-					layerFound = true;
-					break;
-				}
-			}
-
-			if (!layerFound)
-			{
-				return false;
-			}
-		}
-
-		return true;
-	}
-
-	/** Callback function for printing debug information, can be used to handle debug messages */
-	static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, VkDebugUtilsMessageTypeFlagsEXT messageType, const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData)
-	{
-		XkString output = XkString("[LOG]: ") + XkString(pCallbackData->pMessage);
-		std::cerr << output.c_str() << std::endl;
-#ifdef NDEBUG
-		OutputDebugString(output.c_str());
-#endif
-		return VK_FALSE;
-	}
-
 };
 
 

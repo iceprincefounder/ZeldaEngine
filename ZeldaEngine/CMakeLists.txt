@@ -67,41 +67,37 @@ function(BuildEngine ENGINE_NAME)
 	# Set application icon
 	BuildAppIcon(MAIN_CPP ICONS ${CONTENT_DIR}/AppData/vulkan_renderer.ico ${CONTENT_DIR}/AppData/vulkan_renderer.icns)
 
-	# Compile shader and copy texures
+	# Compile shader and copy resources
+	file(GLOB SHADER_SOURCES "${SHADERS_DIR}/*")
 	add_custom_command(
-	OUTPUT SHADER_COMPILE
-	COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADERS_PATH}
-	COMMAND glslc ARGS -g ${SHADERS_DIR}/BaseFS.frag -o ${SHADERS_PATH}/Base_FS.spv
-	COMMAND glslc ARGS -g ${SHADERS_DIR}/BaseVS.vert -o ${SHADERS_PATH}/Base_VS.spv
-	COMMAND glslc ARGS -g ${SHADERS_DIR}/BaseInstancedVS.vert -o ${SHADERS_PATH}/BaseInstanced_VS.spv
-	COMMAND glslc ARGS -g ${SHADERS_DIR}/BaseSceneFS.frag -o ${SHADERS_PATH}/BaseScene_FS.spv
-	COMMAND glslc ARGS -g ${SHADERS_DIR}/BaseLightingFS.frag -o ${SHADERS_PATH}/BaseLighting_FS.spv
-	COMMAND glslc ARGS -g ${SHADERS_DIR}/ShadowmapFS.frag -o ${SHADERS_PATH}/Shadowmap_FS.spv
-	COMMAND glslc ARGS -g ${SHADERS_DIR}/ShadowmapVS.vert -o ${SHADERS_PATH}/Shadowmap_VS.spv
-	COMMAND glslc ARGS -g ${SHADERS_DIR}/ShadowmapInstancedVS.vert -o ${SHADERS_PATH}/ShadowmapInstanced_VS.spv
-	COMMAND glslc ARGS -g ${SHADERS_DIR}/BackgroundFS.frag -o ${SHADERS_PATH}/Background_FS.spv
-	COMMAND glslc ARGS -g ${SHADERS_DIR}/BackgroundVS.vert -o ${SHADERS_PATH}/Background_VS.spv
-	COMMAND glslc ARGS -g ${SHADERS_DIR}/SkydomeFS.frag -o ${SHADERS_PATH}/Skydome_FS.spv
-	COMMAND glslc ARGS -g ${SHADERS_DIR}/SkydomeVS.vert -o ${SHADERS_PATH}/Skydome_VS.spv
-	WORKING_DIRECTORY ${SHADERS_DIR}
-	DEPENDS ${SHADERS_DIR} ${SHADER_SOURCES}
-	COMMENT "Compiling Shaders Success!"
-	VERBATIM
-	COMMAND ${CMAKE_COMMAND} -E copy_directory ${CONTENT_DIR}/ ${CONTENT_PATH}/
-	COMMENT "Copying Content Success!"
-	VERBATIM
-	COMMAND ${CMAKE_COMMAND} -E make_directory ${PROFABS_PATH}
-	COMMENT "Create Profabs Dir Success!"
+		# Compile multiple shaders but just test Base_VS.spv output
+		OUTPUT ${SHADERS_PATH}/Base_VS.spv
+		COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADERS_PATH}
+		COMMAND glslc ARGS -g ${SHADERS_DIR}/BaseFS.frag -o ${SHADERS_PATH}/Base_FS.spv
+		COMMAND glslc ARGS -g ${SHADERS_DIR}/BaseVS.vert -o ${SHADERS_PATH}/Base_VS.spv
+		COMMAND glslc ARGS -g ${SHADERS_DIR}/BaseInstancedVS.vert -o ${SHADERS_PATH}/BaseInstanced_VS.spv
+		COMMAND glslc ARGS -g ${SHADERS_DIR}/BaseSceneFS.frag -o ${SHADERS_PATH}/BaseScene_FS.spv
+		COMMAND glslc ARGS -g ${SHADERS_DIR}/BaseLightingFS.frag -o ${SHADERS_PATH}/BaseLighting_FS.spv
+		COMMAND glslc ARGS -g ${SHADERS_DIR}/ShadowmapFS.frag -o ${SHADERS_PATH}/Shadowmap_FS.spv
+		COMMAND glslc ARGS -g ${SHADERS_DIR}/ShadowmapVS.vert -o ${SHADERS_PATH}/Shadowmap_VS.spv
+		COMMAND glslc ARGS -g ${SHADERS_DIR}/ShadowmapInstancedVS.vert -o ${SHADERS_PATH}/ShadowmapInstanced_VS.spv
+		COMMAND glslc ARGS -g ${SHADERS_DIR}/BackgroundFS.frag -o ${SHADERS_PATH}/Background_FS.spv
+		COMMAND glslc ARGS -g ${SHADERS_DIR}/BackgroundVS.vert -o ${SHADERS_PATH}/Background_VS.spv
+		COMMAND glslc ARGS -g ${SHADERS_DIR}/SkydomeFS.frag -o ${SHADERS_PATH}/Skydome_FS.spv
+		COMMAND glslc ARGS -g ${SHADERS_DIR}/SkydomeVS.vert -o ${SHADERS_PATH}/Skydome_VS.spv
+		WORKING_DIRECTORY ${SHADERS_DIR}
+		DEPENDS ${SHADER_SOURCES}
+		COMMENT "Compiling Shaders Success!"
+		VERBATIM
+		COMMAND ${CMAKE_COMMAND} -E copy_directory ${CONTENT_DIR}/ ${CONTENT_PATH}/
+		COMMENT "Copying Content Success!"
+		VERBATIM
+		COMMAND ${CMAKE_COMMAND} -E make_directory ${PROFABS_PATH}
+		COMMENT "Create Profabs Dir Success!"
 	)
 
 	set(COMPILE_SHADER_TARGET ${ENGINE_NAME}Shaders)
-	set(SHADER_SOURCES 
-		${SHADERS_DIR}/BaseFS.frag ${SHADERS_DIR}/BaseVS.vert ${SHADERS_DIR}/BaseInstancedVS.vert
-		${SHADERS_DIR}/BaseSceneFS.frag ${SHADERS_DIR}/BaseLightingFS.frag
-		${SHADERS_DIR}/ShadowmapFS.frag ${SHADERS_DIR}/ShadowmapVS.vert ${SHADERS_DIR}/ShadowmapInstancedVS.vert
-		${SHADERS_DIR}/BackgroundFS.frag ${SHADERS_DIR}/BackgroundVS.vert
-		${SHADERS_DIR}/SkydomeFS.frag ${SHADERS_DIR}/SkydomeVS.vert)
-	add_custom_target(${COMPILE_SHADER_TARGET} ALL DEPENDS SHADER_COMPILE SOURCES ${SHADER_SOURCES})
+	add_custom_target(${COMPILE_SHADER_TARGET} ALL DEPENDS ${SHADERS_PATH}/Base_VS.spv SOURCES ${SHADER_SOURCES})
 
 	# add executable
 	if(WIN32)
