@@ -85,13 +85,13 @@
 #define VERTEX_BUFFER_BIND_ID 0
 #define INSTANCE_BUFFER_BIND_ID 1
 #define ENABLE_WIREFRAME false
-#define ENABLE_INDIRECT_DRAW true
-#define ENABLE_INDIRECT_DRAW_TEST true
+#define ENABLE_INDIRECT_DRAW false
+#define ENABLE_INDIRECT_DRAW_TEST false
 #define ENABLE_DEFERRED_SHADING true
 // @TODO: Implement Bindless Feature
 // @see https://dev.to/gasim/implementing-bindless-design-in-vulkan-34no
 #define ENABLE_BINDLESS false
-#define ENABLE_GENERATE_WORLD true
+#define ENABLE_GENERATE_WORLD false
 #define ENABLE_FUTURE_ENGINE true // experimental feature for future engine techniques
 
 #define ASSETS(x) AssetPathSearch(x)
@@ -4733,7 +4733,7 @@ public:
 #endif
 	}
 
-	/** Read vertices and indices from a file */
+	/** Read vertices and indices or meshlet from a file and create vertex buffers.*/
 	template<typename T>
 	void CreateMeshVertexBuffers(T& outMesh, const XkString& filename)
 	{
