@@ -71,33 +71,31 @@ function(BuildEngine ENGINE_NAME)
 	file(GLOB SHADER_SOURCES "${SHADERS_DIR}/*")
 	add_custom_command(
 		# Compile multiple shaders but just test Base_VS.spv output
-		OUTPUT ${SHADERS_PATH}/Base_VS.spv
+		OUTPUT always_rebuild
 		COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADERS_PATH}
-		COMMAND glslc ARGS -g ${SHADERS_DIR}/BaseFS.frag -o ${SHADERS_PATH}/Base_FS.spv
-		COMMAND glslc ARGS -g ${SHADERS_DIR}/BaseVS.vert -o ${SHADERS_PATH}/Base_VS.spv
-		COMMAND glslc ARGS -g ${SHADERS_DIR}/BaseInstancedVS.vert -o ${SHADERS_PATH}/BaseInstanced_VS.spv
-		COMMAND glslc ARGS -g ${SHADERS_DIR}/BaseSceneFS.frag -o ${SHADERS_PATH}/BaseScene_FS.spv
-		COMMAND glslc ARGS -g ${SHADERS_DIR}/BaseLightingFS.frag -o ${SHADERS_PATH}/BaseLighting_FS.spv
-		COMMAND glslc ARGS -g ${SHADERS_DIR}/ShadowmapFS.frag -o ${SHADERS_PATH}/Shadowmap_FS.spv
-		COMMAND glslc ARGS -g ${SHADERS_DIR}/ShadowmapVS.vert -o ${SHADERS_PATH}/Shadowmap_VS.spv
-		COMMAND glslc ARGS -g ${SHADERS_DIR}/ShadowmapInstancedVS.vert -o ${SHADERS_PATH}/ShadowmapInstanced_VS.spv
-		COMMAND glslc ARGS -g ${SHADERS_DIR}/BackgroundFS.frag -o ${SHADERS_PATH}/Background_FS.spv
-		COMMAND glslc ARGS -g ${SHADERS_DIR}/BackgroundVS.vert -o ${SHADERS_PATH}/Background_VS.spv
-		COMMAND glslc ARGS -g ${SHADERS_DIR}/SkydomeFS.frag -o ${SHADERS_PATH}/Skydome_FS.spv
-		COMMAND glslc ARGS -g ${SHADERS_DIR}/SkydomeVS.vert -o ${SHADERS_PATH}/Skydome_VS.spv
+		COMMAND glslc ARGS -g ${SHADERS_DIR}/Base.frag -o ${SHADERS_PATH}/Base.frag.spv
+		COMMAND glslc ARGS -g ${SHADERS_DIR}/Base.vert -o ${SHADERS_PATH}/Base.vert.spv
+		COMMAND glslc ARGS -g ${SHADERS_DIR}/BaseInstanced.vert -o ${SHADERS_PATH}/BaseInstanced.vert.spv
+		COMMAND glslc ARGS -g ${SHADERS_DIR}/BaseScene.frag -o ${SHADERS_PATH}/BaseScene.frag.spv
+		COMMAND glslc ARGS -g ${SHADERS_DIR}/BaseLighting.frag -o ${SHADERS_PATH}/BaseLighting.frag.spv
+		COMMAND glslc ARGS -g ${SHADERS_DIR}/Shadowmap.frag -o ${SHADERS_PATH}/Shadowmap.frag.spv
+		COMMAND glslc ARGS -g ${SHADERS_DIR}/Shadowmap.vert -o ${SHADERS_PATH}/Shadowmap.vert.spv
+		COMMAND glslc ARGS -g ${SHADERS_DIR}/ShadowmapInstanced.vert -o ${SHADERS_PATH}/ShadowmapInstanced.vert.spv
+		COMMAND glslc ARGS -g ${SHADERS_DIR}/Background.frag -o ${SHADERS_PATH}/Background.frag.spv
+		COMMAND glslc ARGS -g ${SHADERS_DIR}/Background.vert -o ${SHADERS_PATH}/Background.vert.spv
+		COMMAND glslc ARGS -g ${SHADERS_DIR}/Skydome.frag -o ${SHADERS_PATH}/Skydome.frag.spv
+		COMMAND glslc ARGS -g ${SHADERS_DIR}/Skydome.vert -o ${SHADERS_PATH}/Skydome.vert.spv
 		WORKING_DIRECTORY ${SHADERS_DIR}
 		DEPENDS ${SHADER_SOURCES}
-		COMMENT "Compiling Shaders Success!"
-		VERBATIM
 		COMMAND ${CMAKE_COMMAND} -E copy_directory ${CONTENT_DIR}/ ${CONTENT_PATH}/
-		COMMENT "Copying Content Success!"
 		VERBATIM
 		COMMAND ${CMAKE_COMMAND} -E make_directory ${PROFABS_PATH}
-		COMMENT "Create Profabs Dir Success!"
+		VERBATIM
+		COMMENT "Update Zelda Engine Resource Success!"
 	)
 
 	set(COMPILE_SHADER_TARGET ${ENGINE_NAME}Shaders)
-	add_custom_target(${COMPILE_SHADER_TARGET} ALL DEPENDS ${SHADERS_PATH}/Base_VS.spv SOURCES ${SHADER_SOURCES})
+	add_custom_target(${COMPILE_SHADER_TARGET} ALL DEPENDS always_rebuild SOURCES ${SHADER_SOURCES})
 
 	# add executable
 	if(WIN32)

@@ -53,6 +53,7 @@
 #include <tiny_obj_loader.h>
 
 #define ENABLE_GLSLANG_COMPILER true
+#define ENABLE_GLSLANG_COMPILER_TEST false
 #if ENABLE_GLSLANG_COMPILER
 #include <glslang/Public/ShaderLang.h>
 #include <glslang/Public/ResourceLimits.h>
@@ -77,7 +78,6 @@
 #define BG_SAMPLER_NUMBER 1
 #define SKY_SAMPLER_NUMBER 1
 #define GBUFFER_SAMPLER_NUMBER 6
-#define POINT_LIGHTS_NUM 16
 #define MAX_DIRECTIONAL_LIGHTS_NUM 16
 #define MAX_POINT_LIGHTS_NUM 512
 #define MAX_SPOT_LIGHTS_NUM 16
@@ -86,7 +86,7 @@
 #define INSTANCE_BUFFER_BIND_ID 1
 #define ENABLE_WIREFRAME false
 #define ENABLE_INDIRECT_DRAW false
-#define ENABLE_INDIRECT_DRAW_TEST false
+#define ENABLE_INDIRECT_DRAW_TEST (ENABLE_INDIRECT_DRAW && false)
 #define ENABLE_DEFERRED_SHADING true
 // @TODO: Implement Bindless Feature
 // @see https://dev.to/gasim/implementing-bindless-design-in-vulkan-34no
@@ -98,6 +98,8 @@
 
 typedef std::string XkString;
 
+
+#if ENABLE_GLSLANG_COMPILER
 /**
 * Helper class to generate SPIRV code from GLSL source
 * A very simple version of the glslValidator application
@@ -145,9 +147,9 @@ public:
 			outShaderStage = VK_SHADER_STAGE_CALLABLE_BIT_KHR;
 #ifndef __APPLE__
 		else if (ext == "mesh")
-			outShaderStage = VK_SHADER_STAGE_MESH_BIT_NV /*VK_SHADER_STAGE_MESH_BIT_EXT*/;
+			outShaderStage = VK_SHADER_STAGE_MESH_BIT_EXT;
 		else if (ext == "task")
-			outShaderStage = VK_SHADER_STAGE_TASK_BIT_NV /*VK_SHADER_STAGE_TASK_BIT_EXT*/;
+			outShaderStage = VK_SHADER_STAGE_TASK_BIT_EXT;
 #endif
 		else
 		{
@@ -346,6 +348,7 @@ public:
 
 glslang::EShTargetLanguage XkShaderCompiler::EnvTargetLanguage = glslang::EShTargetLanguage::EShTargetNone;
 glslang::EShTargetLanguageVersion XkShaderCompiler::EnvTargetLanguageVersion = static_cast<glslang::EShTargetLanguageVersion>(0);
+#endif // ENABLE_GLSLANG_COMPILER
 
 enum class EXkRenderFlags : uint16_t
 {
@@ -682,6 +685,7 @@ struct XkMesh
 
 typedef XkMesh XkInstancedMesh;
 
+#if ENABLE_INDIRECT_DRAW
 /** Meshlet data block*/
 struct XkMeshlet 
 {
@@ -694,7 +698,7 @@ struct XkMeshlet
 	float ConeApex[3];
 	float ConeAxis[3];
 	float ConeCutoff;
-	float Pad;
+	uint32_t BindlessContext;
 };
 
 /** Meshlet group set data block, all meshlets make up a model mesh data.*/
@@ -711,6 +715,7 @@ struct XkMeshIndirect : public XkMesh
 };
 
 typedef XkMeshIndirect XkInstancedMeshIndirect;
+#endif // ENABLE_INDIRECT_DRAW
 
 /* Uber shader used by BasePass.*/
 struct XkMaterialParameters
@@ -764,6 +769,7 @@ struct XkRenderInstancedObject : public XkRenderBase
 	XkInstancedMesh Mesh;
 };
 
+#if ENABLE_INDIRECT_DRAW
 struct XkRenderObjectIndirectBase : public XkRenderBase
 {
 	VkBuffer IndirectCommandsBuffer;
@@ -780,7 +786,7 @@ struct XkRenderInstancedObjectIndirect : public XkRenderObjectIndirectBase
 {
 	XkInstancedMeshIndirect Mesh;
 };
-
+#endif // ENABLE_INDIRECT_DRAW
 typedef XkRenderObject FRenderDeferredObject;
 typedef XkRenderInstancedObject FRenderDeferredInstancedObject;
 
@@ -811,15 +817,6 @@ struct XkLight
 		return *this;
 	}
 };
-
-#if ENABLE_FUTURE_ENGINE
-struct XkFutureObject
-{
-	XkMesh Mesh;
-	XkMeshletSet MeshletSet;
-};
-
-#endif
 
 const std::vector<const char*> ValidationLayers = { "VK_LAYER_KHRONOS_validation" };
 const std::vector<const char*> DeviceExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
@@ -1016,16 +1013,15 @@ class XkZeldaEngineApp
 	struct XkScene {
 		std::vector<XkRenderObject> RenderObjects;
 		std::vector<XkRenderInstancedObject> RenderInstancedObjects;
-		std::vector<XkRenderObjectIndirect> RenderIndirectObjects;
-		std::vector<XkRenderInstancedObjectIndirect> RenderIndirectInstancedObjects;
-		std::vector<FRenderDeferredObject> RenderDeferredObjects;
-		std::vector<FRenderDeferredInstancedObject> RenderDeferredInstancedObjects;
-
 		VkDescriptorSetLayout* DescriptorSetLayout = nullptr;
 #if ENABLE_INDIRECT_DRAW
+		std::vector<XkRenderObjectIndirect> RenderIndirectObjects;
+		std::vector<XkRenderInstancedObjectIndirect> RenderIndirectInstancedObjects;
 		VkDescriptorSetLayout* IndirectDescriptorSetLayout = nullptr;
 #endif
 #if ENABLE_DEFERRED_SHADING
+		std::vector<FRenderDeferredObject> RenderDeferredObjects;
+		std::vector<FRenderDeferredInstancedObject> RenderDeferredInstancedObjects;
 		VkDescriptorSetLayout* DeferredSceneDescriptorSetLayout = nullptr;
 		VkDescriptorSetLayout* DeferredLightingDescriptorSetLayout = nullptr;
 #endif
@@ -1033,16 +1029,15 @@ class XkZeldaEngineApp
 		{
 			RenderObjects.clear();
 			RenderInstancedObjects.clear();
-			RenderIndirectObjects.clear();
-			RenderIndirectInstancedObjects.clear();
-			RenderDeferredObjects.clear();
-			RenderDeferredInstancedObjects.clear();
-
 			DescriptorSetLayout = nullptr;
 #if ENABLE_INDIRECT_DRAW
+			RenderIndirectObjects.clear();
+			RenderIndirectInstancedObjects.clear();
 			IndirectDescriptorSetLayout = nullptr;
 #endif
 #if ENABLE_DEFERRED_SHADING
+			RenderDeferredObjects.clear();
+			RenderDeferredInstancedObjects.clear();
 			DeferredSceneDescriptorSetLayout = nullptr;
 			DeferredLightingDescriptorSetLayout = nullptr;
 #endif
@@ -1399,8 +1394,10 @@ class XkZeldaEngineApp
 	struct XkShadowmapPass {
 		std::vector<XkRenderObject*> RenderObjects;
 		std::vector<XkRenderInstancedObject*> RenderInstancedObjects;
+#if ENABLE_INDIRECT_DRAW
 		std::vector<XkRenderObjectIndirect*> RenderIndirectObjects;
 		std::vector<XkRenderInstancedObjectIndirect*> RenderIndirectInstancedObjects;
+#endif
 		float zNear, zFar;
 		int32_t Width, Height;
 		VkFormat Format;
@@ -1736,7 +1733,9 @@ public:
 		CreateRenderPass(); // Create main SwapChain render pass
 		CreateFramebuffers(); // Create main SwapChain frame buffers
 		CreateCommandPool(); // Create command pool to keep all commands inside
-		// CreateShaderSPIRVs(); // Create and compile shader into SPIRV hardware-agnostic intermediate bytecode
+#if ENABLE_GLSLANG_COMPILER
+		CreateShaderSPIRVs(); // Create and compile shader into SPIRV hardware-agnostic intermediate bytecode
+#endif
 		CreateUniformBuffers(); // Create uniform buffers
 		CreateShadowmapPass(); // Create shadow depths render pass
 		CreateSkydomePass(); // Create sky dome sphere render pass
@@ -2190,7 +2189,9 @@ protected:
 		}
 
 		VkPhysicalDeviceFeatures deviceFeatures{};
+#if ENABLE_INDIRECT_DRAW
 		deviceFeatures.multiDrawIndirect = VK_TRUE;
+#endif
 		deviceFeatures.samplerAnisotropy = VK_TRUE;
 		deviceFeatures.fillModeNonSolid = ENABLE_WIREFRAME ? VK_TRUE : VK_FALSE;
 #if ENABLE_BINDLESS
@@ -2478,19 +2479,20 @@ protected:
 		}
 	}
 
+#if ENABLE_GLSLANG_COMPILER
 	void CreateShaderSPIRVs()
 	{
-		XkString file_path = __FILE__;
-		XkString dir_path = file_path.substr(0, file_path.rfind("\\"));
-		// @TODO: compile shaders with glslang
-		std::vector<uint8_t> Source; VkShaderStageFlagBits ShaderStage;
-		XkShaderCompiler::ReadShaderFile(Source, ShaderStage, "Content/meshshader.mesh");
-		std::vector<uint32_t> spirv;
-		XkString info_log;
-		XkShaderCompiler ShaderCompiler;
-		ShaderCompiler.CompileToSpirv(ShaderStage, Source, "main", "", {}, spirv, info_log);
-		XkShaderCompiler::SaveShaderFile("Content/Meshshader.spv", spirv);
+		// "Content/Shaders" would be compiled by Cmake, we modify and compile shaders in runtime
+		std::filesystem::path DirPath = "Content/Shaders";
+		for (const auto& entry : std::filesystem::recursive_directory_iterator(DirPath)) 
+		{
+			if (entry.is_regular_file())
+			{
+				CompileShaders(entry.path().string());
+			}
+		}
 	}
+#endif
 
 	/** Create uniform buffers (UBO) */
 	void CreateUniformBuffers()
@@ -2649,16 +2651,16 @@ protected:
 			ShadowmapPass.Pipelines,
 			ShadowmapPass.PipelineLayout,
 			ShadowmapPass.RenderPass,
-			"Shaders/Shadowmap_VS.spv",
-			"Shaders/Shadowmap_FS.spv", 
+			"Shaders/Shadowmap.vert.spv",
+			"Shaders/Shadowmap.frag.spv", 
 			EXkRenderFlags::Shadow);
 
 		RHICreateGraphicsPipelines(
 			ShadowmapPass.PipelinesInstanced,
 			ShadowmapPass.PipelineLayout,
 			ShadowmapPass.RenderPass,
-			"Shaders/ShadowmapInstanced_VS.spv",
-			"Shaders/Shadowmap_FS.spv",
+			"Shaders/ShadowmapInstanced.vert.spv",
+			"Shaders/Shadowmap.frag.spv",
 		EXkRenderFlags::Instanced | EXkRenderFlags::Shadow);
 	}
 
@@ -2689,8 +2691,8 @@ protected:
 			BackgroundPass.Pipelines,
 			BackgroundPass.PipelineLayout,
 			MainRenderPass,
-			"Shaders/Background_VS.spv",
-			"Shaders/Background_FS.spv",
+			"Shaders/Background.vert.spv",
+			"Shaders/Background.frag.spv",
 			EXkRenderFlags::Background | EXkRenderFlags::ScreenRect);
 	}
 
@@ -2742,8 +2744,8 @@ protected:
 			SkydomePass.Pipelines,
 			SkydomePass.PipelineLayout,
 			MainRenderPass,
-			"Shaders/Skydome_VS.spv",
-			"Shaders/Skydome_FS.spv",
+			"Shaders/Skydome.vert.spv",
+			"Shaders/Skydome.frag.spv",
 			EXkRenderFlags::VertexIndexed | EXkRenderFlags::Skydome);
 		XkString skydome_obj = "Content/Models/skydome.obj";
 		CreateMeshVertexBuffers(SkydomePass.SkydomeMesh, skydome_obj);
@@ -2762,15 +2764,15 @@ protected:
 				BasePass.Pipelines,
 				BasePass.PipelineLayout,
 				MainRenderPass,
-				"Shaders/Base_VS.spv",
-				"Shaders/Base_FS.spv",
+				"Shaders/Base.vert.spv",
+				"Shaders/Base.frag.spv",
 				EXkRenderFlags::VertexIndexed);
 			RHICreateGraphicsPipelines(
 				BasePass.PipelinesInstanced,
 				BasePass.PipelineLayout,
 				MainRenderPass,
-				"Shaders/BaseInstanced_VS.spv",
-				"Shaders/Base_FS.spv",
+				"Shaders/BaseInstanced.vert.spv",
+				"Shaders/Base.frag.spv",
 				EXkRenderFlags::Instanced);
 		}
 		//~ End of creating scene, including VBO, UBO, textures, etc.
@@ -2788,15 +2790,15 @@ protected:
 				BasePass.IndirectPipelines,
 				BasePass.IndirectPipelineLayout,
 				MainRenderPass,
-				"Shaders/Base_VS.spv",
-				"Shaders/Base_FS.spv",
+				"Shaders/Base.vert.spv",
+				"Shaders/Base.frag.spv",
 				EXkRenderFlags::VertexIndexed);
 			RHICreateGraphicsPipelines(
 				BasePass.IndirectPipelinesInstanced,
 				BasePass.IndirectPipelineLayout,
 				MainRenderPass,
-				"Shaders/BaseInstanced_VS.spv",
-				"Shaders/Base_FS.spv",
+				"Shaders/BaseInstanced.vert.spv",
+				"Shaders/Base.frag.spv",
 				EXkRenderFlags::Instanced);
 		}
 		//~ End create indirect BasePass
@@ -2961,15 +2963,15 @@ protected:
 				BasePass.DeferredScenePipelines,
 				BasePass.DeferredScenePipelineLayout,
 				BasePass.DeferredSceneRenderPass,
-				"Shaders/Base_VS.spv",
-				"Shaders/BaseScene_FS.spv",
+				"Shaders/Base.vert.spv",
+				"Shaders/BaseScene.frag.spv",
 				EXkRenderFlags::VertexIndexed | EXkRenderFlags::DeferredScene);
 			RHICreateGraphicsPipelines(
 				BasePass.DeferredScenePipelinesInstanced,
 				BasePass.DeferredScenePipelineLayout,
 				BasePass.DeferredSceneRenderPass,
-				"Shaders/BaseInstanced_VS.spv",
-				"Shaders/BaseScene_FS.spv",
+				"Shaders/BaseInstanced.vert.spv",
+				"Shaders/BaseScene.frag.spv",
 				EXkRenderFlags::Instanced | EXkRenderFlags::DeferredScene);
 
 			/** Create DescriptorSetLayout for Lighting*/
@@ -2990,8 +2992,8 @@ protected:
 				BasePass.DeferredLightingPipelines,
 				BasePass.DeferredLightingPipelineLayout,
 				MainRenderPass,
-				"Shaders/Background_VS.spv",
-				"Shaders/BaseLighting_FS.spv",
+				"Shaders/Background.vert.spv",
+				"Shaders/BaseLighting.frag.spv",
 				EXkRenderFlags::ScreenRect | EXkRenderFlags::NoDepthTest | EXkRenderFlags::DeferredLighting);
 		}
 		//~ End create deferred BasePass
@@ -3313,6 +3315,7 @@ protected:
 					ShadowmapPass.PipelineLayout, 0, 1, &ShadowmapPass.DescriptorSets[CurrentFrame], 0, nullptr);
 				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderInstancedObject->Mesh.Indices.size()), renderInstancedObject->InstanceCount, 0, 0, 0);
 			}
+#if ENABLE_INDIRECT_DRAW
 			// 【阴影】渲染Indirect场景
 			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ShadowmapPass.Pipelines[0]);
 			vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -3385,7 +3388,7 @@ protected:
 					}
 				}
 			}
-
+#endif // ENABLE_INDIRECT_DRAW
 			// 【阴影】结束 RenderPass
 			vkCmdEndRenderPass(commandBuffer);
 		}
@@ -3932,6 +3935,7 @@ protected:
 			vkDestroyBuffer(Device, renderInstancedObject.Mesh.InstancedBuffer, nullptr);
 			vkFreeMemory(Device, renderInstancedObject.Mesh.InstancedBufferMemory, nullptr);
 		}
+#if ENABLE_INDIRECT_DRAW
 		for (size_t i = 0; i < Scene.RenderIndirectObjects.size(); i++)
 		{
 			XkRenderObjectIndirect& RenderIndirectObject = Scene.RenderIndirectObjects[i];
@@ -3953,6 +3957,7 @@ protected:
 			vkDestroyBuffer(Device, RenderIndirectInstancedObject.IndirectCommandsBuffer, nullptr);
 			vkFreeMemory(Device, RenderIndirectInstancedObject.IndirectCommandsBufferMemory, nullptr);
 		}
+#endif
 #if ENABLE_DEFERRED_SHADING
 		for (size_t i = 0; i < Scene.RenderDeferredObjects.size(); i++)
 		{
@@ -4400,6 +4405,10 @@ public:
 				}
 				if (ImGui::BeginMenu("Run"))
 				{
+					if (ImGui::MenuItem("Compile Shaders [Ctrl + G]"))
+					{
+						CreateShaderSPIRVs();
+					}
 					if (ImGui::MenuItem("Compile Scripts [Ctrl + B]"))
 					{
 					}
@@ -4409,7 +4418,6 @@ public:
 					if (ImGui::MenuItem("Run the Game [Ctrl + R]"))
 					{
 					}
-
 					ImGui::EndMenu();
 				}
 				if (ImGui::BeginMenu("Window"))
@@ -4679,8 +4687,10 @@ public:
 
 		ShadowmapPass.RenderObjects.clear();
 		ShadowmapPass.RenderInstancedObjects.clear();
+#if ENABLE_INDIRECT_DRAW
 		ShadowmapPass.RenderIndirectObjects.clear();
 		ShadowmapPass.RenderIndirectInstancedObjects.clear();
+#endif
 		BasePass.RenderObjects.clear();
 		BasePass.RenderInstancedObjects.clear();
 #if ENABLE_INDIRECT_DRAW
@@ -4737,7 +4747,12 @@ public:
 	template<typename T>
 	void CreateMeshVertexBuffers(T& outMesh, const XkString& filename)
 	{
-		if constexpr (std::is_same<T, XkMeshIndirect>::value)
+		if constexpr (std::is_same<T, XkMesh>::value)
+		{
+			LoadMeshAsset(filename, outMesh.Vertices, outMesh.Indices);
+		}
+#if ENABLE_INDIRECT_DRAW
+		else if constexpr (std::is_same<T, XkMeshIndirect>::value)
 		{
 			LoadMeshletAsset(filename, outMesh.Vertices, outMesh.Indices, outMesh.MeshletSet.Meshlets, outMesh.MeshletSet.MeshletVertices, outMesh.MeshletSet.MeshletTriangles);
 
@@ -4761,10 +4776,7 @@ public:
 				outMesh.Indices[i] = outMesh.MeshletSet.MeshletTriangles[i];
 			}
 		}
-		else if constexpr (std::is_same<T, XkMesh>::value)
-		{
-			LoadMeshAsset(filename, outMesh.Vertices, outMesh.Indices);
-		}
+#endif
 		else
 		{
 			assert(true);
@@ -6798,6 +6810,35 @@ protected:
 	// Standard File Path Help Functions
 	////////////////////////////////////////////////////////////////////////////
 
+#if ENABLE_GLSLANG_COMPILER
+	static void CompileShaders(const XkString& FilePath)
+	{
+		XkString Subfix = ".spv";
+		std::filesystem::path InputFilePath = FilePath;
+		std::filesystem::path OutputFilePath = FilePath + Subfix;
+		if (InputFilePath.extension() == Subfix)
+		{
+			// this is a spirv file, don't compile it
+			return;
+		}
+		if (std::filesystem::exists(OutputFilePath))
+		{
+			auto ftime1 = std::filesystem::last_write_time(FilePath);
+			auto ftime2 = std::filesystem::last_write_time(OutputFilePath);
+			if (ftime1 <= ftime2)
+			{
+				return;
+			}
+		}
+		std::vector<uint8_t> Source; VkShaderStageFlagBits ShaderStage;
+		XkShaderCompiler::ReadShaderFile(Source, ShaderStage, FilePath.c_str());
+		std::vector<uint32_t> spirv;
+		XkString info_log;
+		XkShaderCompiler ShaderCompiler;
+		ShaderCompiler.CompileToSpirv(ShaderStage, Source, "main", "", {}, spirv, info_log);
+		XkShaderCompiler::SaveShaderFile(OutputFilePath.string(), spirv);
+	}
+#endif
 	/** Load the compiled shader binary SPV file into a memory buffer */
 	static std::vector<char> LoadShaderSource(const XkString& filename)
 	{
@@ -6884,7 +6925,7 @@ protected:
 			}
 		}
 	}
-
+#if ENABLE_INDIRECT_DRAW
 	/** Load meshlet struct data file*/
 	static void LoadMeshletAsset(const XkString& filename, std::vector<XkVertex>& outVertices, std::vector<uint32_t>& outIndices,
 		std::vector<XkMeshlet>& outMeshlets, std::vector<uint32_t>& outMeshletVertices, std::vector<uint8_t>& outMeshletTriangles)
@@ -7010,7 +7051,8 @@ protected:
 		}
 		outIndices = cache.indices;
 	}
-	
+#endif
+
 	// Find file search Profabs folder and Content folder.
 	static XkString AssetPathSearch(const XkString& inFilename)
 	{
