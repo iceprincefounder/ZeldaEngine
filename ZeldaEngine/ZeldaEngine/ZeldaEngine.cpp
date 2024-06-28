@@ -686,13 +686,10 @@ struct XkMesh
 	VkBuffer IndexBuffer;									// Index buffer
 	VkDeviceMemory IndexBufferMemory;						// Index buffer memory
 
-	uint32_t InstanceCount = 1;								// Instance count
 	// only init with instanced mesh
 	VkBuffer InstancedBuffer;								// Instanced buffer
 	VkDeviceMemory InstancedBufferMemory;					// Instanced buffer memory
 };
-
-typedef XkMesh XkInstancedMesh;
 
 #if ENABLE_INDIRECT_DRAW
 /** Meshlet data block*/
@@ -711,19 +708,12 @@ struct XkMeshlet
 };
 
 /** Meshlet group set data block, all meshlets make up a model mesh data.*/
-struct XkMeshletSet 
+struct XkMeshIndirect : public XkMesh
 {
 	std::vector<XkMeshlet> Meshlets;
 	std::vector<uint32_t> MeshletVertices;
 	std::vector<uint8_t> MeshletTriangles;
 };
-
-struct XkMeshIndirect : public XkMesh
-{
-	XkMeshletSet MeshletSet;
-};
-
-typedef XkMeshIndirect XkInstancedMeshIndirect;
 #endif // ENABLE_INDIRECT_DRAW
 
 /* Uber shader used by BasePass.*/
@@ -756,9 +746,9 @@ struct XkMaterial
 
 struct XkRenderBase
 {
+	uint32_t InstanceCount = 1;
 	XkTransfrom Transfrom;
 	XkMaterial Material;
-	uint32_t InstanceCount;
 	
 	// @TODO: use model's own transform
 	/* uniform buffers contain model transform */
@@ -773,31 +763,17 @@ struct XkRenderObject : public XkRenderBase
 	XkMesh Mesh;
 };
 
-struct XkRenderInstancedObject : public XkRenderBase
-{
-	XkInstancedMesh Mesh;
-};
-
 #if ENABLE_INDIRECT_DRAW
-struct XkRenderObjectIndirectBase : public XkRenderBase
+struct XkRenderObjectIndirect : public XkRenderBase
 {
+	XkMeshIndirect Mesh;
+
+	// Indirect draw buffer
 	VkBuffer IndirectCommandsBuffer;
 	VkDeviceMemory IndirectCommandsBufferMemory;
 	std::vector<VkDrawIndexedIndirectCommand> IndirectCommands;
 };
-
-struct XkRenderObjectIndirect : public XkRenderObjectIndirectBase
-{
-	XkMeshIndirect Mesh;
-};
-
-struct XkRenderInstancedObjectIndirect : public XkRenderObjectIndirectBase
-{
-	XkInstancedMeshIndirect Mesh;
-};
 #endif // ENABLE_INDIRECT_DRAW
-typedef XkRenderObject FRenderDeferredObject;
-typedef XkRenderInstancedObject FRenderDeferredInstancedObject;
 
 /** Common light data struct.*/
 struct XkLight
@@ -1021,16 +997,16 @@ class XkZeldaEngineApp
 	/** Hold all the render object proxy data.*/
 	struct XkScene {
 		std::vector<XkRenderObject> RenderObjects;
-		std::vector<XkRenderInstancedObject> RenderInstancedObjects;
+		std::vector<XkRenderObject> RenderInstancedObjects;
 		VkDescriptorSetLayout* DescriptorSetLayout = nullptr;
 #if ENABLE_INDIRECT_DRAW
 		std::vector<XkRenderObjectIndirect> RenderIndirectObjects;
-		std::vector<XkRenderInstancedObjectIndirect> RenderIndirectInstancedObjects;
+		std::vector<XkRenderObjectIndirect> RenderIndirectInstancedObjects;
 		VkDescriptorSetLayout* IndirectDescriptorSetLayout = nullptr;
 #endif
 #if ENABLE_DEFERRED_SHADING
-		std::vector<FRenderDeferredObject> RenderDeferredObjects;
-		std::vector<FRenderDeferredInstancedObject> RenderDeferredInstancedObjects;
+		std::vector<XkRenderObject> RenderDeferredObjects;
+		std::vector<XkRenderObject> RenderDeferredInstancedObjects;
 		VkDescriptorSetLayout* DeferredSceneDescriptorSetLayout = nullptr;
 		VkDescriptorSetLayout* DeferredLightingDescriptorSetLayout = nullptr;
 #endif
@@ -1402,10 +1378,10 @@ class XkZeldaEngineApp
 	/** ShadowmapPass vulkan resources*/
 	struct XkShadowmapPass {
 		std::vector<XkRenderObject*> RenderObjects;
-		std::vector<XkRenderInstancedObject*> RenderInstancedObjects;
+		std::vector<XkRenderObject*> RenderInstancedObjects;
 #if ENABLE_INDIRECT_DRAW
 		std::vector<XkRenderObjectIndirect*> RenderIndirectObjects;
-		std::vector<XkRenderInstancedObjectIndirect*> RenderIndirectInstancedObjects;
+		std::vector<XkRenderObjectIndirect*> RenderIndirectInstancedObjects;
 #endif
 		float zNear, zFar;
 		int32_t Width, Height;
@@ -1421,7 +1397,9 @@ class XkZeldaEngineApp
 		std::vector<VkDescriptorSet> DescriptorSets;
 		VkPipelineLayout PipelineLayout;
 		std::vector<VkPipeline> Pipelines;
-		std::vector<VkPipeline> PipelinesInstanced;
+		std::vector<VkPipelineCache> PipelineCaches;
+		std::vector<VkPipeline> InstancedPipelines;
+		std::vector<VkPipelineCache> InstancedPipelineCaches;
 		std::vector<VkBuffer> UniformBuffers;
 		std::vector<VkDeviceMemory> UniformBuffersMemory;
 	} ShadowmapPass;
@@ -1439,6 +1417,7 @@ class XkZeldaEngineApp
 		std::vector<VkDescriptorSet> DescriptorSets;
 		VkPipelineLayout PipelineLayout;
 		std::vector<VkPipeline> Pipelines;
+		std::vector<VkPipelineCache> PipelineCaches;
 	} BackgroundPass;
 
 	/** SkydomePass vulkan resources*/
@@ -1455,33 +1434,40 @@ class XkZeldaEngineApp
 		std::vector<VkDescriptorSet> DescriptorSets;
 		VkPipelineLayout PipelineLayout;
 		std::vector<VkPipeline> Pipelines;
+		std::vector<VkPipelineCache> PipelineCaches;
 	} SkydomePass;
 
 	/** 构建 BasePass 需要的 Vulkan 资源*/
 	struct XkBasePass {
 		std::vector<XkRenderObject*> RenderObjects;
-		std::vector<XkRenderInstancedObject*> RenderInstancedObjects;
+		std::vector<XkRenderObject*> RenderInstancedObjects;
 		VkDescriptorSetLayout DescriptorSetLayout;
 		VkPipelineLayout PipelineLayout;
 		std::vector<VkPipeline> Pipelines;
-		std::vector<VkPipeline> PipelinesInstanced;
+		std::vector<VkPipelineCache> PipelineCaches;
+		std::vector<VkPipeline> InstancedPipelines;
+		std::vector<VkPipelineCache> InstancedPipelineCaches;
 
 #if ENABLE_INDIRECT_DRAW
 		std::vector<XkRenderObjectIndirect*> RenderIndirectObjects;
-		std::vector<XkRenderInstancedObjectIndirect*> RenderIndirectInstancedObjects;
+		std::vector<XkRenderObjectIndirect*> RenderIndirectInstancedObjects;
 		VkDescriptorSetLayout IndirectDescriptorSetLayout;
 		VkPipelineLayout IndirectPipelineLayout;
 		std::vector<VkPipeline> IndirectPipelines;
-		std::vector<VkPipeline> IndirectPipelinesInstanced;
+		std::vector<VkPipelineCache> IndirectPipelineCaches;
+		std::vector<VkPipeline> IndirectInstancedPipelines;
+		std::vector<VkPipelineCache> IndirectInstancedPipelineCaches;
 #endif
 
 #if ENABLE_DEFERRED_SHADING
-		std::vector<FRenderDeferredObject*> RenderDeferredObjects;
-		std::vector<FRenderDeferredInstancedObject*> RenderDeferredInstancedObjects;
+		std::vector<XkRenderObject*> RenderDeferredObjects;
+		std::vector<XkRenderObject*> RenderDeferredInstancedObjects;
 		VkDescriptorSetLayout DeferredSceneDescriptorSetLayout;
 		VkPipelineLayout DeferredScenePipelineLayout;
 		std::vector<VkPipeline> DeferredScenePipelines;
-		std::vector<VkPipeline> DeferredScenePipelinesInstanced;
+		std::vector<VkPipelineCache> DeferredScenePipelineCaches;
+		std::vector<VkPipeline> DeferredSceneInstancedPipelines;
+		std::vector<VkPipelineCache> DeferredSceneInstancedPipelineCaches;
 		VkFramebuffer DeferredSceneFrameBuffer;
 		VkRenderPass DeferredSceneRenderPass;
 		VkDescriptorSetLayout DeferredLightingDescriptorSetLayout;
@@ -1489,6 +1475,7 @@ class XkZeldaEngineApp
 		std::vector<VkDescriptorSet> DeferredLightingDescriptorSets;
 		VkPipelineLayout DeferredLightingPipelineLayout;
 		std::vector<VkPipeline> DeferredLightingPipelines;
+		std::vector<VkPipelineCache> DeferredLightingPipelineCaches;
 #endif
 	} BasePass;
 
@@ -2654,10 +2641,11 @@ protected:
 		RHICreatePipelineLayout(ShadowmapPass.PipelineLayout, ShadowmapPass.DescriptorSetLayout);
 
 		ShadowmapPass.Pipelines.resize(1);
-		ShadowmapPass.PipelinesInstanced.resize(1);
-
+		ShadowmapPass.PipelineCaches.resize(1);
+		ShadowmapPass.InstancedPipelines.resize(1);
+		ShadowmapPass.InstancedPipelineCaches.resize(1);
 		RHICreateGraphicsPipelines(
-			ShadowmapPass.Pipelines,
+			ShadowmapPass.Pipelines, ShadowmapPass.PipelineCaches,
 			ShadowmapPass.PipelineLayout,
 			ShadowmapPass.RenderPass,
 			"Shaders/Shadowmap.vert.spv",
@@ -2665,7 +2653,7 @@ protected:
 			EXkRenderFlags::Shadow);
 
 		RHICreateGraphicsPipelines(
-			ShadowmapPass.PipelinesInstanced,
+			ShadowmapPass.InstancedPipelines, ShadowmapPass.InstancedPipelineCaches,
 			ShadowmapPass.PipelineLayout,
 			ShadowmapPass.RenderPass,
 			"Shaders/ShadowmapInstanced.vert.spv",
@@ -2695,9 +2683,10 @@ protected:
 
 		uint32_t PipelineNum = 1;
 		BackgroundPass.Pipelines.resize(PipelineNum);
+		BackgroundPass.PipelineCaches.resize(PipelineNum);
 		RHICreatePipelineLayout(BackgroundPass.PipelineLayout, BackgroundPass.DescriptorSetLayout, EXkRenderFlags::Background);
 		RHICreateGraphicsPipelines(
-			BackgroundPass.Pipelines,
+			BackgroundPass.Pipelines, BackgroundPass.PipelineCaches,
 			BackgroundPass.PipelineLayout,
 			MainRenderPass,
 			"Shaders/Background.vert.spv",
@@ -2748,9 +2737,10 @@ protected:
 
 		uint32_t PipelineNum = 1;
 		SkydomePass.Pipelines.resize(PipelineNum);
+		SkydomePass.PipelineCaches.resize(PipelineNum);
 		RHICreatePipelineLayout(SkydomePass.PipelineLayout, SkydomePass.DescriptorSetLayout, EXkRenderFlags::Skydome);
 		RHICreateGraphicsPipelines(
-			SkydomePass.Pipelines,
+			SkydomePass.Pipelines, SkydomePass.PipelineCaches,
 			SkydomePass.PipelineLayout,
 			MainRenderPass,
 			"Shaders/Skydome.vert.spv",
@@ -2767,17 +2757,19 @@ protected:
 			uint32_t SpecConstantsCount = GlobalConstants.SpecConstantsCount;
 			RHICreateDescriptorSetLayout(BasePass.DescriptorSetLayout);
 			BasePass.Pipelines.resize(SpecConstantsCount);
-			BasePass.PipelinesInstanced.resize(SpecConstantsCount);
+			BasePass.PipelineCaches.resize(SpecConstantsCount);
+			BasePass.InstancedPipelines.resize(SpecConstantsCount);
+			BasePass.InstancedPipelineCaches.resize(SpecConstantsCount);
 			RHICreatePipelineLayout(BasePass.PipelineLayout, BasePass.DescriptorSetLayout);
 			RHICreateGraphicsPipelines(
-				BasePass.Pipelines,
+				BasePass.Pipelines, BasePass.PipelineCaches,
 				BasePass.PipelineLayout,
 				MainRenderPass,
 				"Shaders/Base.vert.spv",
 				"Shaders/Base.frag.spv",
 				EXkRenderFlags::VertexIndexed);
 			RHICreateGraphicsPipelines(
-				BasePass.PipelinesInstanced,
+				BasePass.InstancedPipelines, BasePass.InstancedPipelineCaches,
 				BasePass.PipelineLayout,
 				MainRenderPass,
 				"Shaders/BaseInstanced.vert.spv",
@@ -2793,17 +2785,19 @@ protected:
 			RHICreateDescriptorSetLayout(BasePass.IndirectDescriptorSetLayout);
 			uint32_t SpecConstantsCount = GlobalConstants.SpecConstantsCount;
 			BasePass.IndirectPipelines.resize(SpecConstantsCount);
-			BasePass.IndirectPipelinesInstanced.resize(SpecConstantsCount);
+			BasePass.IndirectPipelineCaches.resize(SpecConstantsCount);
+			BasePass.IndirectInstancedPipelines.resize(SpecConstantsCount);
+			BasePass.IndirectInstancedPipelineCaches.resize(SpecConstantsCount);
 			RHICreatePipelineLayout(BasePass.IndirectPipelineLayout, BasePass.IndirectDescriptorSetLayout);
 			RHICreateGraphicsPipelines(
-				BasePass.IndirectPipelines,
+				BasePass.IndirectPipelines, BasePass.IndirectPipelineCaches,
 				BasePass.IndirectPipelineLayout,
 				MainRenderPass,
 				"Shaders/Base.vert.spv",
 				"Shaders/Base.frag.spv",
 				EXkRenderFlags::VertexIndexed);
 			RHICreateGraphicsPipelines(
-				BasePass.IndirectPipelinesInstanced,
+				BasePass.IndirectInstancedPipelines, BasePass.IndirectInstancedPipelineCaches,
 				BasePass.IndirectPipelineLayout,
 				MainRenderPass,
 				"Shaders/BaseInstanced.vert.spv",
@@ -2966,17 +2960,19 @@ protected:
 
 			RHICreateDescriptorSetLayout(BasePass.DeferredSceneDescriptorSetLayout, EXkRenderFlags::DeferredScene);
 			BasePass.DeferredScenePipelines.resize(GlobalConstants.SpecConstantsCount);
-			BasePass.DeferredScenePipelinesInstanced.resize(GlobalConstants.SpecConstantsCount);
+			BasePass.DeferredScenePipelineCaches.resize(GlobalConstants.SpecConstantsCount);
+			BasePass.DeferredSceneInstancedPipelines.resize(GlobalConstants.SpecConstantsCount);
+			BasePass.DeferredSceneInstancedPipelineCaches.resize(GlobalConstants.SpecConstantsCount);
 			RHICreatePipelineLayout(BasePass.DeferredScenePipelineLayout, BasePass.DeferredSceneDescriptorSetLayout);
 			RHICreateGraphicsPipelines(
-				BasePass.DeferredScenePipelines,
+				BasePass.DeferredScenePipelines, BasePass.DeferredScenePipelineCaches,
 				BasePass.DeferredScenePipelineLayout,
 				BasePass.DeferredSceneRenderPass,
 				"Shaders/Base.vert.spv",
 				"Shaders/BaseScene.frag.spv",
 				EXkRenderFlags::VertexIndexed | EXkRenderFlags::DeferredScene);
 			RHICreateGraphicsPipelines(
-				BasePass.DeferredScenePipelinesInstanced,
+				BasePass.DeferredSceneInstancedPipelines, BasePass.DeferredSceneInstancedPipelineCaches,
 				BasePass.DeferredScenePipelineLayout,
 				BasePass.DeferredSceneRenderPass,
 				"Shaders/BaseInstanced.vert.spv",
@@ -2997,8 +2993,9 @@ protected:
 
 			RHICreatePipelineLayout(BasePass.DeferredLightingPipelineLayout, BasePass.DeferredLightingDescriptorSetLayout);
 			BasePass.DeferredLightingPipelines.resize(GlobalConstants.SpecConstantsCount);
+			BasePass.DeferredLightingPipelineCaches.resize(GlobalConstants.SpecConstantsCount);
 			RHICreateGraphicsPipelines(
-				BasePass.DeferredLightingPipelines,
+				BasePass.DeferredLightingPipelines, BasePass.DeferredLightingPipelineCaches,
 				BasePass.DeferredLightingPipelineLayout,
 				MainRenderPass,
 				"Shaders/Background.vert.spv",
@@ -3297,9 +3294,9 @@ protected:
 				depthBiasSlope);
 
 			// 【阴影】渲染场景
+			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ShadowmapPass.Pipelines[0]);
 			for (size_t i = 0; i < ShadowmapPass.RenderObjects.size(); i++)
 			{
-				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ShadowmapPass.Pipelines[0]);
 				XkRenderObject* renderObject = ShadowmapPass.RenderObjects[i];
 				VkBuffer objectVertexBuffers[] = { renderObject->Mesh.VertexBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
@@ -3310,10 +3307,10 @@ protected:
 				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderObject->Mesh.Indices.size()), 1, 0, 0, 0);
 			}
 			// 【阴影】渲染 Instanced 场景
+			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ShadowmapPass.InstancedPipelines[0]);
 			for (size_t i = 0; i < ShadowmapPass.RenderInstancedObjects.size(); i++)
 			{
-				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ShadowmapPass.PipelinesInstanced[0]);
-				XkRenderInstancedObject* renderInstancedObject = ShadowmapPass.RenderInstancedObjects[i];
+				XkRenderObject* renderInstancedObject = ShadowmapPass.RenderInstancedObjects[i];
 				VkBuffer objectVertexBuffers[] = { renderInstancedObject->Mesh.VertexBuffer };
 				VkBuffer objectInstanceBuffers[] = { renderInstancedObject->Mesh.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
@@ -3361,12 +3358,12 @@ protected:
 				}
 			}
 			// 【阴影】渲染Indirect Instanced 场景
-			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ShadowmapPass.PipelinesInstanced[0]);
+			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ShadowmapPass.InstancedPipelines[0]);
 			vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
 				ShadowmapPass.PipelineLayout, 0, 1, &ShadowmapPass.DescriptorSets[CurrentFrame], 0, nullptr);
 			for (size_t i = 0; i < ShadowmapPass.RenderIndirectInstancedObjects.size(); i++)
 			{
-				XkRenderInstancedObjectIndirect* RenderIndirectInstancedObject = ShadowmapPass.RenderIndirectInstancedObjects[i];
+				XkRenderObjectIndirect* RenderIndirectInstancedObject = ShadowmapPass.RenderIndirectInstancedObjects[i];
 				VkBuffer objectVertexBuffers[] = { RenderIndirectInstancedObject->Mesh.VertexBuffer };
 				VkBuffer objectInstanceBuffers[] = { RenderIndirectInstancedObject->Mesh.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
@@ -3451,12 +3448,10 @@ protected:
 			vkCmdSetScissor(commandBuffer, 0, 1, &mainScissor);
 
 			// 【延迟渲染】渲染场景
+			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BasePass.DeferredScenePipelines[GlobalConstants.SpecConstants]);
 			for (size_t i = 0; i < BasePass.RenderDeferredObjects.size(); i++)
 			{
-				uint32_t SpecConstants = GlobalConstants.SpecConstants;
-				VkPipeline baseScenePassPipeline = BasePass.DeferredScenePipelines[SpecConstants];
-				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, baseScenePassPipeline);
-				FRenderDeferredObject* renderObject = BasePass.RenderDeferredObjects[i];
+				XkRenderObject* renderObject = BasePass.RenderDeferredObjects[i];
 				VkBuffer objectVertexBuffers[] = { renderObject->Mesh.VertexBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
@@ -3469,12 +3464,10 @@ protected:
 				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderObject->Mesh.Indices.size()), 1, 0, 0, 0);
 			}
 			// 【延迟渲染】渲染 Instanced 场景
+			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BasePass.DeferredSceneInstancedPipelines[GlobalConstants.SpecConstants]);
 			for (size_t i = 0; i < BasePass.RenderDeferredInstancedObjects.size(); i++)
 			{
-				uint32_t SpecConstants = GlobalConstants.SpecConstants;
-				VkPipeline BaseScenePassPipelineInstanced = BasePass.DeferredScenePipelinesInstanced[SpecConstants];
-				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BaseScenePassPipelineInstanced);
-				FRenderDeferredInstancedObject* renderInstancedObject = BasePass.RenderDeferredInstancedObjects[i];
+				XkRenderObject* renderInstancedObject = BasePass.RenderDeferredInstancedObjects[i];
 				VkBuffer objectVertexBuffers[] = { renderInstancedObject->Mesh.VertexBuffer };
 				VkBuffer objectInstanceBuffers[] = { renderInstancedObject->Mesh.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
@@ -3556,10 +3549,9 @@ protected:
 			vkCmdSetViewport(commandBuffer, 0, 1, &mainViewport);
 
 			// 【主场景】渲染场景
+			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BasePass.Pipelines[GlobalConstants.SpecConstants]);
 			for (size_t i = 0; i < BasePass.RenderObjects.size(); i++)
 			{
-				VkPipeline baseScenePassPipeline = BasePass.Pipelines[GlobalConstants.SpecConstants];
-				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, baseScenePassPipeline);
 				XkRenderObject* renderObject = BasePass.RenderObjects[i];
 				VkBuffer objectVertexBuffers[] = { renderObject->Mesh.VertexBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
@@ -3574,11 +3566,10 @@ protected:
 				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(renderObject->Mesh.Indices.size()), 1, 0, 0, 0);
 			}
 			// 【主场景】渲染 Instanced 场景
+			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BasePass.InstancedPipelines[GlobalConstants.SpecConstants]);
 			for (size_t i = 0; i < BasePass.RenderInstancedObjects.size(); i++)
 			{
-				VkPipeline BaseScenePassPipelineInstanced = BasePass.PipelinesInstanced[GlobalConstants.SpecConstants];
-				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BaseScenePassPipelineInstanced);
-				XkRenderInstancedObject* renderInstancedObject = BasePass.RenderInstancedObjects[i];
+				XkRenderObject* renderInstancedObject = BasePass.RenderInstancedObjects[i];
 				VkBuffer objectVertexBuffers[] = { renderInstancedObject->Mesh.VertexBuffer };
 				VkBuffer objectInstanceBuffers[] = { renderInstancedObject->Mesh.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
@@ -3595,10 +3586,9 @@ protected:
 			}
 #if ENABLE_INDIRECT_DRAW
 			// 【主场景】渲染 Indirect 场景
+			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BasePass.IndirectPipelines[GlobalConstants.SpecConstants]);
 			for (size_t i = 0; i < BasePass.RenderIndirectObjects.size(); i++)
 			{
-				VkPipeline indirectScenePassPipeline = BasePass.IndirectPipelines[GlobalConstants.SpecConstants];
-				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, indirectScenePassPipeline);
 				XkRenderObjectIndirect* RenderIndirectObject = BasePass.RenderIndirectObjects[i];
 				VkBuffer objectVertexBuffers[] = { RenderIndirectObject->Mesh.VertexBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
@@ -3652,11 +3642,10 @@ protected:
 				}
 			}
 			// 【主场景】渲染 Indirect Instanced 场景
+			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BasePass.IndirectInstancedPipelines[GlobalConstants.SpecConstants]);
 			for (size_t i = 0; i < BasePass.RenderIndirectInstancedObjects.size(); i++)
 			{
-				VkPipeline indirectScenePassPipelineInstanced = BasePass.IndirectPipelinesInstanced[GlobalConstants.SpecConstants];
-				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, indirectScenePassPipelineInstanced);
-				XkRenderInstancedObjectIndirect* RenderIndirectInstancedObject = BasePass.RenderIndirectInstancedObjects[i];
+				XkRenderObjectIndirect* RenderIndirectInstancedObject = BasePass.RenderIndirectInstancedObjects[i];
 				VkBuffer objectVertexBuffers[] = { RenderIndirectInstancedObject->Mesh.VertexBuffer };
 				VkBuffer objectInstanceBuffers[] = { RenderIndirectInstancedObject->Mesh.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
@@ -3853,10 +3842,12 @@ protected:
 		for (size_t i = 0; i < ShadowmapPass.Pipelines.size(); i++)
 		{
 			vkDestroyPipeline(Device, ShadowmapPass.Pipelines[i], nullptr);
+			vkDestroyPipelineCache(Device, ShadowmapPass.PipelineCaches[i], nullptr);
 		}
-		for (size_t i = 0; i < ShadowmapPass.PipelinesInstanced.size(); i++)
+		for (size_t i = 0; i < ShadowmapPass.InstancedPipelines.size(); i++)
 		{
-			vkDestroyPipeline(Device, ShadowmapPass.PipelinesInstanced[i], nullptr);
+			vkDestroyPipeline(Device, ShadowmapPass.InstancedPipelines[i], nullptr);
+			vkDestroyPipelineCache(Device, ShadowmapPass.InstancedPipelineCaches[i], nullptr);
 		}
 		vkDestroyImageView(Device, ShadowmapPass.ImageView, nullptr);
 		vkDestroySampler(Device, ShadowmapPass.Sampler, nullptr);
@@ -3895,6 +3886,7 @@ protected:
 		for (size_t i = 0; i < SkydomePass.Pipelines.size(); i++)
 		{
 			vkDestroyPipeline(Device, SkydomePass.Pipelines[i], nullptr);
+			vkDestroyPipelineCache(Device, SkydomePass.PipelineCaches[i], nullptr);
 		}
 		vkDestroyDescriptorPool(Device, SkydomePass.DescriptorPool, nullptr);
 		vkDestroyBuffer(Device, SkydomePass.SkydomeMesh.VertexBuffer, nullptr);
@@ -3922,6 +3914,7 @@ protected:
 		for (size_t i = 0; i < BackgroundPass.Pipelines.size(); i++)
 		{
 			vkDestroyPipeline(Device, BackgroundPass.Pipelines[i], nullptr);
+			vkDestroyPipelineCache(Device, BackgroundPass.PipelineCaches[i], nullptr);
 		}
 		vkDestroyDescriptorPool(Device, BackgroundPass.DescriptorPool, nullptr);
 		CleanupBackgroundResource();
@@ -3932,56 +3925,30 @@ protected:
 		// Clean up Scene
 		for (size_t i = 0; i < Scene.RenderObjects.size(); i++)
 		{
-			XkRenderObject& renderObject = Scene.RenderObjects[i];
-			DestroyRenderObject(renderObject);
+			DestroyRenderObject(Scene.RenderObjects[i]);
 		}
 		for (size_t i = 0; i < Scene.RenderInstancedObjects.size(); i++)
 		{
-			XkRenderInstancedObject& renderInstancedObject = Scene.RenderInstancedObjects[i];
-
-			DestroyRenderObject(renderInstancedObject);
-
-			vkDestroyBuffer(Device, renderInstancedObject.Mesh.InstancedBuffer, nullptr);
-			vkFreeMemory(Device, renderInstancedObject.Mesh.InstancedBufferMemory, nullptr);
+			DestroyRenderObject(Scene.RenderInstancedObjects[i]);
 		}
 #if ENABLE_INDIRECT_DRAW
 		for (size_t i = 0; i < Scene.RenderIndirectObjects.size(); i++)
 		{
-			XkRenderObjectIndirect& RenderIndirectObject = Scene.RenderIndirectObjects[i];
-
-			DestroyRenderObject(RenderIndirectObject);
-
-			vkDestroyBuffer(Device, RenderIndirectObject.IndirectCommandsBuffer, nullptr);
-			vkFreeMemory(Device, RenderIndirectObject.IndirectCommandsBufferMemory, nullptr);
+			DestroyRenderObject(Scene.RenderIndirectObjects[i]);
 		}
 		for (size_t i = 0; i < Scene.RenderIndirectInstancedObjects.size(); i++)
 		{
-			XkRenderInstancedObjectIndirect& RenderIndirectInstancedObject = Scene.RenderIndirectInstancedObjects[i];
-
-			DestroyRenderObject(RenderIndirectInstancedObject);
-
-			vkDestroyBuffer(Device, RenderIndirectInstancedObject.Mesh.InstancedBuffer, nullptr);
-			vkFreeMemory(Device, RenderIndirectInstancedObject.Mesh.InstancedBufferMemory, nullptr);
-
-			vkDestroyBuffer(Device, RenderIndirectInstancedObject.IndirectCommandsBuffer, nullptr);
-			vkFreeMemory(Device, RenderIndirectInstancedObject.IndirectCommandsBufferMemory, nullptr);
+			DestroyRenderObject(Scene.RenderIndirectInstancedObjects[i]);
 		}
 #endif
 #if ENABLE_DEFERRED_SHADING
 		for (size_t i = 0; i < Scene.RenderDeferredObjects.size(); i++)
 		{
-			FRenderDeferredObject& renderObject = Scene.RenderDeferredObjects[i];
-
-			DestroyRenderObject(renderObject);
+			DestroyRenderObject(Scene.RenderDeferredObjects[i]);
 		}
 		for (size_t i = 0; i < Scene.RenderDeferredInstancedObjects.size(); i++)
 		{
-			FRenderDeferredInstancedObject& renderInstancedObject = Scene.RenderDeferredInstancedObjects[i];
-
-			DestroyRenderObject(renderInstancedObject);
-
-			vkDestroyBuffer(Device, renderInstancedObject.Mesh.InstancedBuffer, nullptr);
-			vkFreeMemory(Device, renderInstancedObject.Mesh.InstancedBufferMemory, nullptr);
+			DestroyRenderObject(Scene.RenderDeferredInstancedObjects[i]);
 		}
 #endif
 		Scene.Reset();
@@ -3994,9 +3961,11 @@ protected:
 		vkDestroyPipelineLayout(Device, BasePass.PipelineLayout, nullptr);
 		for (size_t i = 0; i < BasePass.Pipelines.size(); i++)
 		{
-			assert(BasePass.Pipelines.size() == BasePass.PipelinesInstanced.size());
+			assert(BasePass.Pipelines.size() == BasePass.InstancedPipelines.size());
 			vkDestroyPipeline(Device, BasePass.Pipelines[i], nullptr);
-			vkDestroyPipeline(Device, BasePass.PipelinesInstanced[i], nullptr);
+			vkDestroyPipelineCache(Device, BasePass.PipelineCaches[i], nullptr);
+			vkDestroyPipeline(Device, BasePass.InstancedPipelines[i], nullptr);
+			vkDestroyPipelineCache(Device, BasePass.InstancedPipelineCaches[i], nullptr);
 		}
 
 #if ENABLE_INDIRECT_DRAW
@@ -4005,9 +3974,11 @@ protected:
 		vkDestroyPipelineLayout(Device, BasePass.IndirectPipelineLayout, nullptr);
 		for (size_t i = 0; i < BasePass.IndirectPipelines.size(); i++)
 		{
-			assert(BasePass.IndirectPipelines.size() == BasePass.IndirectPipelinesInstanced.size());
+			assert(BasePass.IndirectPipelines.size() == BasePass.IndirectInstancedPipelines.size());
 			vkDestroyPipeline(Device, BasePass.IndirectPipelines[i], nullptr);
-			vkDestroyPipeline(Device, BasePass.IndirectPipelinesInstanced[i], nullptr);
+			vkDestroyPipelineCache(Device, BasePass.IndirectPipelineCaches[i], nullptr);
+			vkDestroyPipeline(Device, BasePass.IndirectInstancedPipelines[i], nullptr);
+			vkDestroyPipelineCache(Device, BasePass.IndirectInstancedPipelineCaches[i], nullptr);
 		}
 #endif
 
@@ -4019,6 +3990,7 @@ protected:
 		for (size_t i = 0; i < BasePass.DeferredLightingPipelines.size(); i++)
 		{
 			vkDestroyPipeline(Device, BasePass.DeferredLightingPipelines[i], nullptr);
+			vkDestroyPipelineCache(Device, BasePass.DeferredLightingPipelineCaches[i], nullptr);
 		}
 		vkDestroyRenderPass(Device, BasePass.DeferredSceneRenderPass, nullptr);
 		vkDestroyFramebuffer(Device, BasePass.DeferredSceneFrameBuffer, nullptr);
@@ -4026,9 +3998,11 @@ protected:
 		vkDestroyPipelineLayout(Device, BasePass.DeferredScenePipelineLayout, nullptr);
 		for (size_t i = 0; i < BasePass.DeferredScenePipelines.size(); i++)
 		{
-			assert(BasePass.DeferredScenePipelines.size() == BasePass.DeferredScenePipelinesInstanced.size());
+			assert(BasePass.DeferredScenePipelines.size() == BasePass.DeferredSceneInstancedPipelines.size());
 			vkDestroyPipeline(Device, BasePass.DeferredScenePipelines[i], nullptr);
-			vkDestroyPipeline(Device, BasePass.DeferredScenePipelinesInstanced[i], nullptr);
+			vkDestroyPipelineCache(Device, BasePass.DeferredScenePipelineCaches[i], nullptr);
+			vkDestroyPipeline(Device, BasePass.DeferredSceneInstancedPipelines[i], nullptr);
+			vkDestroyPipelineCache(Device, BasePass.DeferredSceneInstancedPipelineCaches[i], nullptr);
 		}
 
 		vkDestroyImageView(Device, GBuffer.DepthStencilImageView, nullptr);
@@ -4246,9 +4220,9 @@ public:
 
 		object.IndirectCommands.clear();
 
-		for (uint32_t i = 0; i < object.Mesh.MeshletSet.Meshlets.size(); ++i)
+		for (uint32_t i = 0; i < object.Mesh.Meshlets.size(); ++i)
 		{
-			const XkMeshlet meshletSet = object.Mesh.MeshletSet.Meshlets[i];
+			const XkMeshlet meshletSet = object.Mesh.Meshlets[i];
 			// Member of XkMeshlet:
 			//uint32_t VertexOffset;
 			//uint32_t VertexCount;
@@ -4288,7 +4262,7 @@ public:
 				XkObjectDesc::GenerateInstance(Data, ObjectDesc);
 #if ENABLE_DEFERRED_SHADING
 				CreateRenderObjectsFromProfabs(
-					Scene.RenderDeferredObjects,
+					Scene.RenderDeferredInstancedObjects,
 					*Scene.DeferredSceneDescriptorSetLayout, ObjectDesc.ProfabName, Data);
 			}
 			else
@@ -4718,7 +4692,7 @@ public:
 		}
 		for (size_t i = 0; i < Scene.RenderInstancedObjects.size(); i++)
 		{
-			XkRenderInstancedObject* RenderInstancedObject = &Scene.RenderInstancedObjects[i];
+			XkRenderObject* RenderInstancedObject = &Scene.RenderInstancedObjects[i];
 			BasePass.RenderInstancedObjects.push_back(RenderInstancedObject);
 			ShadowmapPass.RenderInstancedObjects.push_back(RenderInstancedObject);
 		}
@@ -4731,7 +4705,7 @@ public:
 		}
 		for (size_t i = 0; i < Scene.RenderIndirectInstancedObjects.size(); i++)
 		{
-			XkRenderInstancedObjectIndirect* RenderIndirectInstancedObject = &Scene.RenderIndirectInstancedObjects[i];
+			XkRenderObjectIndirect* RenderIndirectInstancedObject = &Scene.RenderIndirectInstancedObjects[i];
 			BasePass.RenderIndirectInstancedObjects.push_back(RenderIndirectInstancedObject);
 			ShadowmapPass.RenderIndirectInstancedObjects.push_back(RenderIndirectInstancedObject);
 		}
@@ -4739,13 +4713,13 @@ public:
 #if ENABLE_DEFERRED_SHADING
 		for (size_t i = 0; i < Scene.RenderDeferredObjects.size(); i++)
 		{
-			FRenderDeferredObject* RenderDeferredObject = &Scene.RenderDeferredObjects[i];
+			XkRenderObject* RenderDeferredObject = &Scene.RenderDeferredObjects[i];
 			BasePass.RenderDeferredObjects.push_back(RenderDeferredObject);
 			ShadowmapPass.RenderObjects.push_back(RenderDeferredObject);
 		}
 		for (size_t i = 0; i < Scene.RenderDeferredInstancedObjects.size(); i++)
 		{
-			FRenderDeferredInstancedObject* RenderDeferredInstancedObject = &Scene.RenderDeferredInstancedObjects[i];
+			XkRenderObject* RenderDeferredInstancedObject = &Scene.RenderDeferredInstancedObjects[i];
 			BasePass.RenderDeferredInstancedObjects.push_back(RenderDeferredInstancedObject);
 			ShadowmapPass.RenderInstancedObjects.push_back(RenderDeferredInstancedObject);
 		}
@@ -4763,26 +4737,26 @@ public:
 #if ENABLE_INDIRECT_DRAW
 		else if constexpr (std::is_same<T, XkMeshIndirect>::value)
 		{
-			LoadMeshletAsset(filename, outMesh.Vertices, outMesh.Indices, outMesh.MeshletSet.Meshlets, outMesh.MeshletSet.MeshletVertices, outMesh.MeshletSet.MeshletTriangles);
+			LoadMeshletAsset(filename, outMesh.Vertices, outMesh.Indices, outMesh.Meshlets, outMesh.MeshletVertices, outMesh.MeshletTriangles);
 
 			std::vector<XkVertex> tmpVertices = outMesh.Vertices;
-			outMesh.Vertices.resize(outMesh.MeshletSet.MeshletVertices.size());
-			for (uint32_t i = 0; i < outMesh.MeshletSet.MeshletVertices.size(); i++)
+			outMesh.Vertices.resize(outMesh.MeshletVertices.size());
+			for (uint32_t i = 0; i < outMesh.MeshletVertices.size(); i++)
 			{
-				outMesh.Vertices[i] = tmpVertices[outMesh.MeshletSet.MeshletVertices[i]];
+				outMesh.Vertices[i] = tmpVertices[outMesh.MeshletVertices[i]];
 			}
-			outMesh.Indices.resize(outMesh.MeshletSet.MeshletTriangles.size());
+			outMesh.Indices.resize(outMesh.MeshletTriangles.size());
 			uint32_t triangleCount = 0;
 			uint32_t triangleOffset = 0;
-			for (uint32_t i = 0; i < outMesh.MeshletSet.Meshlets.size(); i++)
+			for (uint32_t i = 0; i < outMesh.Meshlets.size(); i++)
 			{
-				XkMeshlet meshlet = outMesh.MeshletSet.Meshlets[i];
+				XkMeshlet meshlet = outMesh.Meshlets[i];
 				triangleCount += meshlet.TriangleCount;
 				triangleOffset += meshlet.TriangleOffset;
 			}
-			for (uint32_t i = 0; i < outMesh.MeshletSet.MeshletTriangles.size(); i++)
+			for (uint32_t i = 0; i < outMesh.MeshletTriangles.size(); i++)
 			{
-				outMesh.Indices[i] = outMesh.MeshletSet.MeshletTriangles[i];
+				outMesh.Indices[i] = outMesh.MeshletTriangles[i];
 			}
 		}
 #endif
@@ -4936,6 +4910,18 @@ public:
 			vkDestroyBuffer(Device, outObject.TransfromUniformBuffers[i], nullptr);
 			vkFreeMemory(Device, outObject.TransfromUniformBuffersMemory[i], nullptr);
 		}
+
+		if (outObject.InstanceCount > 1)
+		{
+			vkDestroyBuffer(Device, outObject.Mesh.InstancedBuffer, nullptr);
+			vkFreeMemory(Device, outObject.Mesh.InstancedBufferMemory, nullptr);
+		}
+
+		if constexpr (std::is_same<T, XkRenderObjectIndirect>::value)
+		{
+			vkDestroyBuffer(Device, outObject.IndirectCommandsBuffer, nullptr);
+			vkFreeMemory(Device, outObject.IndirectCommandsBufferMemory, nullptr);
+		}
 	};
 
 	template <typename T>
@@ -5053,6 +5039,7 @@ protected:
 	/** Create graphics pipeline */
 	void RHICreateGraphicsPipelines(
 		std::vector<VkPipeline>& outPipelines,
+		std::vector<VkPipelineCache>& outPipelineCaches,
 		const VkPipelineLayout& inPipelineLayout,
 		const VkRenderPass& inRenderPass,
 		const XkString& inVertFilename,
@@ -5241,9 +5228,28 @@ protected:
 
 		// Use specialization constants optimize shader variants
 		const uint32_t SpecConstantsCount = static_cast<uint32_t>(outPipelines.size());
+		if (outPipelines.size() == outPipelineCaches.size())
+		{
+			VkPipelineCacheCreateInfo pipelineCacheCreateInfo = {};
+			pipelineCacheCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+			pipelineCacheCreateInfo.pNext = nullptr;
+			pipelineCacheCreateInfo.flags = 0; // 可以设置为0
+			pipelineCacheCreateInfo.initialDataSize = 0; // 如果没有现有的缓存数据，设置为0
+			pipelineCacheCreateInfo.pInitialData = nullptr; // 如果没有现有的缓存数据，设置为nullptr
+
+			for (uint32_t i = 0; i < SpecConstantsCount; i++)
+			{
+				if (outPipelineCaches[i] == nullptr)
+				{
+					if (vkCreatePipelineCache(Device, &pipelineCacheCreateInfo, nullptr, &outPipelineCaches[i]) != VK_SUCCESS)
+					{
+						throw std::runtime_error("[RHICreateGraphicsPipelines] Failed to Create pipeline cache!");
+					}
+				}
+			}
+		}
 		for (uint32_t i = 0; i < SpecConstantsCount; i++)
 		{
-			uint32_t SpecConstants = i;
 			VkSpecializationMapEntry specializationMapEntry = VkSpecializationMapEntry{};
 			specializationMapEntry.constantID = 0;
 			specializationMapEntry.offset = 0;
@@ -5252,10 +5258,15 @@ protected:
 			specializationCI.mapEntryCount = 1;
 			specializationCI.pMapEntries = &specializationMapEntry;
 			specializationCI.dataSize = sizeof(uint32_t);
-			specializationCI.pData = &SpecConstants;
+			specializationCI.pData = &i;
 			shaderStages[1].pSpecializationInfo = &specializationCI;
 
-			if (vkCreateGraphicsPipelines(Device, VK_NULL_HANDLE, 1, &pipelineCI, nullptr, &outPipelines[i]) != VK_SUCCESS)
+			VkPipelineCache PipelineCache = VK_NULL_HANDLE;
+			if (outPipelines.size() == outPipelineCaches.size())
+			{
+				PipelineCache = outPipelineCaches[i];
+			}
+			if (vkCreateGraphicsPipelines(Device, PipelineCache, 1, &pipelineCI, nullptr, &outPipelines[i]) != VK_SUCCESS)
 			{
 				throw std::runtime_error("[RHICreateGraphicsPipelines] Failed to Create graphics pipeline!");
 			}
@@ -6938,6 +6949,7 @@ protected:
 				}
 			}
 		}
+		// @TODO : Finish add support for FBX file format
 		else if (ext == ".fbx" || ext == ".FBX")
 		{
 			std::ifstream file(filename, std::ios::binary | std::ios::ate);
