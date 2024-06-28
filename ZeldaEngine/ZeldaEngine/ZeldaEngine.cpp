@@ -52,6 +52,10 @@
 #define TINYOBJLOADER_IMPLEMENTATION
 #include <tiny_obj_loader.h>
 
+#define OPENFBX_IMPLEMENTATION
+#include "libdeflate.h"
+#include "ofbx.h"
+
 #define ENABLE_GLSLANG_COMPILER true
 #define ENABLE_GLSLANG_COMPILER_TEST false
 #if ENABLE_GLSLANG_COMPILER
@@ -85,7 +89,7 @@
 #define VERTEX_BUFFER_BIND_ID 0
 #define INSTANCE_BUFFER_BIND_ID 1
 #define ENABLE_WIREFRAME false
-#define ENABLE_INDIRECT_DRAW false
+#define ENABLE_INDIRECT_DRAW true
 #define ENABLE_INDIRECT_DRAW_TEST (ENABLE_INDIRECT_DRAW && false)
 #define ENABLE_DEFERRED_SHADING true
 // @TODO: Implement Bindless Feature
@@ -528,7 +532,11 @@ struct XkVertex {
 namespace std {
 	template<> struct hash<XkVertex> {
 		size_t operator()(XkVertex const& vertex) const {
-			return ((hash<glm::vec3>()(vertex.Position) ^ (hash<glm::vec3>()(vertex.Color) << 1)) >> 1) ^ (hash<glm::vec2>()(vertex.TexCoord) << 1);
+			size_t h1 = std::hash<glm::vec3>()(vertex.Position);
+			size_t h2 = std::hash<glm::vec3>()(vertex.Normal);
+			size_t h3 = std::hash<glm::vec3>()(vertex.Color);
+			size_t h4 = std::hash<glm::vec2>()(vertex.TexCoord);
+			return h1 ^ (h2 << 1) ^ (h3 << 2) ^ (h4 << 3);
 		}
 	};
 }
@@ -671,16 +679,17 @@ struct XkMesh
 {
 	XkString FilePath;
 
-	std::vector<XkVertex> Vertices;                       // Vertex
-	std::vector<uint32_t> Indices;                       // Index
-	VkBuffer VertexBuffer;                               // Vertex buffer
-	VkDeviceMemory VertexBufferMemory;                   // Vertex buffer memory
-	VkBuffer IndexBuffer;                                // Index buffer
-	VkDeviceMemory IndexBufferMemory;                    // Index buffer memory
+	std::vector<XkVertex> Vertices;							// Vertex
+	std::vector<uint32_t> Indices;							// Index
+	VkBuffer VertexBuffer;									// Vertex buffer
+	VkDeviceMemory VertexBufferMemory;						// Vertex buffer memory
+	VkBuffer IndexBuffer;									// Index buffer
+	VkDeviceMemory IndexBufferMemory;						// Index buffer memory
 
+	uint32_t InstanceCount = 1;								// Instance count
 	// only init with instanced mesh
-	VkBuffer InstancedBuffer;                            // Instanced buffer
-	VkDeviceMemory InstancedBufferMemory;                // Instanced buffer memory
+	VkBuffer InstancedBuffer;								// Instanced buffer
+	VkDeviceMemory InstancedBufferMemory;					// Instanced buffer memory
 };
 
 typedef XkMesh XkInstancedMesh;
@@ -4279,7 +4288,7 @@ public:
 				XkObjectDesc::GenerateInstance(Data, ObjectDesc);
 #if ENABLE_DEFERRED_SHADING
 				CreateRenderObjectsFromProfabs(
-					Scene.RenderDeferredInstancedObjects,
+					Scene.RenderDeferredObjects,
 					*Scene.DeferredSceneDescriptorSetLayout, ObjectDesc.ProfabName, Data);
 			}
 			else
@@ -6881,48 +6890,146 @@ protected:
 	/** Load vertex information from a model file */
 	static void LoadMeshAsset(const XkString& filename, std::vector<XkVertex>& outVertices, std::vector<uint32_t>& outIndices)
 	{
-		tinyobj::attrib_t attrib;
-		std::vector<tinyobj::shape_t> shapes;
-		std::vector<tinyobj::material_t> materials;
-		XkString warn, err;
+		std::filesystem::path filepath = filename;
+		std::filesystem::path ext = filepath.extension();
 
-		if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, filename.c_str())) {
-			assert(0);
-			throw std::runtime_error("[LoadMeshAsset] Fail to load obj:" + warn + err);
-		}
+		if (ext == ".obj" || ext == ".OBJ")
+		{
+			tinyobj::attrib_t attrib;
+			std::vector<tinyobj::shape_t> shapes;
+			std::vector<tinyobj::material_t> materials;
+			XkString warn, err;
 
-		std::unordered_map<XkVertex, uint32_t> uniqueVertices{};
-
-		for (const auto& shape : shapes) {
-			for (const auto& index : shape.mesh.indices) {
-				XkVertex vertex{};
-
-				vertex.Position = {
-					attrib.vertices[3 * index.vertex_index + 0],
-					attrib.vertices[3 * index.vertex_index + 1],
-					attrib.vertices[3 * index.vertex_index + 2]
-				};
-
-				vertex.Normal = {
-					attrib.normals[3 * index.vertex_index + 0],
-					attrib.normals[3 * index.vertex_index + 1],
-					attrib.normals[3 * index.vertex_index + 2]
-				};
-
-				vertex.Color = { 1.0f, 1.0f, 1.0f };
-
-				vertex.TexCoord = {
-					attrib.texcoords[2 * index.texcoord_index + 0],
-					1.0f - attrib.texcoords[2 * index.texcoord_index + 1]
-				};
-
-				if (uniqueVertices.count(vertex) == 0) {
-					uniqueVertices[vertex] = static_cast<uint32_t>(outVertices.size());
-					outVertices.push_back(vertex);
-				}
-
-				outIndices.push_back(uniqueVertices[vertex]);
+			if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, filename.c_str())) {
+				assert(0);
+				throw std::runtime_error("[LoadMeshAsset] Fail to load obj:" + warn + err);
 			}
+
+			std::unordered_map<XkVertex, uint32_t> uniqueVertices{};
+			for (const auto& shape : shapes) {
+				for (const auto& index : shape.mesh.indices) {
+					XkVertex vertex{};
+
+					vertex.Position = {
+						attrib.vertices[3 * index.vertex_index + 0],
+						attrib.vertices[3 * index.vertex_index + 1],
+						attrib.vertices[3 * index.vertex_index + 2]
+					};
+
+					vertex.Normal = {
+						attrib.normals[3 * index.vertex_index + 0],
+						attrib.normals[3 * index.vertex_index + 1],
+						attrib.normals[3 * index.vertex_index + 2]
+					};
+
+					vertex.Color = { 1.0f, 1.0f, 1.0f };
+
+					vertex.TexCoord = {
+						attrib.texcoords[2 * index.texcoord_index + 0],
+						1.0f - attrib.texcoords[2 * index.texcoord_index + 1]
+					};
+
+					if (uniqueVertices.count(vertex) == 0) {
+						uniqueVertices[vertex] = static_cast<uint32_t>(outVertices.size());
+						outVertices.push_back(vertex);
+					}
+
+					outIndices.push_back(uniqueVertices[vertex]);
+				}
+			}
+		}
+		else if (ext == ".fbx" || ext == ".FBX")
+		{
+			std::ifstream file(filename, std::ios::binary | std::ios::ate);
+			if (!file) 
+			{
+				throw std::runtime_error("[LoadMeshAsset] Unable to open file:" + filename);
+			}
+			std::unordered_map<XkVertex, uint32_t> uniqueVertices{};
+
+			std::streamsize size = file.tellg();
+			file.seekg(0, std::ios::beg);
+
+			std::vector<uint8_t> fileData(size);
+			if (!file.read(reinterpret_cast<char*>(fileData.data()), size))
+			{
+				throw std::runtime_error("[LoadMeshAsset] Failed to read file:" + filename);
+			}
+
+			if (fileData.empty())
+			{
+				throw std::runtime_error("[LoadMeshAsset] File is empty:" + filename);
+			}
+
+			ofbx::IScene* scene = ofbx::load((ofbx::u8*)fileData.data(), fileData.size(), (ofbx::u64)ofbx::LoadFlags::NONE);
+			if (!scene) 
+			{
+				throw std::runtime_error("[LoadMeshAsset] Failed to load FBX scene.:" + filename);
+			}
+
+            // Traverse objects in the scene
+			int mesh_count = scene->getMeshCount();
+			// output unindexed geometry
+			for (int mesh_idx = 0; mesh_idx < mesh_count; ++mesh_idx)
+			{
+				const ofbx::Mesh* mesh = scene->getMesh(mesh_idx);
+				const ofbx::GeometryData& geom = mesh->getGeometryData();
+				const ofbx::Vec3Attributes positions = geom.getPositions();
+				const ofbx::Vec3Attributes normals = geom.getNormals();
+				const ofbx::Vec2Attributes uvs = geom.getUVs();
+
+				int indices_offset = 0;
+				// each ofbx::Mesh can have several materials == partitions
+				for (int partition_idx = 0; partition_idx < geom.getPartitionCount(); ++partition_idx) 
+				{
+					const ofbx::GeometryPartition& Partition = geom.getPartition(partition_idx);
+
+					// partitions most likely have several polygons, they are not triangles necessarily, use ofbx::triangulate if you want triangles
+					for (int polygon_idx = 0; polygon_idx < Partition.polygon_count; ++polygon_idx)
+					{
+						const ofbx::GeometryPartition::Polygon& polygon = Partition.polygons[polygon_idx];
+						for (int i = polygon.from_vertex; i < polygon.from_vertex + polygon.vertex_count; ++i) 
+						{
+							ofbx::Vec3 v = positions.get(i);
+						}
+
+						bool has_normals = normals.values != nullptr;
+						if (has_normals) 
+						{
+							// normals.indices might be different than positions.indices
+							// but normals.get(i) is normal for positions.get(i)
+							for (int i = polygon.from_vertex; i < polygon.from_vertex + polygon.vertex_count; ++i) 
+							{
+								ofbx::Vec3 n = normals.get(i);
+							}
+						}
+
+						bool has_uvs = uvs.values != nullptr;
+						if (has_uvs) 
+						{
+							for (int i = polygon.from_vertex; i < polygon.from_vertex + polygon.vertex_count; ++i) 
+							{
+								ofbx::Vec2 uv = uvs.get(i);
+							}
+						}
+					}
+
+					for (int polygon_idx = 0; polygon_idx < Partition.polygon_count; ++polygon_idx) 
+					{
+						const ofbx::GeometryPartition::Polygon& polygon = Partition.polygons[polygon_idx];
+						for (int i = polygon.from_vertex; i < polygon.from_vertex + polygon.vertex_count; ++i) 
+						{
+							int index = 1 + i + indices_offset;
+						}
+					}
+
+					indices_offset += positions.count;
+				}
+			}
+		}
+		else
+		{
+			throw std::runtime_error("[LoadMeshAsset] Fail to load mesh file:" + filename);
 		}
 	}
 #if ENABLE_INDIRECT_DRAW

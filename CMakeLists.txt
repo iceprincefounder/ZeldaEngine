@@ -15,6 +15,7 @@ include_directories(Third_Party/tinyobjloader)
 include_directories(Third_Party/meshoptimizer)
 include_directories(Third_Party/glslang)
 include_directories(third_party/rapidjson/include)
+include_directories(Third_Party/OpenFBX/src)
 
 # Use FindVulkan module added with CMAKE 3.7
 if(NOT CMAKE_VERSION VERSION_LESS 3.7.0)
@@ -123,6 +124,7 @@ set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 
+# imgui
 set(IMGUI_SOURCES
     ${CMAKE_SOURCE_DIR}/Third_Party/imgui/imgui.cpp
     ${CMAKE_SOURCE_DIR}/Third_Party/imgui/imgui_draw.cpp
@@ -130,6 +132,12 @@ set(IMGUI_SOURCES
     ${CMAKE_SOURCE_DIR}/Third_Party/imgui/imgui_tables.cpp
     ${CMAKE_SOURCE_DIR}/Third_Party/imgui/backends/imgui_impl_glfw.cpp
     ${CMAKE_SOURCE_DIR}/Third_Party/imgui/backends/imgui_impl_vulkan.cpp
+)
+
+# OpenFBX
+set(OPENFBX_SOURCES
+${CMAKE_SOURCE_DIR}/Third_Party/OpenFBX/src/libdeflate.c
+${CMAKE_SOURCE_DIR}/Third_Party/OpenFBX/src/ofbx.cpp
 )
 
 # glslang

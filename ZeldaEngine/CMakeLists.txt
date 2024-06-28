@@ -101,11 +101,11 @@ function(BuildEngine ENGINE_NAME)
 	if(WIN32)
 		add_compile_options("$<$<C_COMPILER_ID:MSVC>:/utf-8>")
 		add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
-		add_executable(${ENGINE_NAME} WIN32 ${MAIN_CPP} ${IMGUI_SOURCES})
+		add_executable(${ENGINE_NAME} WIN32 ${MAIN_CPP} ${IMGUI_SOURCES} ${OPENFBX_SOURCES})
 		target_link_libraries(${ENGINE_NAME} ${Vulkan_LIBRARY} ${WINLIBS})
 	else(WIN32)
 		# @TODO: fix Makefile compile issue on macOS
-		add_executable(${ENGINE_NAME} ${MAIN_CPP} ${IMGUI_SOURCES})
+		add_executable(${ENGINE_NAME} ${MAIN_CPP} ${IMGUI_SOURCES} ${OPENFBX_SOURCES})
 		target_link_libraries(${ENGINE_NAME})
 	endif(WIN32)
 

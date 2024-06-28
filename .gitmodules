@@ -22,3 +22,6 @@
 [submodule "Third_Party/rapidjson"]
 	path = Third_Party/rapidjson
 	url = https://github.com/Tencent/rapidjson.git
+[submodule "Third_Party/OpenFBX"]
+	path = Third_Party/OpenFBX
+	url = https://github.com/nem0/OpenFBX.git
