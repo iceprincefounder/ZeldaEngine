@@ -39,7 +39,7 @@
 
 #define GLFW_INCLUDE_VULKAN
 #define GLM_FORCE_RADIANS
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE // Depth buffer range, OpenGL default -1.0 to 1.0, but Vulakn default as 0.0 to 1.0
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE // Depth buffer range, OpenGL default -1.0 to 1.0, but Vulkan default as 0.0 to 1.0
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -356,7 +356,7 @@ glslang::EShTargetLanguageVersion XkShaderCompiler::EnvTargetLanguageVersion = s
 
 enum class EXkRenderFlags : uint16_t
 {
-	None = 1 << 0, // None means Vertex only in Deferred Shading
+	None = 1 << 0, // None means Vertex only with Deferred Shading
 	VertexIndexed = 1 << 1,
 	Instanced = 1 << 2,
 	ScreenRect = 1 << 3,
@@ -397,10 +397,8 @@ struct XkUniformBufferMVP {
 // It's great to use model's own transform
 struct XkTransfrom {
 	glm::vec3 Location;
-	glm::vec3 Rotation;
-	glm::vec3 Scale3D;
-
 	glm::quat Quaternion;
+	glm::vec3 Scale3D;
 
 	glm::mat4 GetMatrix() const
 	{
@@ -997,32 +995,32 @@ class XkZeldaEngineApp
 	/** Hold all the render object proxy data.*/
 	struct XkScene {
 		std::vector<XkRenderObject> RenderObjects;
-		std::vector<XkRenderObject> RenderInstancedObjects;
+		std::vector<XkRenderObject> InstancedRenderObjects;
 		VkDescriptorSetLayout* DescriptorSetLayout = nullptr;
 #if ENABLE_INDIRECT_DRAW
-		std::vector<XkRenderObjectIndirect> RenderIndirectObjects;
-		std::vector<XkRenderObjectIndirect> RenderIndirectInstancedObjects;
-		VkDescriptorSetLayout* IndirectDescriptorSetLayout = nullptr;
+		std::vector<XkRenderObjectIndirect> RenderObjectsIndirect;
+		std::vector<XkRenderObjectIndirect> InstancedRenderObjectsIndirect;
+		VkDescriptorSetLayout* DescriptorSetLayoutIndirect = nullptr;
 #endif
 #if ENABLE_DEFERRED_SHADING
-		std::vector<XkRenderObject> RenderDeferredObjects;
-		std::vector<XkRenderObject> RenderDeferredInstancedObjects;
+		std::vector<XkRenderObject> DeferredRenderObjects;
+		std::vector<XkRenderObject> DeferredInstancedRenderObjects;
 		VkDescriptorSetLayout* DeferredSceneDescriptorSetLayout = nullptr;
 		VkDescriptorSetLayout* DeferredLightingDescriptorSetLayout = nullptr;
 #endif
 		void Reset()
 		{
 			RenderObjects.clear();
-			RenderInstancedObjects.clear();
+			InstancedRenderObjects.clear();
 			DescriptorSetLayout = nullptr;
 #if ENABLE_INDIRECT_DRAW
-			RenderIndirectObjects.clear();
-			RenderIndirectInstancedObjects.clear();
-			IndirectDescriptorSetLayout = nullptr;
+			RenderObjectsIndirect.clear();
+			InstancedRenderObjectsIndirect.clear();
+			DescriptorSetLayoutIndirect = nullptr;
 #endif
 #if ENABLE_DEFERRED_SHADING
-			RenderDeferredObjects.clear();
-			RenderDeferredInstancedObjects.clear();
+			DeferredRenderObjects.clear();
+			DeferredInstancedRenderObjects.clear();
 			DeferredSceneDescriptorSetLayout = nullptr;
 			DeferredLightingDescriptorSetLayout = nullptr;
 #endif
@@ -1378,10 +1376,10 @@ class XkZeldaEngineApp
 	/** ShadowmapPass vulkan resources*/
 	struct XkShadowmapPass {
 		std::vector<XkRenderObject*> RenderObjects;
-		std::vector<XkRenderObject*> RenderInstancedObjects;
+		std::vector<XkRenderObject*> InstancedRenderObjects;
 #if ENABLE_INDIRECT_DRAW
-		std::vector<XkRenderObjectIndirect*> RenderIndirectObjects;
-		std::vector<XkRenderObjectIndirect*> RenderIndirectInstancedObjects;
+		std::vector<XkRenderObjectIndirect*> RenderObjectsIndirect;
+		std::vector<XkRenderObjectIndirect*> InstancedRenderObjectsIndirect;
 #endif
 		float zNear, zFar;
 		int32_t Width, Height;
@@ -1440,7 +1438,7 @@ class XkZeldaEngineApp
 	/** 构建 BasePass 需要的 Vulkan 资源*/
 	struct XkBasePass {
 		std::vector<XkRenderObject*> RenderObjects;
-		std::vector<XkRenderObject*> RenderInstancedObjects;
+		std::vector<XkRenderObject*> InstancedRenderObjects;
 		VkDescriptorSetLayout DescriptorSetLayout;
 		VkPipelineLayout PipelineLayout;
 		std::vector<VkPipeline> Pipelines;
@@ -1449,9 +1447,9 @@ class XkZeldaEngineApp
 		std::vector<VkPipelineCache> InstancedPipelineCaches;
 
 #if ENABLE_INDIRECT_DRAW
-		std::vector<XkRenderObjectIndirect*> RenderIndirectObjects;
-		std::vector<XkRenderObjectIndirect*> RenderIndirectInstancedObjects;
-		VkDescriptorSetLayout IndirectDescriptorSetLayout;
+		std::vector<XkRenderObjectIndirect*> RenderObjectsIndirect;
+		std::vector<XkRenderObjectIndirect*> InstancedRenderObjectsIndirect;
+		VkDescriptorSetLayout DescriptorSetLayoutIndirect;
 		VkPipelineLayout IndirectPipelineLayout;
 		std::vector<VkPipeline> IndirectPipelines;
 		std::vector<VkPipelineCache> IndirectPipelineCaches;
@@ -1460,8 +1458,8 @@ class XkZeldaEngineApp
 #endif
 
 #if ENABLE_DEFERRED_SHADING
-		std::vector<XkRenderObject*> RenderDeferredObjects;
-		std::vector<XkRenderObject*> RenderDeferredInstancedObjects;
+		std::vector<XkRenderObject*> DeferredRenderObjects;
+		std::vector<XkRenderObject*> DeferredInstancedRenderObjects;
 		VkDescriptorSetLayout DeferredSceneDescriptorSetLayout;
 		VkPipelineLayout DeferredScenePipelineLayout;
 		std::vector<VkPipeline> DeferredScenePipelines;
@@ -2782,13 +2780,13 @@ protected:
 		//~ Begin create indirect BasePass
 		{
 			// Create scene rendering pipeline and shaders
-			RHICreateDescriptorSetLayout(BasePass.IndirectDescriptorSetLayout);
+			RHICreateDescriptorSetLayout(BasePass.DescriptorSetLayoutIndirect);
 			uint32_t SpecConstantsCount = GlobalConstants.SpecConstantsCount;
 			BasePass.IndirectPipelines.resize(SpecConstantsCount);
 			BasePass.IndirectPipelineCaches.resize(SpecConstantsCount);
 			BasePass.IndirectInstancedPipelines.resize(SpecConstantsCount);
 			BasePass.IndirectInstancedPipelineCaches.resize(SpecConstantsCount);
-			RHICreatePipelineLayout(BasePass.IndirectPipelineLayout, BasePass.IndirectDescriptorSetLayout);
+			RHICreatePipelineLayout(BasePass.IndirectPipelineLayout, BasePass.DescriptorSetLayoutIndirect);
 			RHICreateGraphicsPipelines(
 				BasePass.IndirectPipelines, BasePass.IndirectPipelineCaches,
 				BasePass.IndirectPipelineLayout,
@@ -3166,7 +3164,7 @@ protected:
 	/** Write the commands to be executed into the command buffer, corresponding to each image of the SwapChain */
 	void RecordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex)
 	{
-		auto BeginTransitionImageLayoutRT = [commandBuffer](VkImage& image, const VkImageAspectFlagBits aspectMask, const VkImageLayout oldLayout, const VkImageLayout newLayout)
+		auto BeginRenderTargetTransition = [commandBuffer](VkImage& image, const VkImageAspectFlagBits aspectMask, const VkImageLayout oldLayout, const VkImageLayout newLayout)
 		{
 			VkImageMemoryBarrier barrier{};
 			barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -3200,7 +3198,7 @@ protected:
 			);
 		};
 
-		auto EndTransitionImageLayoutRT = [commandBuffer](VkImage& image, const VkImageAspectFlagBits aspectMask, const VkImageLayout oldLayout, const VkImageLayout newLayout)
+		auto EndRenderTargetTransition = [commandBuffer](VkImage& image, const VkImageAspectFlagBits aspectMask, const VkImageLayout oldLayout, const VkImageLayout newLayout)
 		{
 			VkImageMemoryBarrier barrier{};
 			barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -3308,9 +3306,9 @@ protected:
 			}
 			// 【阴影】渲染 Instanced 场景
 			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ShadowmapPass.InstancedPipelines[0]);
-			for (size_t i = 0; i < ShadowmapPass.RenderInstancedObjects.size(); i++)
+			for (size_t i = 0; i < ShadowmapPass.InstancedRenderObjects.size(); i++)
 			{
-				XkRenderObject* renderInstancedObject = ShadowmapPass.RenderInstancedObjects[i];
+				XkRenderObject* renderInstancedObject = ShadowmapPass.InstancedRenderObjects[i];
 				VkBuffer objectVertexBuffers[] = { renderInstancedObject->Mesh.VertexBuffer };
 				VkBuffer objectInstanceBuffers[] = { renderInstancedObject->Mesh.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
@@ -3326,9 +3324,9 @@ protected:
 			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ShadowmapPass.Pipelines[0]);
 			vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
 				ShadowmapPass.PipelineLayout, 0, 1, &ShadowmapPass.DescriptorSets[CurrentFrame], 0, nullptr);
-			for (size_t i = 0; i < ShadowmapPass.RenderIndirectObjects.size(); i++)
+			for (size_t i = 0; i < ShadowmapPass.RenderObjectsIndirect.size(); i++)
 			{
-				XkRenderObjectIndirect* RenderIndirectObject = ShadowmapPass.RenderIndirectObjects[i];
+				XkRenderObjectIndirect* RenderIndirectObject = ShadowmapPass.RenderObjectsIndirect[i];
 				VkBuffer objectVertexBuffers[] = { RenderIndirectObject->Mesh.VertexBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
@@ -3361,9 +3359,9 @@ protected:
 			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ShadowmapPass.InstancedPipelines[0]);
 			vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
 				ShadowmapPass.PipelineLayout, 0, 1, &ShadowmapPass.DescriptorSets[CurrentFrame], 0, nullptr);
-			for (size_t i = 0; i < ShadowmapPass.RenderIndirectInstancedObjects.size(); i++)
+			for (size_t i = 0; i < ShadowmapPass.InstancedRenderObjectsIndirect.size(); i++)
 			{
-				XkRenderObjectIndirect* RenderIndirectInstancedObject = ShadowmapPass.RenderIndirectInstancedObjects[i];
+				XkRenderObjectIndirect* RenderIndirectInstancedObject = ShadowmapPass.InstancedRenderObjectsIndirect[i];
 				VkBuffer objectVertexBuffers[] = { RenderIndirectInstancedObject->Mesh.VertexBuffer };
 				VkBuffer objectInstanceBuffers[] = { RenderIndirectInstancedObject->Mesh.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
@@ -3449,9 +3447,9 @@ protected:
 
 			// 【延迟渲染】渲染场景
 			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BasePass.DeferredScenePipelines[GlobalConstants.SpecConstants]);
-			for (size_t i = 0; i < BasePass.RenderDeferredObjects.size(); i++)
+			for (size_t i = 0; i < BasePass.DeferredRenderObjects.size(); i++)
 			{
-				XkRenderObject* renderObject = BasePass.RenderDeferredObjects[i];
+				XkRenderObject* renderObject = BasePass.DeferredRenderObjects[i];
 				VkBuffer objectVertexBuffers[] = { renderObject->Mesh.VertexBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
@@ -3465,9 +3463,9 @@ protected:
 			}
 			// 【延迟渲染】渲染 Instanced 场景
 			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BasePass.DeferredSceneInstancedPipelines[GlobalConstants.SpecConstants]);
-			for (size_t i = 0; i < BasePass.RenderDeferredInstancedObjects.size(); i++)
+			for (size_t i = 0; i < BasePass.DeferredInstancedRenderObjects.size(); i++)
 			{
-				XkRenderObject* renderInstancedObject = BasePass.RenderDeferredInstancedObjects[i];
+				XkRenderObject* renderInstancedObject = BasePass.DeferredInstancedRenderObjects[i];
 				VkBuffer objectVertexBuffers[] = { renderInstancedObject->Mesh.VertexBuffer };
 				VkBuffer objectInstanceBuffers[] = { renderInstancedObject->Mesh.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
@@ -3501,15 +3499,15 @@ protected:
 		copyRegion.extent.height = static_cast<uint32_t>(SwapChainExtent.height);
 		copyRegion.extent.depth = 1;
 
-		BeginTransitionImageLayoutRT(GBuffer.DepthStencilImage,
+		BeginRenderTargetTransition(GBuffer.DepthStencilImage,
 			VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-		BeginTransitionImageLayoutRT(DepthImage,
+		BeginRenderTargetTransition(DepthImage,
 			VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 		vkCmdCopyImage(commandBuffer, GBuffer.DepthStencilImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 			DepthImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
-		EndTransitionImageLayoutRT(GBuffer.DepthStencilImage,
+		EndRenderTargetTransition(GBuffer.DepthStencilImage,
 			VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
-		EndTransitionImageLayoutRT(DepthImage,
+		EndRenderTargetTransition(DepthImage,
 			VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 #endif
 
@@ -3567,9 +3565,9 @@ protected:
 			}
 			// 【主场景】渲染 Instanced 场景
 			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BasePass.InstancedPipelines[GlobalConstants.SpecConstants]);
-			for (size_t i = 0; i < BasePass.RenderInstancedObjects.size(); i++)
+			for (size_t i = 0; i < BasePass.InstancedRenderObjects.size(); i++)
 			{
-				XkRenderObject* renderInstancedObject = BasePass.RenderInstancedObjects[i];
+				XkRenderObject* renderInstancedObject = BasePass.InstancedRenderObjects[i];
 				VkBuffer objectVertexBuffers[] = { renderInstancedObject->Mesh.VertexBuffer };
 				VkBuffer objectInstanceBuffers[] = { renderInstancedObject->Mesh.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
@@ -3587,9 +3585,9 @@ protected:
 #if ENABLE_INDIRECT_DRAW
 			// 【主场景】渲染 Indirect 场景
 			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BasePass.IndirectPipelines[GlobalConstants.SpecConstants]);
-			for (size_t i = 0; i < BasePass.RenderIndirectObjects.size(); i++)
+			for (size_t i = 0; i < BasePass.RenderObjectsIndirect.size(); i++)
 			{
-				XkRenderObjectIndirect* RenderIndirectObject = BasePass.RenderIndirectObjects[i];
+				XkRenderObjectIndirect* RenderIndirectObject = BasePass.RenderObjectsIndirect[i];
 				VkBuffer objectVertexBuffers[] = { RenderIndirectObject->Mesh.VertexBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
 				vkCmdBindVertexBuffers(commandBuffer, 0, 1, objectVertexBuffers, objectOffsets);
@@ -3643,9 +3641,9 @@ protected:
 			}
 			// 【主场景】渲染 Indirect Instanced 场景
 			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, BasePass.IndirectInstancedPipelines[GlobalConstants.SpecConstants]);
-			for (size_t i = 0; i < BasePass.RenderIndirectInstancedObjects.size(); i++)
+			for (size_t i = 0; i < BasePass.InstancedRenderObjectsIndirect.size(); i++)
 			{
-				XkRenderObjectIndirect* RenderIndirectInstancedObject = BasePass.RenderIndirectInstancedObjects[i];
+				XkRenderObjectIndirect* RenderIndirectInstancedObject = BasePass.InstancedRenderObjectsIndirect[i];
 				VkBuffer objectVertexBuffers[] = { RenderIndirectInstancedObject->Mesh.VertexBuffer };
 				VkBuffer objectInstanceBuffers[] = { RenderIndirectInstancedObject->Mesh.InstancedBuffer };
 				VkDeviceSize objectOffsets[] = { 0 };
@@ -3927,28 +3925,28 @@ protected:
 		{
 			DestroyRenderObject(Scene.RenderObjects[i]);
 		}
-		for (size_t i = 0; i < Scene.RenderInstancedObjects.size(); i++)
+		for (size_t i = 0; i < Scene.InstancedRenderObjects.size(); i++)
 		{
-			DestroyRenderObject(Scene.RenderInstancedObjects[i]);
+			DestroyRenderObject(Scene.InstancedRenderObjects[i]);
 		}
 #if ENABLE_INDIRECT_DRAW
-		for (size_t i = 0; i < Scene.RenderIndirectObjects.size(); i++)
+		for (size_t i = 0; i < Scene.RenderObjectsIndirect.size(); i++)
 		{
-			DestroyRenderObject(Scene.RenderIndirectObjects[i]);
+			DestroyRenderObject(Scene.RenderObjectsIndirect[i]);
 		}
-		for (size_t i = 0; i < Scene.RenderIndirectInstancedObjects.size(); i++)
+		for (size_t i = 0; i < Scene.InstancedRenderObjectsIndirect.size(); i++)
 		{
-			DestroyRenderObject(Scene.RenderIndirectInstancedObjects[i]);
+			DestroyRenderObject(Scene.InstancedRenderObjectsIndirect[i]);
 		}
 #endif
 #if ENABLE_DEFERRED_SHADING
-		for (size_t i = 0; i < Scene.RenderDeferredObjects.size(); i++)
+		for (size_t i = 0; i < Scene.DeferredRenderObjects.size(); i++)
 		{
-			DestroyRenderObject(Scene.RenderDeferredObjects[i]);
+			DestroyRenderObject(Scene.DeferredRenderObjects[i]);
 		}
-		for (size_t i = 0; i < Scene.RenderDeferredInstancedObjects.size(); i++)
+		for (size_t i = 0; i < Scene.DeferredInstancedRenderObjects.size(); i++)
 		{
-			DestroyRenderObject(Scene.RenderDeferredInstancedObjects[i]);
+			DestroyRenderObject(Scene.DeferredInstancedRenderObjects[i]);
 		}
 #endif
 		Scene.Reset();
@@ -3970,7 +3968,7 @@ protected:
 
 #if ENABLE_INDIRECT_DRAW
 		// Clean up BasePass
-		vkDestroyDescriptorSetLayout(Device, BasePass.IndirectDescriptorSetLayout, nullptr);
+		vkDestroyDescriptorSetLayout(Device, BasePass.DescriptorSetLayoutIndirect, nullptr);
 		vkDestroyPipelineLayout(Device, BasePass.IndirectPipelineLayout, nullptr);
 		for (size_t i = 0; i < BasePass.IndirectPipelines.size(); i++)
 		{
@@ -4196,7 +4194,7 @@ public:
 		}
 		Scene.DescriptorSetLayout = &BasePass.DescriptorSetLayout;
 #if ENABLE_INDIRECT_DRAW
-		Scene.IndirectDescriptorSetLayout = &BasePass.IndirectDescriptorSetLayout;
+		Scene.DescriptorSetLayoutIndirect = &BasePass.DescriptorSetLayoutIndirect;
 #endif
 #if ENABLE_DEFERRED_SHADING
 		Scene.DeferredSceneDescriptorSetLayout = &BasePass.DeferredSceneDescriptorSetLayout;
@@ -4251,7 +4249,7 @@ public:
 		//object.IndirectCommands.push_back(indirectCmd);
 
 		CreateIndirectCommandsBuffer<XkRenderObjectIndirect>(object);
-		Scene.RenderIndirectObjects.push_back(object);
+		Scene.RenderObjectsIndirect.push_back(object);
 #endif
 
 		for (const XkObjectDesc& ObjectDesc : World.ObjectDescs)
@@ -4262,19 +4260,19 @@ public:
 				XkObjectDesc::GenerateInstance(Data, ObjectDesc);
 #if ENABLE_DEFERRED_SHADING
 				CreateRenderObjectsFromProfabs(
-					Scene.RenderDeferredInstancedObjects,
+					Scene.DeferredInstancedRenderObjects,
 					*Scene.DeferredSceneDescriptorSetLayout, ObjectDesc.ProfabName, Data);
 			}
 			else
 			{
-				CreateRenderObjectsFromProfabs(Scene.RenderDeferredObjects,
+				CreateRenderObjectsFromProfabs(Scene.DeferredRenderObjects,
 					*Scene.DeferredSceneDescriptorSetLayout, ObjectDesc.ProfabName);
 			}
 
 			RHIUpdateDescriptorSet(BasePass.DeferredLightingDescriptorSets, GBuffer.ImageViews(), GBuffer.Samplers(), EXkRenderFlags::DeferredLighting);
 #else
 				CreateRenderObjectsFromProfabs(
-					Scene.RenderInstancedObjects,
+					Scene.InstancedRenderObjects,
 					*Scene.DescriptorSetLayout, Object.ProfabName, Data);
 		}
 			else
@@ -4669,20 +4667,20 @@ public:
 		vkUnmapMemory(Device, ShadowmapPass.UniformBuffersMemory[currentImageIdx]);
 
 		ShadowmapPass.RenderObjects.clear();
-		ShadowmapPass.RenderInstancedObjects.clear();
+		ShadowmapPass.InstancedRenderObjects.clear();
 #if ENABLE_INDIRECT_DRAW
-		ShadowmapPass.RenderIndirectObjects.clear();
-		ShadowmapPass.RenderIndirectInstancedObjects.clear();
+		ShadowmapPass.RenderObjectsIndirect.clear();
+		ShadowmapPass.InstancedRenderObjectsIndirect.clear();
 #endif
 		BasePass.RenderObjects.clear();
-		BasePass.RenderInstancedObjects.clear();
+		BasePass.InstancedRenderObjects.clear();
 #if ENABLE_INDIRECT_DRAW
-		BasePass.RenderIndirectObjects.clear();
-		BasePass.RenderIndirectInstancedObjects.clear();
+		BasePass.RenderObjectsIndirect.clear();
+		BasePass.InstancedRenderObjectsIndirect.clear();
 #endif
 #if ENABLE_DEFERRED_SHADING
-		BasePass.RenderDeferredObjects.clear();
-		BasePass.RenderDeferredInstancedObjects.clear();
+		BasePass.DeferredRenderObjects.clear();
+		BasePass.DeferredInstancedRenderObjects.clear();
 #endif
 		for (size_t i = 0; i < Scene.RenderObjects.size(); i++)
 		{
@@ -4690,38 +4688,38 @@ public:
 			BasePass.RenderObjects.push_back(RenderObject);
 			ShadowmapPass.RenderObjects.push_back(RenderObject);
 		}
-		for (size_t i = 0; i < Scene.RenderInstancedObjects.size(); i++)
+		for (size_t i = 0; i < Scene.InstancedRenderObjects.size(); i++)
 		{
-			XkRenderObject* RenderInstancedObject = &Scene.RenderInstancedObjects[i];
-			BasePass.RenderInstancedObjects.push_back(RenderInstancedObject);
-			ShadowmapPass.RenderInstancedObjects.push_back(RenderInstancedObject);
+			XkRenderObject* RenderInstancedObject = &Scene.InstancedRenderObjects[i];
+			BasePass.InstancedRenderObjects.push_back(RenderInstancedObject);
+			ShadowmapPass.InstancedRenderObjects.push_back(RenderInstancedObject);
 		}
 #if ENABLE_INDIRECT_DRAW
-		for (size_t i = 0; i < Scene.RenderIndirectObjects.size(); i++)
+		for (size_t i = 0; i < Scene.RenderObjectsIndirect.size(); i++)
 		{
-			XkRenderObjectIndirect* RenderIndirectObject = &Scene.RenderIndirectObjects[i];
-			BasePass.RenderIndirectObjects.push_back(RenderIndirectObject);
-			ShadowmapPass.RenderIndirectObjects.push_back(RenderIndirectObject);
+			XkRenderObjectIndirect* RenderIndirectObject = &Scene.RenderObjectsIndirect[i];
+			BasePass.RenderObjectsIndirect.push_back(RenderIndirectObject);
+			ShadowmapPass.RenderObjectsIndirect.push_back(RenderIndirectObject);
 		}
-		for (size_t i = 0; i < Scene.RenderIndirectInstancedObjects.size(); i++)
+		for (size_t i = 0; i < Scene.InstancedRenderObjectsIndirect.size(); i++)
 		{
-			XkRenderObjectIndirect* RenderIndirectInstancedObject = &Scene.RenderIndirectInstancedObjects[i];
-			BasePass.RenderIndirectInstancedObjects.push_back(RenderIndirectInstancedObject);
-			ShadowmapPass.RenderIndirectInstancedObjects.push_back(RenderIndirectInstancedObject);
+			XkRenderObjectIndirect* RenderIndirectInstancedObject = &Scene.InstancedRenderObjectsIndirect[i];
+			BasePass.InstancedRenderObjectsIndirect.push_back(RenderIndirectInstancedObject);
+			ShadowmapPass.InstancedRenderObjectsIndirect.push_back(RenderIndirectInstancedObject);
 		}
 #endif
 #if ENABLE_DEFERRED_SHADING
-		for (size_t i = 0; i < Scene.RenderDeferredObjects.size(); i++)
+		for (size_t i = 0; i < Scene.DeferredRenderObjects.size(); i++)
 		{
-			XkRenderObject* RenderDeferredObject = &Scene.RenderDeferredObjects[i];
-			BasePass.RenderDeferredObjects.push_back(RenderDeferredObject);
+			XkRenderObject* RenderDeferredObject = &Scene.DeferredRenderObjects[i];
+			BasePass.DeferredRenderObjects.push_back(RenderDeferredObject);
 			ShadowmapPass.RenderObjects.push_back(RenderDeferredObject);
 		}
-		for (size_t i = 0; i < Scene.RenderDeferredInstancedObjects.size(); i++)
+		for (size_t i = 0; i < Scene.DeferredInstancedRenderObjects.size(); i++)
 		{
-			XkRenderObject* RenderDeferredInstancedObject = &Scene.RenderDeferredInstancedObjects[i];
-			BasePass.RenderDeferredInstancedObjects.push_back(RenderDeferredInstancedObject);
-			ShadowmapPass.RenderInstancedObjects.push_back(RenderDeferredInstancedObject);
+			XkRenderObject* RenderDeferredInstancedObject = &Scene.DeferredInstancedRenderObjects[i];
+			BasePass.DeferredInstancedRenderObjects.push_back(RenderDeferredInstancedObject);
+			ShadowmapPass.InstancedRenderObjects.push_back(RenderDeferredInstancedObject);
 		}
 #endif
 	}
@@ -4992,6 +4990,7 @@ public:
 					texture_ao,
 					texture_ev,
 					texture_ms };
+
 				CreateRenderObject<T>(asset, inLayout);
 				CreateTransformBuffer(asset);
 				if (inInstanceData.size() > 0)
@@ -5005,7 +5004,7 @@ public:
 
 protected:
 	////////////////////////////////////////////////////////////////////////////
-	// Rendering Hardware Interface
+	// Rendering Hardware Interface (Vulkan only currently)
 	////////////////////////////////////////////////////////////////////////////
 
 	/** Create graphics pipeline */
@@ -5842,6 +5841,8 @@ protected:
 					descriptorWrites[j + bindingOffset].dstSet = outDescriptorSets[i];
 					descriptorWrites[j + bindingOffset].dstBinding = static_cast<uint32_t>(j + bindingOffset);
 					descriptorWrites[j + bindingOffset].dstArrayElement = 0;
+					// @TODO: We should use separate VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE and VK_DESCRIPTOR_TYPE_SAMPLER
+					// to shared the same sampler across multiple textures
 					descriptorWrites[j + bindingOffset].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 					descriptorWrites[j + bindingOffset].descriptorCount = 1;
 					// @Note: 这里是引用了VkDescriptorImageInfo，所有需要创建imageInfos这个数组，存储所有的imageInfo而不是使用局部变量imageInfo
@@ -6160,31 +6161,31 @@ protected:
 		allocInfo.commandPool = CommandPool;
 		allocInfo.commandBufferCount = 1;
 
-		VkCommandBuffer commandBuffer;
-		vkAllocateCommandBuffers(Device, &allocInfo, &commandBuffer);
+		VkCommandBuffer outCommandBuffer;
+		vkAllocateCommandBuffers(Device, &allocInfo, &outCommandBuffer);
 
 		VkCommandBufferBeginInfo beginInfo{};
 		beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 		beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
-		vkBeginCommandBuffer(commandBuffer, &beginInfo);
+		vkBeginCommandBuffer(outCommandBuffer, &beginInfo);
 
-		return commandBuffer;
+		return outCommandBuffer;
 	}
 
-	void RHIEndSingleTimeCommands(VkCommandBuffer commandBuffer)
+	void RHIEndSingleTimeCommands(VkCommandBuffer inCommandBuffer)
 	{
-		vkEndCommandBuffer(commandBuffer);
+		vkEndCommandBuffer(inCommandBuffer);
 
 		VkSubmitInfo submitInfo{};
 		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 		submitInfo.commandBufferCount = 1;
-		submitInfo.pCommandBuffers = &commandBuffer;
+		submitInfo.pCommandBuffers = &inCommandBuffer;
 
 		vkQueueSubmit(GraphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
 		vkQueueWaitIdle(GraphicsQueue);
 
-		vkFreeCommandBuffers(Device, CommandPool, 1, &commandBuffer);
+		vkFreeCommandBuffers(Device, CommandPool, 1, &inCommandBuffer);
 	}
 
 	/** Utility function for creating Buffer */
