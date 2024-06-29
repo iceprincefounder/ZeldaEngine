@@ -104,7 +104,7 @@ function(BuildEngine ENGINE_NAME)
 		add_executable(${ENGINE_NAME} WIN32 ${MAIN_CPP} ${IMGUI_SOURCES} ${OPENFBX_SOURCES})
 		target_link_libraries(${ENGINE_NAME} ${Vulkan_LIBRARY} ${WINLIBS})
 	else(WIN32)
-		# @TODO: fix Makefile compile issue on macOS
+		# @Note: add_subdirectory(ZeldaEngine) and add_executable(ZeldaEngine) same name will cause error
 		add_executable(${ENGINE_NAME} ${MAIN_CPP} ${IMGUI_SOURCES} ${OPENFBX_SOURCES})
 		target_link_libraries(${ENGINE_NAME})
 	endif(WIN32)
