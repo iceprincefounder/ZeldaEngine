@@ -56,7 +56,7 @@
 #include "libdeflate.h"
 #include "ofbx.h"
 
-#define ENABLE_GLSLANG_COMPILER true
+#define ENABLE_GLSLANG_COMPILER false
 #define ENABLE_GLSLANG_COMPILER_TEST false
 #if ENABLE_GLSLANG_COMPILER
 #include <glslang/Public/ShaderLang.h>
@@ -4388,7 +4388,9 @@ public:
 				{
 					if (ImGui::MenuItem("Compile Shaders [Ctrl + G]"))
 					{
+#if ENABLE_GLSLANG_COMPILER
 						CreateShaderSPIRVs();
+#endif
 					}
 					if (ImGui::MenuItem("Compile Scripts [Ctrl + B]"))
 					{
