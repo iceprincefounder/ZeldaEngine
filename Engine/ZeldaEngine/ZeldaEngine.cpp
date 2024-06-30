@@ -262,12 +262,10 @@ public:
 				return EShLangIntersect;
 			case VK_SHADER_STAGE_CALLABLE_BIT_KHR:
 				return EShLangCallable;
-#ifndef __APPLE__ // not support macOS
-			case VK_SHADER_STAGE_MESH_BIT_NV /*VK_SHADER_STAGE_MESH_BIT_EXT*/:
+			case VK_SHADER_STAGE_MESH_BIT_EXT:
 				return EShLangMesh;
-			case VK_SHADER_STAGE_TASK_BIT_NV /*VK_SHADER_STAGE_TASK_BIT_EXT*/:
+			case VK_SHADER_STAGE_TASK_BIT_EXT:
 				return EShLangTask;
-#endif // __APPLE__
 			default:
 				return EShLangVertex;
 			}
