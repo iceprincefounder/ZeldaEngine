@@ -56,8 +56,7 @@
 #include "libdeflate.h"
 #include "ofbx.h"
 
-#define ENABLE_GLSLANG_COMPILER false
-#define ENABLE_GLSLANG_COMPILER_TEST false
+#define ENABLE_GLSLANG_COMPILER true
 #if ENABLE_GLSLANG_COMPILER
 #include <glslang/Public/ShaderLang.h>
 #include <glslang/Public/ResourceLimits.h>
@@ -149,12 +148,10 @@ public:
 			outShaderStage = VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
 		else if (ext == "rcall")
 			outShaderStage = VK_SHADER_STAGE_CALLABLE_BIT_KHR;
-#ifndef __APPLE__
 		else if (ext == "mesh")
 			outShaderStage = VK_SHADER_STAGE_MESH_BIT_EXT;
 		else if (ext == "task")
 			outShaderStage = VK_SHADER_STAGE_TASK_BIT_EXT;
-#endif
 		else
 		{
 			assert(true);
@@ -6841,8 +6838,7 @@ protected:
 		std::filesystem::path OutputFilePath = FilePath + Subfix;
 		if (InputFilePath.extension() == Subfix)
 		{
-			// this is a spirv file, don't compile it
-			return;
+			return; // this is a spirv file, don't compile it
 		}
 		if (std::filesystem::exists(OutputFilePath))
 		{

@@ -104,9 +104,9 @@ function(BuildEngine ENGINE_NAME)
 		add_executable(${ENGINE_NAME} WIN32 ${MAIN_CPP} ${IMGUI_SOURCES} ${OPENFBX_SOURCES})
 		target_link_libraries(${ENGINE_NAME} ${Vulkan_LIBRARY} ${WINLIBS})
 	else(WIN32)
-		# @Note: add_subdirectory(ZeldaEngine) and add_executable(ZeldaEngine) same name will cause error
+		# Note: add_subdirectory(ZeldaEngine) and add_executable(ZeldaEngine) have the same name which will cause makefile link error
 		add_executable(${ENGINE_NAME} ${MAIN_CPP} ${IMGUI_SOURCES} ${OPENFBX_SOURCES})
-		target_link_libraries(${ENGINE_NAME})
+		target_link_libraries(${ENGINE_NAME} ${Vulkan_LIBRARY})
 	endif(WIN32)
 
 	# add shader compile dependency
@@ -122,9 +122,9 @@ function(BuildEngine ENGINE_NAME)
 	if(APPLE AND ${CMAKE_GENERATOR} STREQUAL "Xcode")
 		set_target_properties(${ENGINE_NAME} PROPERTIES XCODE_GENERATE_SCHEME TRUE XCODE_SCHEME_WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 	endif(APPLE AND ${CMAKE_GENERATOR} STREQUAL "Xcode")
-	# @Note: fix glslang libraries link issue
+	# Note: fix glslang libraries link issue
 	# https://stackoverflow.com/questions/38234986/how-to-use-glslang
-	target_link_libraries(${ENGINE_NAME} glfw glm glslang SPIRV glslang-default-resource-limits)
+	target_link_libraries(${ENGINE_NAME} glfw glm meshoptimizer glslang SPIRV glslang-default-resource-limits)
 	# window socket library
 	if(WIN32)
 		target_link_libraries(${ENGINE_NAME} Ws2_32)
@@ -147,20 +147,12 @@ function(BuildToolkit TOOLKIT_NAME)
 		add_compile_options("$<$<C_COMPILER_ID:MSVC>:/utf-8>")
 		add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
 		add_executable(${TOOLKIT_NAME} WIN32 ${MAIN_CPP})
-		target_link_libraries(${TOOLKIT_NAME} ${Vulkan_LIBRARY} ${WINLIBS})
 	else(WIN32)
 		add_executable(${TOOLKIT_NAME} ${MAIN_CPP})
-		target_link_libraries(${TOOLKIT_NAME})
 	endif(WIN32)
 	
 	set_target_properties(${TOOLKIT_NAME} PROPERTIES WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 	set_target_properties(${TOOLKIT_NAME} PROPERTIES CXX_STANDARD 17 CXX_EXTENSIONS OFF)
-	if(WIN32)
-		set_target_properties(${TOOLKIT_NAME} PROPERTIES LINK_FLAGS /SUBSYSTEM:CONSOLE VS_DEBUGGER_WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-	endif(WIN32)
-	if(APPLE)
-		set_target_properties(${TOOLKIT_NAME} PROPERTIES XCODE_GENERATE_SCHEME TRUE XCODE_SCHEME_WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-	endif(APPLE)
 	target_link_libraries(${TOOLKIT_NAME} glfw glm meshoptimizer)
 endfunction(BuildToolkit)
 
