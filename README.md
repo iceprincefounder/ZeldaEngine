@@ -9,7 +9,7 @@
 
 
 # Zelda Engine ©XUKAI
-A tiny realtime vulkan based 3D engine with modern graphics, all implementations in the [📄ZeldaEngine.cpp](ZeldaEngine/ZeldaEngine/ZeldaEngine.cpp) file.
+A tiny realtime vulkan based 3D engine with modern graphics, all implementations in the [📄ZeldaEngine.cpp](Engine/ZeldaEngine/ZeldaEngine.cpp) file.
 
 | branch | windows | macOS | linux |
 | :----: | :----: | :----: |:----:|
